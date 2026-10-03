@@ -372,7 +372,7 @@ components:
         event_types:
           type: array
           description: Empty = every tenant-facing event
-          items: {type: string, enum: [message.received, message.outbound_status, message.status, instance.status_changed]}
+          items: {type: string, enum: [message.received, message.outbound_status, message.status, message.deleted, instance.status_changed]}
         instance_ids: {type: array, items: {type: string}, description: Empty = every instance of the tenant}
         exclude_groups: {type: boolean, default: false, description: Drop message.received events of group chats}
     Subscription:

@@ -24,6 +24,8 @@ const (
 	// MessageOutboundStatus reports the lifecycle of a message the TENANT sent through RelayPlane
 	// (ACCEPTED, DELIVERED, READ, FAILED, UNKNOWN), keyed by the RelayPlane message id.
 	MessageOutboundStatus Type = "message.outbound_status"
+	// MessageDeleted reports that the SENDER revoked a message ("delete for everyone"): whatever it said no longer stands.
+	MessageDeleted Type = "message.deleted"
 )
 
 // SourceAssignment is the assignment under which the provider produced an event.
@@ -98,6 +100,15 @@ type MessageReceivedPayload struct {
 	// SenderLID is the opaque WhatsApp LID of the sender when the provider addressed them that way. From carries the
 	// phone number whenever the provider reported it.
 	SenderLID string `json:"sender_lid,omitempty"`
+}
+
+// MessageDeletedPayload is the payload of message.deleted. ProviderMessageID is the id of the revoked message, as it was
+// delivered in message.received.
+type MessageDeletedPayload struct {
+	ProviderMessageID string `json:"provider_message_id"`
+	From              string `json:"from,omitempty"`
+	Group             bool   `json:"group,omitempty"`
+	ChatID            string `json:"chat_id,omitempty"`
 }
 
 // MessageOutboundStatusPayload is the payload of message.outbound_status.

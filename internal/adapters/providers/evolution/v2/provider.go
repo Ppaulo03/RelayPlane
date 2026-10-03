@@ -98,7 +98,7 @@ type sendResponse struct {
 	Status string `json:"status"`
 }
 
-var webhookEvents = []string{"QRCODE_UPDATED", "CONNECTION_UPDATE", "MESSAGES_UPSERT", "MESSAGES_UPDATE", "SEND_MESSAGE"}
+var webhookEvents = []string{"QRCODE_UPDATED", "CONNECTION_UPDATE", "MESSAGES_UPSERT", "MESSAGES_UPDATE", "MESSAGES_DELETE", "SEND_MESSAGE"}
 
 // WebhookToken is the per-node secret Evolution presents on every webhook.
 // Deriving it from the node id means a compromised node cannot speak for another.
