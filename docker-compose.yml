@@ -61,6 +61,8 @@ x-evolution-env: &evo-env
   DATABASE_SAVE_DATA_HISTORIC: "false"
   CACHE_REDIS_ENABLED: "false"
   CACHE_LOCAL_ENABLED: "true"
+  # the image defaults to America/Sao_Paulo and reports local time labelled Z in webhook envelopes
+  TZ: UTC
   TELEMETRY_ENABLED: "false"
 
 services:

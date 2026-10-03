@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/relayplane/relayplane/internal/adapters/providers/evolution/v2"
 	"github.com/relayplane/relayplane/internal/contracttest"
@@ -356,10 +357,17 @@ func TestWebhookNormalization(t *testing.T) {
 			t.Errorf("%s: %+v", c.data, got)
 		}
 	}
-	a := norm(`{"event":"connection.update","instance":"i","date_time":"2026-10-02T10:00:00Z","data":{"state":"open"}}`)[0]
-	b := norm(`{"event":"connection.update","instance":"i","date_time":"2026-10-02T10:00:05Z","data":{"state":"open"}}`)[0]
+	clock := time.Date(2026, 10, 2, 10, 0, 0, 0, time.UTC)
+	w.Now = func() time.Time { clock = clock.Add(5 * time.Second); return clock }
+	a := norm(`{"event":"connection.update","instance":"i","data":{"state":"open"}}`)[0]
+	b := norm(`{"event":"connection.update","instance":"i","data":{"state":"open"}}`)[0]
 	if events.DedupeKey("i", a.Type, a.ProviderMessageID, a.State) == events.DedupeKey("i", b.Type, b.ProviderMessageID, b.State) {
 		t.Error("two separate CONNECTED transitions must not dedupe into one")
+	}
+	// the envelope's date_time is the node's LOCAL time labelled Z (observed): it must not be used as the event time
+	skewed := norm(`{"event":"connection.update","instance":"i","date_time":"2000-01-01T00:00:00Z","data":{"state":"close","statusReason":401}}`)[0]
+	if skewed.Timestamp.Year() != 2026 {
+		t.Errorf("event time must be the arrival time, got %v", skewed.Timestamp)
 	}
 
 	qr := norm(`{"event":"qrcode.updated","instance":"inst_1","data":{"qrcode":{"base64":"data:image/png;base64,SECRETQR","code":"2@x","pairingCode":"ABCD1234"}}}`)
