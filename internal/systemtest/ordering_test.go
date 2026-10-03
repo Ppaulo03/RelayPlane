@@ -102,7 +102,7 @@ func TestOutbox_LostCommandIsRepublishedAndLaterMessagesWait(t *testing.T) {
 		t.Error("the barrier deferral must be visible in metrics")
 	}
 	// (with after=0 B counts as "stuck" too: its duplicate is parked behind the barrier, harmlessly)
-	if n, err := e.App.Outbox.Redispatch(bg, 0, 100); err != nil || n < 1 {
+	if n, err := e.App.Outbox.Redispatch(bg, -time.Minute, 100); err != nil || n < 1 {
 		t.Fatalf("redispatch: %d %v", n, err)
 	}
 	e.WaitMessage(a.MessageID, messaging.StatusAccepted)
@@ -224,7 +224,7 @@ func TestRecovery_DispatchingMessageWhoseCommandWasLostIsRecovered(t *testing.T)
 		t.Fatalf("B must not overtake the stuck A: %v", sentTexts(e))
 	}
 	time.Sleep(25 * time.Millisecond)
-	if n, err := e.App.Outbox.Redispatch(bg, 0, 100); err != nil || n < 1 {
+	if n, err := e.App.Outbox.Redispatch(bg, -time.Minute, 100); err != nil || n < 1 {
 		t.Fatalf("a DISPATCHING message must be recovered by the outbox: %d %v", n, err)
 	}
 	got := e.WaitMessage(a.MessageID, messaging.StatusUnknown)
@@ -266,7 +266,7 @@ func TestRecovery_PurgeNeverDeletesEntriesOfRecoverableMessages(t *testing.T) {
 	}
 	e.QueueFault.Down.Store(false)
 	time.Sleep(25 * time.Millisecond) // the Windows clock ticks coarsely: let "dispatched_at < now" hold
-	if n, err := e.App.Outbox.Redispatch(bg, 0, 100); err != nil || n != 1 {
+	if n, err := e.App.Outbox.Redispatch(bg, -time.Minute, 100); err != nil || n != 1 {
 		t.Fatalf("redispatch: %d %v", n, err)
 	}
 	e.StartWorkers(1)
@@ -276,3 +276,7 @@ func TestRecovery_PurgeNeverDeletesEntriesOfRecoverableMessages(t *testing.T) {
 		t.Fatalf("purge after completion: %d %v", n, err)
 	}
 }
+
+// Redispatch compares the age of an outbox entry (stamped by the DATABASE clock) with the application clock. The
+// tests above ask for "everything dispatched so far" with a negative age so a container whose clock runs ahead of the
+// host's (Docker Desktop on Windows/macOS) cannot make them flaky; production passes minutes, which dwarfs any skew.
