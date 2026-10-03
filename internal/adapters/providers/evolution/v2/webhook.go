@@ -84,6 +84,9 @@ type upsertData struct {
 	MessageType      string         `json:"messageType"`
 	Message          map[string]any `json:"message"`
 	MessageTimestamp json.Number    `json:"messageTimestamp"`
+	ContextInfo      *struct {
+		StanzaID string `json:"stanzaId"`
+	} `json:"contextInfo"`
 }
 
 type updateData struct {
@@ -129,7 +132,8 @@ func (w Webhook) Normalize(r ports.InboundRequest) ([]events.Inbound, error) {
 			}
 			typ, text := messageContent(d)
 			out = append(out, events.Inbound{InstanceID: env.Instance, Type: events.MessageReceived, ProviderMessageID: d.Key.ID, Timestamp: ts,
-				Payload: events.MessageReceivedPayload{ProviderMessageID: d.Key.ID, From: from, PushName: d.PushName, Type: typ, Text: text, Group: group}})
+				Payload: events.MessageReceivedPayload{ProviderMessageID: d.Key.ID, ReplyToProviderMessageID: replyTo(d), From: from, PushName: d.PushName,
+					Type: typ, Text: text, Group: group}})
 		}
 		return out, nil
 
@@ -218,6 +222,26 @@ func jidToNumber(jid string) string {
 		jid = jid[:i]
 	}
 	return jid
+}
+
+// replyTo returns the provider id of the message being quoted. Evolution reports it either at the top level of
+// the data (contextInfo) or inside the typed message body (extendedTextMessage, imageMessage, ...).
+func replyTo(d upsertData) string {
+	if d.ContextInfo != nil && d.ContextInfo.StanzaID != "" {
+		return d.ContextInfo.StanzaID
+	}
+	for _, body := range d.Message {
+		m, ok := body.(map[string]any)
+		if !ok {
+			continue
+		}
+		if ci, ok := m["contextInfo"].(map[string]any); ok {
+			if id, _ := ci["stanzaId"].(string); id != "" {
+				return id
+			}
+		}
+	}
+	return ""
 }
 
 func messageContent(d upsertData) (typ, text string) {
