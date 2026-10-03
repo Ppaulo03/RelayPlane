@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "relayplane-client"
-version = "0.3.0"
+version = "0.4.0"
 description = "Async Python SDK for the RelayPlane messaging control plane"
 requires-python = ">=3.10"
 dependencies = ["httpx>=0.27,<1"]
