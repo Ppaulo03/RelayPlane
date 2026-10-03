@@ -30,6 +30,7 @@ Legenda: ✅ feito e testado · ⚠️ feito com limitação registrada · ⏭�
 
 ## Limitações e riscos conhecidos (decisões conscientes)
 
+0. **CVE-2026-48063 (Baileys):** mitigado com imagem derivada (Baileys `7.0.0-rc13`), validada com a stack real (create, QR, webhooks, delete). Pendente de homologação: pareamento com número real e, a médio prazo, migrar para uma release oficial da Evolution que já traga Baileys ≥ rc12 (as tags `2.4.0-rc2`/`latest` ainda não trazem; `homolog` não migra o banco).
 1. **Evolution sem conta WhatsApp real.** Validado com a imagem real: criação, QR, estado, delete, probe, webhooks `qrcode.updated` e
    `connection.update`. *Não* validado: envio efetivo e payloads reais de `messages.upsert/update` (seguem a documentação e fakes).
    Dependência: um número de teste. Ação: rodar o fluxo completo e ajustar `webhook.go` se algum campo divergir.

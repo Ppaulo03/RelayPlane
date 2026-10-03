@@ -14,6 +14,16 @@ Deltas específicos deste repositório (o `AGENTS.md` global continua valendo).
 
 ## Aprendizados acumulados
 
+* **Baileys/Evolution (CVE-2026-48063):** a imagem oficial `evoapicloud/evolution-api:v2.3.7` traz Baileys `7.0.0-rc.9` (vulnerável). Usamos
+  `deploy/docker/evolution/Dockerfile` (base v2.3.7 + `npm install baileys@7.0.0-rc13`; o Baileys é `require`d externamente, então a troca em
+  `node_modules` funciona). Tags oficiais mais novas: `2.4.0-rc2`/`latest` ainda `rc.9`; `homolog` (rc13) quebra em `prisma migrate deploy`.
+  `internal/archtest/supply_chain_test.go` guarda isso. Reavalie ao sair uma release oficial 2.4.x estável.
+* **Locks de lifecycle:** toda mutação de instância roda em `Deps.WithInstanceControl` (lock `instance-control:<id>`); quem já segura o lock
+  chama `ProvisionLocked`/`FinishDeleteLocked`. Durante migração ativa o reconciler não age (por `operations`, não por `observed_state`).
+* **Ordenação:** `sequence_no` por instância é alocado no mesmo INSERT (lock da linha de `instances`); comando bloqueado por predecessor em voo
+  volta ao outbox (ack + `ResetOutbox`) em vez de esperar no lugar, senão o predecessor republicado fica *atrás* na mesma chave (deadlock).
+  O corte de tempo do `UNKNOWN` usa o relógio do banco (skew entre containers e host quebrou a versão com `time.Time`).
+
 * **Race detector no Windows local:** não há gcc ⇒ `go test -race` falha (`requires cgo`). Rodar em container (`make test-race`).
 * **MinIO:** `minio/minio` saiu do Docker Hub; usar `quay.io/minio/minio:<RELEASE…>` (pinar digest).
 * **Shell:** em Git Bash, comandos muito longos com vários heredocs `'EOF'` podem falhar com "unexpected EOF"; criar arquivos

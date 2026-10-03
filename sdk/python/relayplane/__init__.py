@@ -9,4 +9,4 @@ __all__ = [
     "IdempotencyConflict", "RequestInProgress", "CapabilityNotSupported", "PayloadTooLarge", "ServiceUnavailable", "ServerError",
     "CreatedInstance", "Instance", "Media", "Message", "Operation", "OperationRef", "Pairing", "SentMessage",
 ]
-__version__ = "0.1.0"
+__version__ = "0.2.0"

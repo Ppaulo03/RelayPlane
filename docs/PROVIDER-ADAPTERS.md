@@ -54,19 +54,20 @@ Já executam a suíte: `memory.FakeProvider` e o adapter Evolution v2 (contra um
 | fencing / logout | `DELETE /instance/logout/{name}` + reconfirmação de estado |
 | delete | `DELETE /instance/delete/{name}` |
 | enviar | `POST /message/sendText/{name}`, `sendMedia`, `sendWhatsAppAudio` (mídia por **URL assinada**, ou base64 *dentro da chamada ao node*, nunca pelo broker) |
-| probe | `GET /` (versão; major ≠ 2 ⇒ node não-READY) |
+| probe | `GET /` (versão fora da allow-list `v2.TestedVersions` = `2.3.7` ⇒ node não-READY) |
 
 Webhook (`webhook.go`): `messages.upsert → message.received` (ignora `fromMe`), `messages.update → message.status`
 (`SERVER_ACK→sent`, `DELIVERY_ACK→delivered`, `READ/PLAYED→read`), `connection.update → instance.status_changed`
 (`close`+`401` ⇒ `LOGGED_OUT`), `qrcode.updated → instance.qrcode_updated` (**sem** material de QR). Eventos não modelados são descartados.
 
-Verificado contra a imagem real `evoapicloud/evolution-api:v2.3.7` (docker compose): create, QR, estado, delete, probe/versão e
+Verificado contra a imagem real `v2.3.7` **com Baileys 7.0.0-rc13** (`deploy/docker/evolution`, docker compose): create, QR, estado, delete, probe/versão e
 entrega de webhooks `qrcode.updated`/`connection.update` autenticados. **Não verificado com conta WhatsApp real** (sem aparelho):
 envio efetivo de texto/mídia e payloads de `messages.upsert/update` seguem a documentação e testes com fakes — risco registrado no ROADMAP.
 
 Limitações assumidas (documentadas, não escondidas):
 * A Evolution não oferece "fechar socket sem perder credenciais": o fencing usa `logout`, que invalida a sessão ⇒ migração entre nodes
   exige novo QR (a menos que os nodes compartilhem armazenamento de sessão — fora de escopo).
+* A imagem oficial da Evolution `v2.3.7` embute Baileys vulnerável (CVE-2026-48063): use sempre a imagem derivada (ver VERSIONS).
 * A Evolution não conhece `epoch`; `RejectsStale=false`. O fencing lógico é feito pelo worker antes da chamada.
 
 ## Versionamento (`evolution/v2` e `evolution/v3`)

@@ -20,7 +20,7 @@ class _Http:
     def __init__(self, base_url: str, api_key: str, timeout: float, transport: httpx.AsyncBaseTransport | None):
         self._client = httpx.AsyncClient(
             base_url=base_url.rstrip("/"), timeout=timeout, transport=transport,
-            headers={"Authorization": f"Bearer {api_key}", "User-Agent": "relayplane-python/0.1.0"})
+            headers={"Authorization": f"Bearer {api_key}", "User-Agent": "relayplane-python/0.2.0"})
 
     async def request(self, method: str, path: str, *, json: Any = None, content: Any = None,
                       idempotency_key: str | None = None, headers: dict[str, str] | None = None) -> tuple[Any, httpx.Response]:
