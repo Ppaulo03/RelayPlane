@@ -1,0 +1,163 @@
+package ports
+
+import (
+	"context"
+	"time"
+
+	"github.com/relayplane/relayplane/internal/core/instance"
+	"github.com/relayplane/relayplane/internal/core/media"
+	"github.com/relayplane/relayplane/internal/core/messaging"
+	"github.com/relayplane/relayplane/internal/core/ownership"
+	"github.com/relayplane/relayplane/internal/core/routing"
+)
+
+// TenantRepository persists tenants.
+type TenantRepository interface {
+	Create(ctx context.Context, t instance.Tenant) error
+	Get(ctx context.Context, id string) (*instance.Tenant, error)
+	GetByAPIKeyHash(ctx context.Context, hash string) (*instance.Tenant, error)
+	// SetRatePolicy stores the tenant-level rate policy override (nil clears it).
+	SetRatePolicy(ctx context.Context, id string, p *messaging.RatePolicy) error
+}
+
+// PlacementRequest creates an instance together with its first assignment,
+// atomically reserving capacity on the node chosen by Choose.
+type PlacementRequest struct {
+	Instance instance.Instance // ObservedState ALLOCATING, epoch assigned by the repository (1)
+	Provider string            // provider key candidate nodes must serve
+	// Choose picks a node among the *locked* candidate rows. It is the core's
+	// pure placement function; the repository guarantees atomic reservation.
+	Choose func(candidates []routing.Node) (nodeID string, err error)
+}
+
+// ReassignRequest moves ownership to a new node with the next epoch.
+type ReassignRequest struct {
+	InstanceID    string
+	ExpectedEpoch int64
+	NewNodeID     string
+	OperationID   string // migration operation proving the old owner was fenced
+	Reason        ownership.ReleaseReason
+}
+
+// InstanceRepository persists instances and their ownership.
+//
+// Invariants enforced here (and, for PostgreSQL, by constraints):
+//   - an instance has at most one open (unreleased) assignment (INV-01);
+//   - epochs strictly increase;
+//   - Reassign only succeeds when the migration operation is at step
+//     OLD_OWNER_FENCED (INV-09).
+type InstanceRepository interface {
+	// CreateWithPlacement is idempotent on Instance.ID: when the instance
+	// already exists it is returned unchanged.
+	CreateWithPlacement(ctx context.Context, req PlacementRequest) (*instance.Instance, error)
+	Get(ctx context.Context, id string) (*instance.Instance, error)
+	List(ctx context.Context, tenantID string) ([]instance.Instance, error)
+	// ListDue returns live instances not reconciled since `before`.
+	ListDue(ctx context.Context, before time.Time, limit int) ([]instance.Instance, error)
+
+	UpdateDesired(ctx context.Context, id string, state instance.DesiredState) error
+	// SetObserved records an observed state. It validates the lifecycle
+	// transition and rejects a stale epoch (ErrStaleAssignment).
+	SetObserved(ctx context.Context, id string, epoch int64, state instance.ObservedState, at time.Time) (changed bool, err error)
+	SetProviderInstance(ctx context.Context, id string, epoch int64, providerInstanceID string) error
+	TouchHeartbeat(ctx context.Context, id string, at time.Time) error
+	MarkReconciled(ctx context.Context, id string, at time.Time) error
+
+	Reassign(ctx context.Context, req ReassignRequest) (ownership.Assignment, error)
+	// Release closes the open assignment without a successor and frees node capacity.
+	Release(ctx context.Context, id string, epoch int64, reason ownership.ReleaseReason) error
+	// MarkDeleted releases ownership, sets observed DELETED and deleted_at.
+	MarkDeleted(ctx context.Context, id string, epoch int64, at time.Time) error
+	Assignments(ctx context.Context, id string) ([]ownership.AssignmentRecord, error)
+	// SetRatePolicy stores the instance-level rate policy override (nil clears it).
+	SetRatePolicy(ctx context.Context, id string, p *messaging.RatePolicy) error
+	// CountByState counts non-deleted instances per observed state (gauges).
+	CountByState(ctx context.Context) (map[instance.ObservedState]int, error)
+}
+
+// NodeRepository persists provider nodes.
+type NodeRepository interface {
+	// Upsert registers a node or refreshes its static attributes; it never
+	// resets active_instances or an operator-set status.
+	Upsert(ctx context.Context, n routing.Node) error
+	Get(ctx context.Context, id string) (*routing.Node, error)
+	List(ctx context.Context) ([]routing.Node, error)
+	// SetStatus applies an administrative/health transition (validated).
+	SetStatus(ctx context.Context, id string, to routing.NodeStatus) (*routing.Node, error)
+	// RecordProbe stores a probe outcome; heartbeat is only advanced on success.
+	RecordProbe(ctx context.Context, id string, status routing.NodeStatus, version string, ok bool, at time.Time) error
+}
+
+// OperationPatch carries optional fields applied together with a step change.
+type OperationPatch struct {
+	ErrorCode    string
+	ErrorMessage string
+	BumpAttempts bool
+	TargetNodeID string
+}
+
+// OperationRepository persists long-running operations.
+type OperationRepository interface {
+	// Create inserts the operation. At most one active MIGRATE operation may
+	// exist per instance (ErrInProgress otherwise); an existing id yields ErrAlreadyExists.
+	Create(ctx context.Context, op instance.Operation) error
+	Get(ctx context.Context, id string) (*instance.Operation, error)
+	// Advance is a compare-and-set on the step: it fails with ErrConflict when
+	// the stored step differs from `from`.
+	Advance(ctx context.Context, id, from, to string, status instance.OperationStatus, patch OperationPatch) (*instance.Operation, error)
+	Complete(ctx context.Context, id string, status instance.OperationStatus, errCode, errMsg string, at time.Time) error
+	FindActive(ctx context.Context, instanceID string, t instance.OperationType) (*instance.Operation, error)
+	ListActive(ctx context.Context, t instance.OperationType, limit int) ([]instance.Operation, error)
+}
+
+// MessagePatch is applied together with a status transition.
+type MessagePatch struct {
+	ProviderMessageID string
+	ErrorCode         string
+	ErrorMessage      string
+	BumpAttempt       bool
+}
+
+// MessageRepository persists outbound messages.
+type MessageRepository interface {
+	Create(ctx context.Context, m messaging.Message) error
+	Get(ctx context.Context, id string) (*messaging.Message, error)
+	// Transition is a compare-and-set on the status (ErrConflict if the
+	// current status is not in `from`). It returns the updated message.
+	Transition(ctx context.Context, id string, from []messaging.Status, to messaging.Status, patch MessagePatch) (*messaging.Message, error)
+	// ApplyProviderStatus applies a delivery receipt monotonically
+	// (ACCEPTED < DELIVERED < READ; regressions are ignored).
+	ApplyProviderStatus(ctx context.Context, instanceID, providerMessageID string, to messaging.Status) (applied bool, err error)
+	// ListStaleQueued returns messages still QUEUED since before `before`
+	// (accepted but possibly never published: outbox recovery).
+	ListStaleQueued(ctx context.Context, before time.Time, limit int) ([]messaging.Message, error)
+}
+
+// DedupOutcome is the result of claiming an inbound event key.
+type DedupOutcome int
+
+const (
+	DedupProceed   DedupOutcome = iota // first time (or in-flight claim expired): publish
+	DedupDuplicate                     // already published (or being published)
+)
+
+// Deduplicator guarantees duplicate inbound events produce no duplicate
+// effects. It is two-phase so a failed publish can be retried by the provider:
+// Begin -> publish -> Commit, or Abort on failure.
+type Deduplicator interface {
+	Begin(ctx context.Context, key, instanceID string, ttl, inflightTimeout time.Duration) (DedupOutcome, error)
+	Commit(ctx context.Context, key string) error
+	Abort(ctx context.Context, key string) error
+	DeleteExpired(ctx context.Context, now time.Time) (int64, error)
+}
+
+// BlobMetadataRepository persists blob_metadata.
+type BlobMetadataRepository interface {
+	Create(ctx context.Context, b media.Blob) error
+	Get(ctx context.Context, id string) (*media.Blob, error)
+	GetByKey(ctx context.Context, key string) (*media.Blob, error)
+	MarkReady(ctx context.Context, id string, size int64, sha256 string) error
+	MarkDeleted(ctx context.Context, id string, at time.Time) error
+	// ListExpired returns non-deleted blobs whose expires_at is before `now`.
+	ListExpired(ctx context.Context, now time.Time, limit int) ([]media.Blob, error)
+}
