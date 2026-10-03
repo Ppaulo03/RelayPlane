@@ -43,7 +43,9 @@ Legenda: ✅ feito e testado · ⚠️ feito com limitação registrada · ⏭�
 | Upload: `MaxBytesReader`, `Put` estrito, teste em object stores reais | ✅ |
 | Release da imagem Evolution (scan/push/digest) | ⚠️ alvo `make evolution-image` pronto; push e scan dependem do seu registry/scanner |
 | Chaos testing em infra real (`make test-chaos`): wipe e partição do Redis, stall do Postgres, workers mortos no meio do tráfego | ✅ achou e corrigiu um bug (consumer group perdido após wipe do Redis) |
-| Load testing / jitter de rede / queda do object store | ⏭️ próximo passo |
+| Jitter de rede e resets de conexão (proxy TCP entre a aplicação e PostgreSQL/Redis) | ✅ `TestJitter_*` |
+| Baseline de carga (`make test-load`) | ✅ ver OPERATIONS; sem provider real a latência do WhatsApp não está incluída |
+| Queda do object store, carga multi-processo e carga com provider real | ⏭️ próximo passo |
 
 ## Limitações e riscos conhecidos (decisões conscientes)
 

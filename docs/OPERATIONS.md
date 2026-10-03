@@ -18,6 +18,16 @@ Portas: gateway `HTTP_PORT` (8080); worker/reconciler expõem `/metrics` e `/hea
 há tráfego, e depois confere: nada preso em `QUEUED`/`DISPATCHING`, nenhuma mensagem chega duas vezes ao provider, ordem por instância preservada,
 e os únicos estados finais são `ACCEPTED` ou `UNKNOWN` (resolvível via `POST /messages/{id}/resolve`). Rode antes de atualizar Redis/PostgreSQL ou o adapter do broker.
 
+### Jitter de rede e carga
+
+* `TestJitter_SlowAndUnstableNetwork`: todo pacote para PostgreSQL e Redis recebe 5–45 ms de atraso (proxy TCP no teste). Converge, mas é **lento**
+  (80 mensagens em ~65 s): cada mensagem faz vários round-trips ao banco, então latência de rede entre os workers e o PostgreSQL/Redis multiplica. Mantenha-os na mesma região/AZ.
+* `TestJitter_ConnectionResetsUnderTraffic`: conexões resetadas 6 vezes durante o tráfego, sobre jitter. Sem perda nem duplicata; o cliente que repete um `Send`
+  ambíguo com a mesma `Idempotency-Key` recebe a mesma mensagem.
+* `make test-load` (`LOAD_MESSAGES`, `LOAD_INSTANCES`): linha de base numa máquina local de desenvolvimento (Windows, Docker, 20 instâncias, 2000 mensagens, 6 consumidores,
+  provider falso sem latência): aceitação ~550 msg/s (p50 34 ms, p95 49 ms, p99 65 ms); entrega completa ~190 msg/s, com ordem por instância e sem duplicata.
+  Use como referência de regressão, **não** como capacidade de produção: o provider real (Evolution/WhatsApp) e o hardware mudam o resultado.
+
 ## Object store (S3-compatível)
 
 O core só conhece a porta `BlobStore`; o adapter `adapters/blob/s3` fala o protocolo S3 padrão, então o backend é uma decisão de implantação

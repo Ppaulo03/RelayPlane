@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/relayplane/relayplane/internal/app"
 	"github.com/relayplane/relayplane/internal/core/messaging"
 )
 
@@ -46,7 +47,16 @@ func (tr *traffic) run(n int, gap time.Duration, from int) {
 	for i := from; i < from+n; i++ {
 		inst := tr.insts[i%len(tr.insts)]
 		text := fmt.Sprintf("m%04d", i)
-		r, _, err := tr.e.SendText(tr.e.Tenant, inst, text, fmt.Sprintf("chaos-%d", i))
+		// a real client retries an ambiguous failure with the SAME Idempotency-Key: the retry must resolve to
+		// the one message (never a second one), even when the first attempt committed before the connection broke
+		var r app.SendResult
+		var err error
+		for attempt := 0; attempt < 8; attempt++ {
+			if r, _, err = tr.e.SendText(tr.e.Tenant, inst, text, fmt.Sprintf("chaos-%d", i)); err == nil {
+				break
+			}
+			time.Sleep(200 * time.Millisecond)
+		}
 		if err == nil {
 			tr.mu.Lock()
 			tr.ids = append(tr.ids, r.MessageID)
@@ -87,7 +97,7 @@ func (tr *traffic) assertConverges(t *testing.T) {
 	if len(ids) == 0 {
 		t.Fatal("no message was accepted")
 	}
-	Eventually(t, 60*time.Second, "all accepted messages leave QUEUED/DISPATCHING", func() bool {
+	Eventually(t, 90*time.Second, "all accepted messages leave QUEUED/DISPATCHING", func() bool {
 		for _, id := range ids {
 			m, err := tr.e.Repos.Messages.Get(ctx, id)
 			if err != nil || m.Status == messaging.StatusQueued || m.Status == messaging.StatusDispatching {
