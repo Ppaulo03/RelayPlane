@@ -28,6 +28,7 @@ var (
 	ErrInProgress          = errors.New("operation in progress")
 	ErrPayloadTooLarge     = errors.New("payload exceeds inline limit")
 	ErrCapabilityMissing   = errors.New("capability not supported")
+	ErrAlreadyTerminal     = errors.New("operation already finished")
 )
 
 // Provider errors (canonical translations of provider-specific failures).

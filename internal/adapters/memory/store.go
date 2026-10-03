@@ -530,6 +530,9 @@ func (r opRepo) Advance(_ context.Context, id, from, to string, st instance.Oper
 	if !ok {
 		return nil, errs.ErrNotFound
 	}
+	if !o.Status.IsActive() {
+		return nil, fmt.Errorf("%w: %w (%s)", errs.ErrConflict, errs.ErrAlreadyTerminal, o.Status)
+	}
 	if o.Step != from {
 		return nil, fmt.Errorf("%w: operation step is %q, expected %q", errs.ErrConflict, o.Step, from)
 	}
@@ -560,6 +563,9 @@ func (r opRepo) Complete(_ context.Context, id string, st instance.OperationStat
 	o, ok := r.s.operations[id]
 	if !ok {
 		return errs.ErrNotFound
+	}
+	if !o.Status.IsActive() {
+		return fmt.Errorf("%w: %w (%s)", errs.ErrConflict, errs.ErrAlreadyTerminal, o.Status)
 	}
 	t := at
 	o.Status, o.ErrorCode, o.ErrorMessage, o.CompletedAt, o.UpdatedAt = st, code, msg, &t, at

@@ -450,6 +450,33 @@ func stateGuardContract(t *testing.T, f RepoFactory) {
 }
 
 func operationsContract(t *testing.T, f RepoFactory) {
+	t.Run("concurrent Complete has one winner", func(t *testing.T) {
+		fx, ctx := newFixture(t, f), context.Background()
+		fx.tenant(t, "t1")
+		if err := fx.r.Operations.Create(ctx, instance.Operation{ID: "op_race", TenantID: "t1", Type: instance.OpDeleteInstance, Status: instance.OpRunning, Step: "DELETING"}); err != nil {
+			t.Fatal(err)
+		}
+		var wins atomic.Int32
+		var wg sync.WaitGroup
+		for i := 0; i < 8; i++ {
+			wg.Add(1)
+			go func(i int) {
+				defer wg.Done()
+				st := instance.OpSucceeded
+				if i%2 == 1 {
+					st = instance.OpFailed
+				}
+				if err := fx.r.Operations.Complete(ctx, "op_race", st, "", "", time.Now()); err == nil {
+					wins.Add(1)
+				}
+			}(i)
+		}
+		wg.Wait()
+		if wins.Load() != 1 {
+			t.Fatalf("exactly one Complete may win, got %d", wins.Load())
+		}
+	})
+
 	fx, ctx := newFixture(t, f), context.Background()
 	fx.tenant(t, "t1")
 	fx.node(t, "node-01", 5)
@@ -518,6 +545,19 @@ func operationsContract(t *testing.T, f RepoFactory) {
 	}
 	if err := fx.r.Operations.Complete(ctx, "op_1", instance.OpFailed, "X", "done", time.Now()); err != nil {
 		t.Fatal(err)
+	}
+	// terminal states are immutable: a delayed driver cannot rewrite the verdict
+	if err := fx.r.Operations.Complete(ctx, "op_1", instance.OpSucceeded, "", "", time.Now()); !errors.Is(err, errs.ErrAlreadyTerminal) || !errors.Is(err, errs.ErrConflict) {
+		t.Errorf("Complete on a finished operation: %v", err)
+	}
+	if fin, _ := fx.r.Operations.Get(ctx, "op_1"); fin.Status != instance.OpFailed || fin.ErrorCode != "X" {
+		t.Errorf("the first verdict must stand: %+v", fin)
+	}
+	if _, err := fx.r.Operations.Advance(ctx, "op_1", string(ownership.StepBlocked), string(ownership.StepFencingOldOwner), instance.OpRunning, ports.OperationPatch{}); !errors.Is(err, errs.ErrAlreadyTerminal) {
+		t.Errorf("Advance on a finished operation: %v", err)
+	}
+	if fin, _ := fx.r.Operations.Get(ctx, "op_1"); fin.Status != instance.OpFailed {
+		t.Errorf("a finished operation was resurrected: %+v", fin)
 	}
 	if _, err := fx.r.Operations.FindActive(ctx, "inst_1", instance.OpMigrate); !errors.Is(err, errs.ErrNotFound) {
 		t.Errorf("completed op must not be active: %v", err)

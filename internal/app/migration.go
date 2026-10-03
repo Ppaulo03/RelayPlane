@@ -201,7 +201,11 @@ func (s *MigrationService) adv(ctx context.Context, op *instance.Operation, to o
 
 func (s *MigrationService) fail(ctx context.Context, op *instance.Operation, code string, cause error) (bool, error) {
 	s.d.Log.ErrorContext(ctx, "migration failed", "operation_id", op.ID, "code", code, "error", cause)
-	return false, s.d.Repos.Operations.Complete(ctx, op.ID, instance.OpFailed, code, cause.Error(), s.d.now())
+	err := s.d.Repos.Operations.Complete(ctx, op.ID, instance.OpFailed, code, cause.Error(), s.d.now())
+	if errors.Is(err, errs.ErrAlreadyTerminal) {
+		return false, nil // a faster driver already finished this operation: the first verdict stands
+	}
+	return false, err
 }
 
 // step performs one transition; progressed=false means "wait" (blocked, waiting
@@ -367,7 +371,10 @@ func (s *MigrationService) verify(ctx context.Context, op *instance.Operation, i
 		if err := s.adv(ctx, op, ownership.StepConnected, instance.OpRunning, ports.OperationPatch{}); err != nil {
 			return false, err
 		}
-		return false, s.d.Repos.Operations.Complete(ctx, op.ID, instance.OpSucceeded, "", "", s.d.now())
+		if cerr := s.d.Repos.Operations.Complete(ctx, op.ID, instance.OpSucceeded, "", "", s.d.now()); cerr != nil && !errors.Is(cerr, errs.ErrAlreadyTerminal) {
+			return false, cerr
+		}
+		return false, nil
 	}
 	if err == nil && st.State.Valid() {
 		_, _ = s.d.observe(ctx, *inst, st.State) // e.g. AWAITING_PAIRING: the session needs a re-pair

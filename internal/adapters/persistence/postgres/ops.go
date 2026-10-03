@@ -67,6 +67,9 @@ func (r opRepo) Advance(ctx context.Context, id, from, to string, st instance.Op
 		if err != nil {
 			return err
 		}
+		if !o.Status.IsActive() {
+			return fmt.Errorf("%w: %w (%s)", errs.ErrConflict, errs.ErrAlreadyTerminal, o.Status)
+		}
 		if o.Step != from {
 			return fmt.Errorf("%w: operation step is %q, expected %q", errs.ErrConflict, o.Step, from)
 		}
@@ -97,10 +100,15 @@ func (r opRepo) Advance(ctx context.Context, id, from, to string, st instance.Op
 }
 
 func (r opRepo) Complete(ctx context.Context, id string, st instance.OperationStatus, code, msg string, at time.Time) error {
-	tag, err := r.s.pool.Exec(ctx, `UPDATE operations SET status=$2,error_code=$3,error_message=$4,completed_at=$5,updated_at=$5 WHERE id=$1`,
-		id, string(st), code, msg, at)
+	// compare-and-set on the status: a finished operation is immutable
+	tag, err := r.s.pool.Exec(ctx, `UPDATE operations SET status=$2,error_code=$3,error_message=$4,completed_at=$5,updated_at=$5
+		WHERE id=$1 AND status IN ('PENDING','RUNNING','BLOCKED')`, id, string(st), code, msg, at)
 	if err == nil && tag.RowsAffected() == 0 {
-		return errs.ErrNotFound
+		cur, gerr := r.Get(ctx, id)
+		if gerr != nil {
+			return gerr
+		}
+		return fmt.Errorf("%w: %w (%s)", errs.ErrConflict, errs.ErrAlreadyTerminal, cur.Status)
 	}
 	return err
 }

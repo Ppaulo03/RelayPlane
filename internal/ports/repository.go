@@ -105,7 +105,10 @@ type OperationRepository interface {
 	Create(ctx context.Context, op instance.Operation) error
 	Get(ctx context.Context, id string) (*instance.Operation, error)
 	// Advance is a compare-and-set on the step: it fails with ErrConflict when
-	// the stored step differs from `from`.
+	// the stored step differs from `from`. A finished (SUCCEEDED/FAILED) operation
+	// is immutable: Advance and Complete on it fail with ErrAlreadyTerminal (which
+	// also matches ErrConflict) and change nothing, so a delayed driver can never
+	// turn SUCCEEDED into FAILED.
 	Advance(ctx context.Context, id, from, to string, status instance.OperationStatus, patch OperationPatch) (*instance.Operation, error)
 	Complete(ctx context.Context, id string, status instance.OperationStatus, errCode, errMsg string, at time.Time) error
 	FindActive(ctx context.Context, instanceID string, t instance.OperationType) (*instance.Operation, error)
