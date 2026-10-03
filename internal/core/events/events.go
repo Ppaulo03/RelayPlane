@@ -93,6 +93,11 @@ type MessageReceivedPayload struct {
 	Type                     string `json:"type"`
 	Text                     string `json:"text,omitempty"`
 	Group                    bool   `json:"group,omitempty"`
+	// ChatID is the group JID (<id>@g.us) of a group message; reply to it to answer the group.
+	ChatID string `json:"chat_id,omitempty"`
+	// SenderLID is the opaque WhatsApp LID of the sender when the provider addressed them that way. From carries the
+	// phone number whenever the provider reported it.
+	SenderLID string `json:"sender_lid,omitempty"`
 }
 
 // MessageOutboundStatusPayload is the payload of message.outbound_status.
