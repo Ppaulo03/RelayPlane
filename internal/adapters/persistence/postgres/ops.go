@@ -334,7 +334,8 @@ func (r msgRepo) MarkOutboxDispatched(ctx context.Context, instanceID string, se
 func (r msgRepo) ListStuckOutbox(ctx context.Context, before time.Time, limit int) ([]messaging.OutboxEntry, error) {
 	rows, err := r.s.pool.Query(ctx, `SELECT o.instance_id,o.sequence_no,o.message_id,o.command,o.created_at,o.dispatched_at
 		FROM outbox o JOIN outbound_messages m ON m.id=o.message_id
-		WHERE o.dispatched_at IS NOT NULL AND o.dispatched_at < $1 AND m.status='QUEUED'
+		WHERE o.dispatched_at IS NOT NULL AND o.dispatched_at < $1
+		  AND (m.status='QUEUED' OR (m.status='DISPATCHING' AND m.updated_at < $1))
 		ORDER BY o.instance_id, o.sequence_no LIMIT $2`, before, limit)
 	if err != nil {
 		return nil, err
@@ -343,7 +344,8 @@ func (r msgRepo) ListStuckOutbox(ctx context.Context, before time.Time, limit in
 }
 
 func (r msgRepo) PurgeOutbox(ctx context.Context, before time.Time) (int64, error) {
-	tag, err := r.s.pool.Exec(ctx, `DELETE FROM outbox WHERE dispatched_at IS NOT NULL AND dispatched_at < $1`, before)
+	tag, err := r.s.pool.Exec(ctx, `DELETE FROM outbox o WHERE o.dispatched_at IS NOT NULL AND o.dispatched_at < $1
+		AND NOT EXISTS (SELECT 1 FROM outbound_messages m WHERE m.id = o.message_id AND m.status IN ('QUEUED','DISPATCHING'))`, before)
 	return tag.RowsAffected(), err
 }
 

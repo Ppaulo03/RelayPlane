@@ -10,6 +10,7 @@ import (
 	"github.com/relayplane/relayplane/internal/app"
 	"github.com/relayplane/relayplane/internal/core/errs"
 	"github.com/relayplane/relayplane/internal/core/messaging"
+	"github.com/relayplane/relayplane/internal/ports"
 )
 
 func sentTexts(e *Env) []string {
@@ -198,4 +199,80 @@ func TestBarrier_FailedPredecessorDoesNotBlock(t *testing.T) {
 	e.StartWorkers(1)
 	e.WaitMessage(a.MessageID, messaging.StatusFailed)
 	e.WaitMessage(b.MessageID, messaging.StatusAccepted)
+}
+
+// ---- recovery durability (second review) ----
+
+// 15.1 A was claimed (DISPATCHING) and its command vanished from the broker. The outbox
+// must recover it: the redelivery turns it into UNKNOWN (never a blind resend), which then
+// holds back the successor until it is resolved.
+func TestRecovery_DispatchingMessageWhoseCommandWasLostIsRecovered(t *testing.T) {
+	e := NewEnv(t)
+	e.Worker.UnknownBarrierTimeout = 0
+	inst := e.CreateInstance(e.Tenant, "a", true)
+	e.QueueFault.Drop.Store(true)
+	a, _, _ := e.SendText(e.Tenant, inst.ID, "A", "") // its command is lost
+	e.QueueFault.Drop.Store(false)
+	if _, err := e.Repos.Messages.Transition(bg, a.MessageID, []messaging.Status{messaging.StatusQueued}, messaging.StatusDispatching, ports.MessagePatch{BumpAttempt: true}); err != nil {
+		t.Fatal(err) // a worker had claimed it before dying together with the command
+	}
+	b, _, _ := e.SendText(e.Tenant, inst.ID, "B", "")
+	e.StartOutbox()
+	e.StartWorkers(2)
+	time.Sleep(150 * time.Millisecond)
+	if len(e.Provider.Sent()) != 0 {
+		t.Fatalf("B must not overtake the stuck A: %v", sentTexts(e))
+	}
+	time.Sleep(25 * time.Millisecond)
+	if n, err := e.App.Outbox.Redispatch(bg, 0, 100); err != nil || n < 1 {
+		t.Fatalf("a DISPATCHING message must be recovered by the outbox: %d %v", n, err)
+	}
+	got := e.WaitMessage(a.MessageID, messaging.StatusUnknown)
+	if got.ErrorCode != "WORKER_CRASH" {
+		t.Errorf("code %q", got.ErrorCode)
+	}
+	for _, s := range sentTexts(e) {
+		if s == "A" {
+			t.Fatal("recovery must never resend the interrupted message")
+		}
+	}
+	time.Sleep(150 * time.Millisecond)
+	if m, _ := e.Repos.Messages.Get(bg, b.MessageID); m.Status != messaging.StatusQueued {
+		t.Fatalf("strict ordering: B waits for A to be resolved, is %s", m.Status)
+	}
+	if _, err := e.App.Messages.Resolve(bg, e.Tenant, a.MessageID, app.OutcomeNotSent); err != nil {
+		t.Fatal(err)
+	}
+	e.WaitMessage(b.MessageID, messaging.StatusAccepted)
+}
+
+// 15.2 The broker is down while old outbox entries exist: maintenance must not purge the
+// only copy of a command that still needs to be (re)published.
+func TestRecovery_PurgeNeverDeletesEntriesOfRecoverableMessages(t *testing.T) {
+	e := NewEnv(t)
+	inst := e.CreateInstance(e.Tenant, "a", true)
+	e.QueueFault.Drop.Store(true)
+	a, _, _ := e.SendText(e.Tenant, inst.ID, "A", "") // "published" into the void: entry dispatched, message QUEUED
+	e.QueueFault.Drop.Store(false)
+	e.QueueFault.Down.Store(true)
+
+	e.Reconciler.Cfg.StuckQueuedAfter = 0
+	e.Reconciler.Maintenance(bg) // redispatch fails (broker down): the purge must be skipped
+	if n, err := e.App.Outbox.Purge(bg, 0); err != nil || n != 0 {
+		t.Fatalf("a QUEUED message's outbox entry must survive an aggressive purge: %d %v", n, err)
+	}
+	if es, _ := e.Repos.Messages.ListStuckOutbox(bg, time.Now().Add(time.Hour), 10); len(es) != 1 || es[0].MessageID != a.MessageID {
+		t.Fatalf("the entry needed for recovery is gone: %+v", es)
+	}
+	e.QueueFault.Down.Store(false)
+	time.Sleep(25 * time.Millisecond) // the Windows clock ticks coarsely: let "dispatched_at < now" hold
+	if n, err := e.App.Outbox.Redispatch(bg, 0, 100); err != nil || n != 1 {
+		t.Fatalf("redispatch: %d %v", n, err)
+	}
+	e.StartWorkers(1)
+	e.WaitMessage(a.MessageID, messaging.StatusAccepted)
+	// once the message is finished the entry may be purged
+	if n, err := e.App.Outbox.Purge(bg, 0); err != nil || n != 1 {
+		t.Fatalf("purge after completion: %d %v", n, err)
+	}
 }

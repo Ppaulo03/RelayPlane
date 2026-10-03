@@ -771,7 +771,11 @@ func (r msgRepo) ListStuckOutbox(_ context.Context, before time.Time, limit int)
 		if e.DispatchedAt.IsZero() || !e.DispatchedAt.Before(before) {
 			continue
 		}
-		if m := r.s.messages[e.MessageID]; m != nil && m.Status == messaging.StatusQueued {
+		m := r.s.messages[e.MessageID]
+		if m == nil {
+			continue
+		}
+		if m.Status == messaging.StatusQueued || (m.Status == messaging.StatusDispatching && m.UpdatedAt.Before(before)) {
 			out = append(out, *e)
 		}
 	}
@@ -793,7 +797,11 @@ func (r msgRepo) PurgeOutbox(_ context.Context, before time.Time) (int64, error)
 	var n int64
 	kept := r.s.outbox[:0]
 	for _, e := range r.s.outbox {
-		if !e.DispatchedAt.IsZero() && e.DispatchedAt.Before(before) {
+		recoverable := false
+		if m := r.s.messages[e.MessageID]; m != nil {
+			recoverable = m.Status == messaging.StatusQueued || m.Status == messaging.StatusDispatching
+		}
+		if !e.DispatchedAt.IsZero() && e.DispatchedAt.Before(before) && !recoverable {
 			n++
 			continue
 		}

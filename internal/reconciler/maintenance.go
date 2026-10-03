@@ -10,13 +10,19 @@ import (
 // gauge refresh.
 func (r *Reconciler) Maintenance(ctx context.Context) {
 	d := r.deps()
+	redispatched := true
 	if n, err := r.App.Outbox.Redispatch(ctx, r.Cfg.StuckQueuedAfter, r.Cfg.BatchSize); err != nil {
+		redispatched = false
 		r.Log.WarnContext(ctx, "outbox redispatch failed", "error", err)
 	} else if n > 0 {
 		r.Log.WarnContext(ctx, "re-published commands the broker had lost", "count", n)
 	}
-	if _, err := r.App.Outbox.Purge(ctx, 24*time.Hour); err != nil {
-		r.Log.WarnContext(ctx, "outbox purge failed", "error", err)
+	// Purging only happens in a cycle where recovery itself worked, and the
+	// repository never purges entries of messages that may still need it.
+	if redispatched {
+		if _, err := r.App.Outbox.Purge(ctx, 24*time.Hour); err != nil {
+			r.Log.WarnContext(ctx, "outbox purge failed", "error", err)
+		}
 	}
 	if exp, orph, err := r.App.Media.Cleanup(ctx, r.Cfg.OrphanGrace, r.Cfg.BatchSize); err != nil {
 		r.Log.WarnContext(ctx, "blob cleanup failed", "error", err)

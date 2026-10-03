@@ -144,10 +144,14 @@ type MessageRepository interface {
 	// MarkOutboxDispatched records (or refreshes) the publication of an entry.
 	MarkOutboxDispatched(ctx context.Context, instanceID string, seq int64, at time.Time) error
 	// ListStuckOutbox returns entries published before `before` whose message is
-	// still QUEUED (the broker lost the command): they are published again; the
-	// sequence barrier keeps later messages behind them.
+	// still unprocessed: QUEUED (the broker lost the command) or DISPATCHING for
+	// longer than `before` (the worker or the command died mid-flight; the
+	// redelivery turns DISPATCHING into UNKNOWN without resending). They are
+	// published again; the sequence barrier keeps later messages behind them.
 	ListStuckOutbox(ctx context.Context, before time.Time, limit int) ([]messaging.OutboxEntry, error)
-	// PurgeOutbox deletes entries dispatched before `before`.
+	// PurgeOutbox deletes entries dispatched before `before`, but never the entry
+	// of a message that may still need recovery (QUEUED or DISPATCHING): the
+	// outbox is the only place the command can be rebuilt from.
 	PurgeOutbox(ctx context.Context, before time.Time) (int64, error)
 	// ResetOutbox marks an entry as not yet dispatched so the dispatcher publishes
 	// it again (used when a command reached a worker before its predecessors).

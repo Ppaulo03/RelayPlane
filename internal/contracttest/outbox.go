@@ -147,6 +147,20 @@ func outboxContract(t *testing.T, f RepoFactory) {
 			t.Fatalf("stuck: %+v", stuck)
 		}
 		_, _ = fx.r.Messages.Transition(ctx, "m1", []messaging.Status{messaging.StatusQueued}, messaging.StatusDispatching, ports.MessagePatch{})
+		// DISPATCHING for longer than the threshold is recoverable too (worker/command died mid-flight)
+		stuck, _ = fx.r.Messages.ListStuckOutbox(ctx, now.Add(time.Hour), 10)
+		foundM1 := false
+		for _, e := range stuck {
+			if e.MessageID == "m1" {
+				foundM1 = true
+			}
+		}
+		if !foundM1 {
+			t.Fatalf("a DISPATCHING message whose command was lost must be recoverable: %+v", stuck)
+		}
+		if stuck, _ := fx.r.Messages.ListStuckOutbox(ctx, now.Add(-time.Minute), 10); len(stuck) != 0 {
+			t.Fatalf("a message that entered DISPATCHING just now is not stuck yet: %+v", stuck)
+		}
 		if err := fx.r.Messages.ResetOutbox(ctx, "inst_1", 1); err != nil {
 			t.Fatal(err)
 		}
@@ -159,14 +173,20 @@ func outboxContract(t *testing.T, f RepoFactory) {
 		if err := fx.r.Messages.ResetOutbox(ctx, "inst_1", 99); !errors.Is(err, errs.ErrNotFound) {
 			t.Fatalf("reset of an unknown entry: %v", err)
 		}
-		if stuck, _ := fx.r.Messages.ListStuckOutbox(ctx, now.Add(-time.Minute), 10); len(stuck) != 0 {
-			t.Fatalf("a message that is being processed is not stuck: %+v", stuck)
-		}
+		// purge: recoverable messages keep their outbox entry whatever its age
+		_, _ = fx.r.Messages.CreateWithOutbox(ctx, outboxMsg("done", "inst_2"), buildFor("done"))
+		_ = fx.r.Messages.MarkOutboxDispatched(ctx, "inst_2", 2, now.Add(-48*time.Hour))
+		_, _ = fx.r.Messages.Transition(ctx, "done", []messaging.Status{messaging.StatusQueued}, messaging.StatusDispatching, ports.MessagePatch{})
+		_, _ = fx.r.Messages.Transition(ctx, "done", []messaging.Status{messaging.StatusDispatching}, messaging.StatusAccepted, ports.MessagePatch{})
+		_ = fx.r.Messages.MarkOutboxDispatched(ctx, "inst_1", 1, now.Add(-48*time.Hour))
 		if n, err := fx.r.Messages.PurgeOutbox(ctx, now.Add(-time.Minute)); err != nil || n != 1 {
-			t.Fatalf("purge: %d %v", n, err)
+			t.Fatalf("only the entry of the finished message may be purged (DISPATCHING m1 must stay): %d %v", n, err)
+		}
+		if es, _ := fx.r.Messages.ListStuckOutbox(ctx, now.Add(time.Hour), 10); len(es) == 0 {
+			t.Fatal("the recoverable entry disappeared")
 		}
 		if n, _ := fx.r.Messages.PurgeOutbox(ctx, now.Add(time.Hour)); n != 0 {
-			t.Fatalf("undispatched entries must never be purged: %d", n)
+			t.Fatalf("undispatched or recoverable entries must never be purged: %d", n)
 		}
 	})
 
