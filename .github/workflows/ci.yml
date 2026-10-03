@@ -1,0 +1,69 @@
+# Gates for every PR and every push to main. Third-party actions are pinned by commit SHA (the same supply-chain rule
+# as container images: see internal/archtest/supply_chain_test.go).
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  go:
+    name: format, vet, unit + architecture tests, race
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - run: make fmt-check vet
+      - run: go test -count=1 ./...
+      - run: go test -race -count=1 ./internal/...
+
+  integration:
+    name: real PostgreSQL + Redis + every object store, chaos and load
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      # adapter contract suites + the whole system suite against RustFS, SeaweedFS and MinIO
+      - run: make test-integration-s3
+      # fault injection (Redis wipe/partition, PostgreSQL stall, worker kills, object store outage) and network jitter
+      - run: make test-chaos
+      # in-process load baseline with ordering / at-most-once checks
+      - run: make test-load
+      - if: always()
+        run: make infra-down
+
+  load-stack:
+    name: multi-process load with worker kills
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - run: make test-load-stack WORKERS=4 INSTANCES=40 MESSAGES=2000 CHAOS_KILL=1
+
+  sdk:
+    name: python sdk
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+      - run: make sdk-test PYTHON=python

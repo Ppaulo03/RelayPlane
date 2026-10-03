@@ -41,7 +41,8 @@ Legenda: ✅ feito e testado · ⚠️ feito com limitação registrada · ⏭�
 | `AWAITING_PAIRING` na migração | ✅ |
 | `LookupInstance` (identidade do provider) | ✅ |
 | Upload: `MaxBytesReader`, `Put` estrito, teste em object stores reais | ✅ |
-| Release da imagem Evolution (scan/push/digest) | ⚠️ alvo `make evolution-image` pronto; push e scan dependem do seu registry/scanner |
+| Release da imagem Evolution (scan/push/digest) | ✅ workflow `evolution-image` (build → confere Baileys → trivy CRITICAL → push GHCR → digest no summary); falta rodá-lo uma vez e fixar o digest no compose/manifests |
+| CI (GitHub Actions) | ✅ `ci.yml`: gates, race, integração em 3 object stores, chaos, carga, carga multi-processo, SDK; actions fixadas por SHA (testado em `archtest`) |
 | Chaos testing em infra real (`make test-chaos`): wipe e partição do Redis, stall do Postgres, workers mortos no meio do tráfego | ✅ achou e corrigiu um bug (consumer group perdido após wipe do Redis) |
 | Jitter de rede e resets de conexão (proxy TCP entre a aplicação e PostgreSQL/Redis) | ✅ `TestJitter_*` |
 | Baseline de carga (`make test-load`) | ✅ ver OPERATIONS; sem provider real a latência do WhatsApp não está incluída |
