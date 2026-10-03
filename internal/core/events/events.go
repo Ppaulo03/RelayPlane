@@ -20,6 +20,9 @@ const (
 	InstanceStatusChanged Type = "instance.status_changed"
 	InstanceQRCodeUpdated Type = "instance.qrcode_updated"
 	OwnershipViolation    Type = "ownership.violation"
+	// MessageOutboundStatus reports the lifecycle of a message the TENANT sent through RelayPlane
+	// (ACCEPTED, DELIVERED, READ, FAILED, UNKNOWN), keyed by the RelayPlane message id.
+	MessageOutboundStatus Type = "message.outbound_status"
 )
 
 // SourceAssignment is the assignment under which the provider produced an event.
@@ -46,14 +49,29 @@ type Event struct {
 	Payload          any               `json:"payload"`
 }
 
-// MessageReceivedPayload is the payload of message.received.
+// MessageReceivedPayload is the payload of message.received. The envelope timestamp of this event is the
+// time the PROVIDER stamped the message (when the user wrote it), not when RelayPlane received it.
 type MessageReceivedPayload struct {
 	ProviderMessageID string `json:"provider_message_id"`
-	From              string `json:"from"`
-	PushName          string `json:"push_name,omitempty"`
-	Type              string `json:"type"`
-	Text              string `json:"text,omitempty"`
-	Group             bool   `json:"group,omitempty"`
+	// ReplyToProviderMessageID is the provider id of the message this one quotes/replies to ("" when it is
+	// not a reply). It is the strongest evidence that an answer refers to a specific earlier message of ours.
+	ReplyToProviderMessageID string `json:"reply_to_provider_message_id,omitempty"`
+	From                     string `json:"from"`
+	PushName                 string `json:"push_name,omitempty"`
+	Type                     string `json:"type"`
+	Text                     string `json:"text,omitempty"`
+	Group                    bool   `json:"group,omitempty"`
+}
+
+// MessageOutboundStatusPayload is the payload of message.outbound_status.
+type MessageOutboundStatusPayload struct {
+	MessageID         string `json:"message_id"`
+	Status            string `json:"status"` // ACCEPTED | DELIVERED | READ | FAILED | UNKNOWN
+	ProviderMessageID string `json:"provider_message_id,omitempty"`
+	SequenceNo        int64  `json:"sequence_no"`
+	// AcceptedAt is when the provider accepted the send (set from ACCEPTED on).
+	AcceptedAt *time.Time `json:"accepted_at,omitempty"`
+	ErrorCode  string     `json:"error_code,omitempty"`
 }
 
 // MessageStatusPayload is the payload of message.status.

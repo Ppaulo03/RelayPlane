@@ -382,3 +382,31 @@ func TestSend5xxIsAmbiguousButManagementCallsStayRetryable(t *testing.T) {
 		t.Errorf("429 means not accepted => RETRYABLE, got %v", err)
 	}
 }
+
+// The quoted message id is the strongest evidence that an answer refers to one of OUR messages.
+func TestWebhookExtractsTheQuotedMessage(t *testing.T) {
+	w := v2.Webhook{Secret: "s"}
+	norm := func(body string) events.MessageReceivedPayload {
+		t.Helper()
+		out, err := w.Normalize(hook("s", "node-01", 1, body))
+		if err != nil || len(out) != 1 {
+			t.Fatalf("%v %+v", err, out)
+		}
+		return out[0].Payload.(events.MessageReceivedPayload)
+	}
+	nested := norm(`{"event":"messages.upsert","instance":"i","data":{"key":{"remoteJid":"5562@s.whatsapp.net","fromMe":false,"id":"R1"},
+		"messageType":"extendedTextMessage","message":{"extendedTextMessage":{"text":"sim","contextInfo":{"stanzaId":"OURS1"}}}}}`)
+	if nested.ReplyToProviderMessageID != "OURS1" || nested.Text != "sim" {
+		t.Errorf("nested contextInfo: %+v", nested)
+	}
+	top := norm(`{"event":"messages.upsert","instance":"i","data":{"key":{"remoteJid":"5562@s.whatsapp.net","fromMe":false,"id":"R2"},
+		"messageType":"conversation","message":{"conversation":"ok"},"contextInfo":{"stanzaId":"OURS2"}}}`)
+	if top.ReplyToProviderMessageID != "OURS2" {
+		t.Errorf("top-level contextInfo: %+v", top)
+	}
+	plain := norm(`{"event":"messages.upsert","instance":"i","data":{"key":{"remoteJid":"5562@s.whatsapp.net","fromMe":false,"id":"R3"},
+		"messageType":"conversation","message":{"conversation":"oi"}}}`)
+	if plain.ReplyToProviderMessageID != "" {
+		t.Errorf("a plain message is not a reply: %+v", plain)
+	}
+}
