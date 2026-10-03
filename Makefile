@@ -3,10 +3,14 @@ PYTHON  ?= python
 GODIGEST = golang:1.26.5@sha256:705e964a93a2fd2e75c7d59bb7d781b57e30f12293ffde5175c69229e18fb678
 INFRA    = deploy/docker/compose.infra.yml
 
-.PHONY: fmt vet build test test-integration test-race sdk-test infra-up infra-down up down
+.PHONY: fmt fmt-check vet build test test-integration test-race sdk-test infra-up infra-down up down
 
+# fmt rewrites files; fmt-check only reports (tests must never modify the working tree)
 fmt:
 	gofmt -l -w cmd internal migrations
+
+fmt-check:
+	@out="$$(gofmt -l cmd internal migrations)"; if [ -n "$$out" ]; then echo "needs gofmt:"; echo "$$out"; exit 1; fi
 
 vet:
 	$(GO) vet ./...
@@ -16,7 +20,7 @@ build:
 	$(GO) build ./...
 
 # unit + contract suites + in-memory system tests (no infrastructure needed)
-test: fmt vet
+test: fmt-check vet
 	$(GO) test -count=1 ./...
 
 infra-up:
