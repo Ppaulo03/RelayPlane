@@ -115,7 +115,7 @@ spec:
     spec:
       containers:
         - name: evolution
-          image: evoapicloud/evolution-api:v2.3.7@sha256:1bd8afc4a6cf48822e6cf02469aeae7bd35a12a6b616eacd1291926307f4d339
+          image: registry.example.com/relayplane/evolution:2.3.7-baileys-rc13@sha256:REPLACE_WITH_BUILD_DIGEST  # built from deploy/docker/evolution/Dockerfile (Baileys 7.0.0-rc13)
           ports: [{containerPort: 8080}]
           env:
             - {name: DATABASE_PROVIDER, value: postgresql}

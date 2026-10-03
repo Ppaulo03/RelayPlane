@@ -308,7 +308,7 @@ func (p *Provider) ProbeNode(ctx context.Context, nodeID string) (*ports.NodePro
 // TestedVersions are the Evolution releases this adapter was validated against.
 // Anything else is refused by ProbeNode instead of being assumed "close enough":
 // minor releases of the Evolution API have changed behaviour before.
-var TestedVersions = []string{"2.3.7", "2.4.0"}
+var TestedVersions = []string{"2.3.7"}
 
 // Compatible checks the adapter/Evolution version pairing against an allow-list
 // (TestedVersions when allowed is empty).

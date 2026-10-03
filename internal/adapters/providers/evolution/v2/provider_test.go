@@ -206,9 +206,13 @@ func TestCompatibilityCheck(t *testing.T) {
 			t.Fatalf("untested version %s must not be READY: %+v %v", bad, probe, err)
 		}
 	}
-	f.version = "2.4.0"
-	if probe, err = p.ProbeNode(t.Context(), "node-01"); err != nil || !probe.Ready {
-		t.Fatalf("2.4.0 is on the allow-list: %+v %v", probe, err)
+	f.version = "2.4.0" // never validated against this adapter (the upstream 2.4.0 builds do not even migrate their database)
+	if probe, err = p.ProbeNode(t.Context(), "node-01"); err == nil || probe.Ready {
+		t.Fatalf("2.4.0 must be refused until it is tested: %+v %v", probe, err)
+	}
+	pOpt := v2.New(v2.Config{Nodes: v2.StaticNodes{"node-01": {BaseURL: f.srv.URL, APIKey: apiKey}}, AllowedVersions: []string{"2.4.0"}})
+	if probe, err = pOpt.ProbeNode(t.Context(), "node-01"); err != nil || !probe.Ready {
+		t.Fatalf("an operator can allow a version explicitly: %+v %v", probe, err)
 	}
 	if !v2.Compatible("2.3.7") || v2.Compatible("2.3.6") || !v2.Compatible("2.9.0", "2.9.0") {
 		t.Error("compatibility predicate")

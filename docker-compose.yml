@@ -29,7 +29,9 @@ x-relayplane-env: &relayplane-env
      {"id":"node-02","provider":"evolution-v2","endpoint":"http://evolution-node-02:8080","api_key":"${EVOLUTION_NODE_02_API_KEY:?set EVOLUTION_NODE_02_API_KEY}","capacity":${NODE_CAPACITY:-50}}]
 
 x-evolution-node: &evolution-node
-  image: evoapicloud/evolution-api:v2.3.7@sha256:1bd8afc4a6cf48822e6cf02469aeae7bd35a12a6b616eacd1291926307f4d339
+  # Evolution v2.3.7 rebuilt with Baileys 7.0.0-rc13 (CVE-2026-48063); see deploy/docker/evolution/Dockerfile
+  build: {context: ./deploy/docker/evolution}
+  image: relayplane/evolution:2.3.7-baileys-rc13
   restart: unless-stopped
   depends_on:
     postgres: {condition: service_healthy}
