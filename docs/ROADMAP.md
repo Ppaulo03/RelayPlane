@@ -42,7 +42,8 @@ Legenda: ✅ feito e testado · ⚠️ feito com limitação registrada · ⏭�
 | `LookupInstance` (identidade do provider) | ✅ |
 | Upload: `MaxBytesReader`, `Put` estrito, teste em object stores reais | ✅ |
 | Release da imagem Evolution (scan/push/digest) | ⚠️ alvo `make evolution-image` pronto; push e scan dependem do seu registry/scanner |
-| Chaos/load testing | ⏭️ próximo passo (kill -9 de workers, wipe/partição do Redis, queda do Postgres, jitter de rede) |
+| Chaos testing em infra real (`make test-chaos`): wipe e partição do Redis, stall do Postgres, workers mortos no meio do tráfego | ✅ achou e corrigiu um bug (consumer group perdido após wipe do Redis) |
+| Load testing / jitter de rede / queda do object store | ⏭️ próximo passo |
 
 ## Limitações e riscos conhecidos (decisões conscientes)
 

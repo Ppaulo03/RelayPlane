@@ -3,7 +3,7 @@ PYTHON  ?= python
 GODIGEST = golang:1.26.5@sha256:705e964a93a2fd2e75c7d59bb7d781b57e30f12293ffde5175c69229e18fb678
 INFRA    = deploy/docker/compose.infra.yml
 
-.PHONY: test-integration-s3 fmt fmt-check vet build test test-integration test-race sdk-test infra-up infra-down up down evolution-image
+.PHONY: test-chaos test-integration-s3 fmt fmt-check vet build test test-integration test-race sdk-test infra-up infra-down up down evolution-image
 
 # fmt rewrites files; fmt-check only reports (tests must never modify the working tree)
 fmt:
@@ -40,6 +40,10 @@ test-integration-s3: infra-up
 	@set -e; for b in $(S3_BACKENDS); do name=$${b%%=*}; ep=$${b#*=}; echo "=== object store: $$name ($$ep)"; \
 	  RELAYPLANE_TEST_S3_ENDPOINT=$$ep $(GO) test -tags integration -count=1 ./internal/adapters/blob/...; \
 	  RELAYPLANE_TEST_S3_ENDPOINT=$$ep RELAYPLANE_SYSTEMTEST_BACKEND=real $(GO) test -tags integration -count=1 ./internal/systemtest; done
+
+# fault injection on real infrastructure (restart/pause redis and postgres, kill workers) while traffic flows
+test-chaos: infra-up
+	RELAYPLANE_SYSTEMTEST_BACKEND=real $(GO) test -tags "integration chaos" -count=1 -v -run Chaos -timeout 10m ./internal/systemtest
 
 # the race detector needs cgo; run it in the pinned golang image
 test-race:

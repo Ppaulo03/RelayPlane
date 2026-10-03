@@ -12,6 +12,12 @@
 
 Portas: gateway `HTTP_PORT` (8080); worker/reconciler expõem `/metrics` e `/health/*` em `OPS_PORT` (9090).
 
+## Testes de caos
+
+`make test-chaos` injeta falhas na infraestrutura real (docker compose pause/restart de Redis e PostgreSQL, workers cancelados em voo) enquanto
+há tráfego, e depois confere: nada preso em `QUEUED`/`DISPATCHING`, nenhuma mensagem chega duas vezes ao provider, ordem por instância preservada,
+e os únicos estados finais são `ACCEPTED` ou `UNKNOWN` (resolvível via `POST /messages/{id}/resolve`). Rode antes de atualizar Redis/PostgreSQL ou o adapter do broker.
+
 ## Object store (S3-compatível)
 
 O core só conhece a porta `BlobStore`; o adapter `adapters/blob/s3` fala o protocolo S3 padrão, então o backend é uma decisão de implantação

@@ -25,6 +25,8 @@ Deltas específicos deste repositório (o `AGENTS.md` global continua valendo).
   O corte de tempo do `UNKNOWN` usa o relógio do banco (skew entre containers e host quebrou a versão com `time.Time`).
 
 * **Race detector no Windows local:** não há gcc ⇒ `go test -race` falha (`requires cgo`). Rodar em container (`make test-race`).
+* **Redis sem persistência:** após restart o consumer group some e `XREADGROUP` devolve `NOGROUP`; o adapter recria o grupo (queue e bus). Descoberto por
+  `make test-chaos` (usa `docker compose pause/restart` nos containers de `deploy/docker/compose.infra.yml`; tmpfs do Postgres é perdido em stop/start, por isso ele só é pausado).
 * **Object store:** `minio/minio` saiu do Docker Hub (community edition em manutenção reduzida). O adapter S3 é genérico; `make test-integration-s3`
   roda contrato + suíte de sistema em RustFS, SeaweedFS e MinIO. SeaweedFS: cada bucket é uma *collection* que pré-aloca volumes (30 GB por padrão):
   o teste cria um bucket por teste, então a infra de teste usa `-master.volumeSizeLimitMB=32 -volume.max=2000`; sem isso → "internal error".
