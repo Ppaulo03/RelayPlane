@@ -10,12 +10,13 @@ import (
 )
 
 type subscriptionView struct {
-	ID          string    `json:"id"`
-	URL         string    `json:"url"`
-	EventTypes  []string  `json:"event_types"`
-	InstanceIDs []string  `json:"instance_ids"`
-	Active      bool      `json:"active"`
-	CreatedAt   time.Time `json:"created_at"`
+	ID            string    `json:"id"`
+	URL           string    `json:"url"`
+	EventTypes    []string  `json:"event_types"`
+	InstanceIDs   []string  `json:"instance_ids"`
+	ExcludeGroups bool      `json:"exclude_groups"`
+	Active        bool      `json:"active"`
+	CreatedAt     time.Time `json:"created_at"`
 	// Secret is the signing secret. It is returned only when the subscription is created or its secret rotated.
 	Secret string `json:"secret,omitempty"`
 	// PreviousSecretValidUntil is when the previous secret stops being used to sign (rotation only).
@@ -23,7 +24,7 @@ type subscriptionView struct {
 }
 
 func viewSubscription(s subscription.Subscription) subscriptionView {
-	v := subscriptionView{ID: s.ID, URL: s.URL, EventTypes: []string{}, InstanceIDs: s.InstanceIDs, Active: s.Active, CreatedAt: s.CreatedAt}
+	v := subscriptionView{ID: s.ID, URL: s.URL, EventTypes: []string{}, InstanceIDs: s.InstanceIDs, ExcludeGroups: s.ExcludeGroups, Active: s.Active, CreatedAt: s.CreatedAt}
 	for _, t := range s.EventTypes {
 		v.EventTypes = append(v.EventTypes, string(t))
 	}
@@ -58,21 +59,28 @@ func viewDelivery(d subscription.Delivery) deliveryView {
 
 func (s *Server) createSubscription(w nethttp.ResponseWriter, r *nethttp.Request, p Principal) {
 	var in struct {
-		URL         string   `json:"url"`
-		EventTypes  []string `json:"event_types"`
-		InstanceIDs []string `json:"instance_ids"`
+		URL           string   `json:"url"`
+		EventTypes    []string `json:"event_types"`
+		InstanceIDs   []string `json:"instance_ids"`
+		ExcludeGroups bool     `json:"exclude_groups"`
 	}
 	if err := decode(r, &in); err != nil {
 		writeError(w, r, s.Log, err)
 		return
 	}
-	sv, err := s.App.Subscriptions.Create(r.Context(), p.TenantID, app.CreateSubscriptionInput{URL: in.URL, EventTypes: in.EventTypes, InstanceIDs: in.InstanceIDs})
+	sv, was, err := s.App.Subscriptions.Create(r.Context(), p.TenantID, app.CreateSubscriptionInput{URL: in.URL, EventTypes: in.EventTypes, InstanceIDs: in.InstanceIDs,
+		ExcludeGroups: in.ExcludeGroups}, idemKey(r))
 	if err != nil {
 		writeError(w, r, s.Log, err)
 		return
 	}
 	v := viewSubscription(sv.Subscription)
-	v.Secret = sv.Secret
+	v.Secret = sv.Secret // empty on a replay
+	replayed(w, was)
+	if was {
+		writeJSON(w, 200, v)
+		return
+	}
 	writeJSON(w, nethttp.StatusCreated, v)
 }
 

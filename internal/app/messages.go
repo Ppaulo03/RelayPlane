@@ -146,7 +146,7 @@ func (s *MessageService) send(ctx context.Context, tenantID, msgID string, in Se
 	seq, err := s.d.Repos.Messages.CreateWithOutbox(ctx, messaging.Message{
 		ID: msgID, TenantID: tenantID, InstanceID: inst.ID, IdempotencyKey: idemKey, NodeID: inst.NodeID,
 		AssignmentEpoch: inst.AssignmentEpoch, PartitionKey: inst.ID, Recipient: in.To, Type: in.Type,
-		Payload: pj, Status: messaging.StatusQueued,
+		Payload: pj, Status: messaging.StatusQueued, TraceParent: observability.TraceParent(ctx),
 	}, build)
 	if err != nil && !errors.Is(err, errs.ErrAlreadyExists) { // AlreadyExists: resumed after a crash; it is already in the outbox
 		return SendResult{}, err

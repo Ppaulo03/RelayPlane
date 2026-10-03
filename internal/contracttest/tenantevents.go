@@ -35,9 +35,13 @@ func eventOutboxContract(t *testing.T, f RepoFactory) {
 	fx.node(t, "node-01", 5)
 	fx.instance(t, "inst_1", "t1")
 	m := messaging.Message{ID: "msg_1", TenantID: "t1", InstanceID: "inst_1", NodeID: "node-01", AssignmentEpoch: 1,
-		PartitionKey: "inst_1", Recipient: "5562", Type: messaging.TypeText, Payload: json.RawMessage(`{"text":"hi"}`), Status: messaging.StatusQueued}
+		PartitionKey: "inst_1", Recipient: "5562", Type: messaging.TypeText, Payload: json.RawMessage(`{"text":"hi"}`), Status: messaging.StatusQueued,
+		TraceParent: "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"}
 	if err := fx.r.Messages.Create(ctx, m); err != nil {
 		t.Fatal(err)
+	}
+	if got, _ := fx.r.Messages.Get(ctx, "msg_1"); got.TraceParent != m.TraceParent {
+		t.Errorf("the trace context of the send is persisted with the message: %q", got.TraceParent)
 	}
 	if evs, _ := fx.r.Events.ListUnpublished(ctx, 10); len(evs) != 0 {
 		t.Fatalf("QUEUED/DISPATCHING are internal: nothing is announced yet, got %d", len(evs))
@@ -61,6 +65,9 @@ func eventOutboxContract(t *testing.T, f RepoFactory) {
 		t.Fatalf("ACCEPTED must produce exactly one event: %d %v", len(evs), err)
 	}
 	e := evs[0]
+	if e.TraceParent != m.TraceParent {
+		t.Errorf("the status event carries the trace of the send: %q", e.TraceParent)
+	}
 	pl := outboundStatusPayload(t, e)
 	if e.EventType != events.MessageOutboundStatus || e.TenantID != "t1" || e.InstanceID != "inst_1" || e.EventID == "" {
 		t.Errorf("envelope: %+v", e)
@@ -145,6 +152,7 @@ func subscriptionsContract(t *testing.T, f RepoFactory) {
 	s := newSub("sub_1", "t1")
 	s.EventTypes = []events.Type{events.MessageReceived, events.MessageOutboundStatus}
 	s.InstanceIDs = []string{"inst_1"}
+	s.ExcludeGroups = true
 	if err := fx.r.Subscriptions.Create(ctx, s); err != nil {
 		t.Fatal(err)
 	}
@@ -152,7 +160,7 @@ func subscriptionsContract(t *testing.T, f RepoFactory) {
 		t.Errorf("duplicate id: %v", err)
 	}
 	got, err := fx.r.Subscriptions.Get(ctx, "t1", "sub_1")
-	if err != nil || got.URL != s.URL || len(got.EventTypes) != 2 || got.EventTypes[0] != events.MessageReceived || len(got.InstanceIDs) != 1 || !got.Active || got.SecretVersion != 1 {
+	if err != nil || got.URL != s.URL || len(got.EventTypes) != 2 || got.EventTypes[0] != events.MessageReceived || len(got.InstanceIDs) != 1 || !got.Active || got.SecretVersion != 1 || !got.ExcludeGroups {
 		t.Fatalf("roundtrip: %+v %v", got, err)
 	}
 	// tenant isolation: someone else's subscription does not exist for you

@@ -3,12 +3,14 @@ package app
 import (
 	"context"
 	"fmt"
+	"sort"
 	"time"
 
 	"github.com/relayplane/relayplane/internal/core/errs"
 	"github.com/relayplane/relayplane/internal/core/events"
 	"github.com/relayplane/relayplane/internal/core/ids"
 	"github.com/relayplane/relayplane/internal/core/subscription"
+	"github.com/relayplane/relayplane/internal/idempotency"
 )
 
 // EventOutboxService publishes the events that were written to the database in the same transaction as the state
@@ -61,9 +63,10 @@ type SubscriptionService struct{ d Deps }
 
 // CreateSubscriptionInput is the API payload.
 type CreateSubscriptionInput struct {
-	URL         string
-	EventTypes  []string
-	InstanceIDs []string
+	URL           string
+	EventTypes    []string
+	InstanceIDs   []string
+	ExcludeGroups bool
 }
 
 // SubscriptionView is a subscription plus, only right after creation or rotation, its signing secret.
@@ -80,21 +83,23 @@ func (s *SubscriptionService) cfg() SubscriptionConfig {
 	return c
 }
 
-// Create registers a destination. The signing secret is derived (never stored) and shown exactly once.
-func (s *SubscriptionService) Create(ctx context.Context, tenantID string, in CreateSubscriptionInput) (*SubscriptionView, error) {
+// Create registers a destination. The signing secret is derived (never stored) and shown exactly once: with an
+// Idempotency-Key a repeated call returns the SAME subscription (replayed=true) without the secret, so a deploy script
+// that runs twice does not create duplicates (rotate the secret if it was lost).
+func (s *SubscriptionService) Create(ctx context.Context, tenantID string, in CreateSubscriptionInput, idemKey string) (*SubscriptionView, bool, error) {
 	c := s.cfg()
 	if len(c.ServerKey) == 0 {
-		return nil, fmt.Errorf("%w: webhook subscriptions are not configured", errs.ErrCapabilityMissing)
+		return nil, false, fmt.Errorf("%w: webhook subscriptions are not configured", errs.ErrCapabilityMissing)
 	}
 	if err := subscription.ValidateURL(in.URL, c.AllowInsecureURLs, c.AllowPrivateDestinations); err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	var types []events.Type
 	seen := map[events.Type]bool{}
 	for _, raw := range in.EventTypes {
 		t := events.Type(raw)
 		if !subscription.TenantFacing(t) {
-			return nil, fmt.Errorf("%w: event type %q cannot be subscribed to (available: %v)", errs.ErrInvalidArgument, raw, subscription.TenantFacingTypes())
+			return nil, false, fmt.Errorf("%w: event type %q cannot be subscribed to (available: %v)", errs.ErrInvalidArgument, raw, subscription.TenantFacingTypes())
 		}
 		if !seen[t] {
 			seen[t] = true
@@ -103,20 +108,49 @@ func (s *SubscriptionService) Create(ctx context.Context, tenantID string, in Cr
 	}
 	for _, id := range in.InstanceIDs {
 		if _, err := s.d.loadForTenant(ctx, tenantID, id); err != nil {
-			return nil, fmt.Errorf("%w: instance %q does not exist", errs.ErrInvalidArgument, id)
+			return nil, false, fmt.Errorf("%w: instance %q does not exist", errs.ErrInvalidArgument, id)
 		}
 	}
-	if n, err := s.d.Repos.Subscriptions.CountByTenant(ctx, tenantID); err != nil {
-		return nil, err
-	} else if n >= c.MaxPerTenant {
-		return nil, fmt.Errorf("%w: the limit of %d subscriptions per tenant was reached", errs.ErrConflict, c.MaxPerTenant)
+	// the request fingerprint is order-insensitive: the same set of types/instances is the same request
+	fp := struct {
+		URL           string
+		Types, Insts  []string
+		ExcludeGroups bool
+	}{in.URL, sortedCopy(in.EventTypes), sortedCopy(in.InstanceIDs), in.ExcludeGroups}
+	type created struct{ ID string }
+	res, replayed, err := idempotency.Do(ctx, s.d.Idem, tenantID, idemKey, "create_subscription", idempotency.HashRequest(fp),
+		func() string { return ids.New("sub") },
+		func(ctx context.Context, id string) (created, error) {
+			if _, gerr := s.d.Repos.Subscriptions.Get(ctx, tenantID, id); gerr == nil {
+				return created{ID: id}, nil // resumed after a crash: it was already created
+			}
+			if n, cerr := s.d.Repos.Subscriptions.CountByTenant(ctx, tenantID); cerr != nil {
+				return created{}, cerr
+			} else if n >= c.MaxPerTenant {
+				return created{}, fmt.Errorf("%w: the limit of %d subscriptions per tenant was reached", errs.ErrConflict, c.MaxPerTenant)
+			}
+			sub := subscription.Subscription{ID: id, TenantID: tenantID, URL: in.URL, EventTypes: types, InstanceIDs: in.InstanceIDs,
+				SecretVersion: 1, Active: true, ExcludeGroups: in.ExcludeGroups, CreatedAt: s.d.now().UTC()}
+			return created{ID: id}, s.d.Repos.Subscriptions.Create(ctx, sub)
+		})
+	if err != nil {
+		return nil, false, err
 	}
-	sub := subscription.Subscription{ID: ids.New("sub"), TenantID: tenantID, URL: in.URL, EventTypes: types, InstanceIDs: in.InstanceIDs,
-		SecretVersion: 1, Active: true, CreatedAt: s.d.now().UTC()}
-	if err := s.d.Repos.Subscriptions.Create(ctx, sub); err != nil {
-		return nil, err
+	sub, err := s.d.Repos.Subscriptions.Get(ctx, tenantID, res.ID)
+	if err != nil {
+		return nil, replayed, err // a replay of a key whose subscription was deleted since
 	}
-	return &SubscriptionView{Subscription: sub, Secret: subscription.DeriveSecret(c.ServerKey, sub.ID, sub.SecretVersion)}, nil
+	v := &SubscriptionView{Subscription: *sub}
+	if !replayed {
+		v.Secret = subscription.DeriveSecret(c.ServerKey, sub.ID, sub.SecretVersion)
+	}
+	return v, replayed, nil
+}
+
+func sortedCopy(in []string) []string {
+	out := append([]string{}, in...)
+	sort.Strings(out)
+	return out
 }
 
 // List returns the tenant's subscriptions (without secrets).

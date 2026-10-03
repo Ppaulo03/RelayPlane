@@ -7,6 +7,7 @@ package events
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"strings"
 	"time"
 )
@@ -46,7 +47,38 @@ type Event struct {
 	// SourceAssignment identifies the owner that produced the event (nil only for events emitted
 	// before this field existed; consumers then fall back to the current assignment).
 	SourceAssignment *SourceAssignment `json:"source_assignment,omitempty"`
-	Payload          any               `json:"payload"`
+	// TraceParent is the W3C trace context of the request that caused the event, when there is one
+	// (outbound status events carry the trace of the send); webhooks forward it as the traceparent header.
+	TraceParent string `json:"traceparent,omitempty"`
+	Payload     any    `json:"payload"`
+}
+
+// IsGroupMessage reports whether ev is a message.received from a group chat. The payload is a typed struct when the
+// event was just produced and a decoded JSON object after it crossed the bus, so both shapes are handled.
+func IsGroupMessage(ev Event) bool {
+	if ev.EventType != MessageReceived {
+		return false
+	}
+	switch p := ev.Payload.(type) {
+	case MessageReceivedPayload:
+		return p.Group
+	case *MessageReceivedPayload:
+		return p != nil && p.Group
+	case map[string]any:
+		g, _ := p["group"].(bool)
+		return g
+	case nil:
+		return false
+	}
+	// any other representation (json.RawMessage, []byte, a provider-specific struct): look at its JSON form
+	raw, err := json.Marshal(ev.Payload)
+	if err != nil {
+		return false
+	}
+	var probe struct {
+		Group bool `json:"group"`
+	}
+	return json.Unmarshal(raw, &probe) == nil && probe.Group
 }
 
 // MessageReceivedPayload is the payload of message.received. The envelope timestamp of this event is the

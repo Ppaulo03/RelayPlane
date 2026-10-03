@@ -399,3 +399,95 @@ func TestSubscriptionsPerTenantLimit(t *testing.T) {
 		t.Errorf("the limit is per tenant: %d", c)
 	}
 }
+
+func TestSubscriptionCreateIsIdempotent(t *testing.T) {
+	h := newHarness(t)
+	body := `{"url":"http://agent.local/h","event_types":["message.received","message.outbound_status"],"exclude_groups":true}`
+	c, first, _ := h.call("POST", "/api/v1/subscriptions", h.key1, body, "Idempotency-Key", "bootstrap-1")
+	if c != 201 || first["secret"] == nil || first["exclude_groups"] != true {
+		t.Fatalf("first: %d %v", c, first)
+	}
+	// the same request again (a deploy script that runs twice): the same subscription, no second secret
+	reordered := `{"exclude_groups":true,"event_types":["message.outbound_status","message.received"],"url":"http://agent.local/h"}`
+	c, again, hdr := h.call("POST", "/api/v1/subscriptions", h.key1, reordered, "Idempotency-Key", "bootstrap-1")
+	if c != 200 || again["id"] != first["id"] || hdr.Get("Idempotent-Replayed") != "true" {
+		t.Fatalf("replay: %d %v %v", c, again, hdr)
+	}
+	if _, leaked := again["secret"]; leaked {
+		t.Error("a replay must not re-expose the secret (rotate it if it was lost)")
+	}
+	_, list, _ := h.call("GET", "/api/v1/subscriptions", h.key1, "")
+	if n := len(list["subscriptions"].([]any)); n != 1 {
+		t.Errorf("no duplicate subscription: %d", n)
+	}
+	// the same key with a DIFFERENT request is a client bug
+	if c, _, _ := h.call("POST", "/api/v1/subscriptions", h.key1, `{"url":"http://other.local/h"}`, "Idempotency-Key", "bootstrap-1"); c != 422 {
+		t.Errorf("key reuse with another payload: %d", c)
+	}
+	// keys are per tenant
+	if c, _, _ := h.call("POST", "/api/v1/subscriptions", h.key2, body, "Idempotency-Key", "bootstrap-1"); c != 201 {
+		t.Errorf("another tenant may use the same key: %d", c)
+	}
+	// no key: each call creates one (the old behaviour)
+	h.call("POST", "/api/v1/subscriptions", h.key1, body)
+	if _, list, _ = h.call("GET", "/api/v1/subscriptions", h.key1, ""); len(list["subscriptions"].([]any)) != 2 {
+		t.Errorf("without a key every call creates a subscription: %v", list)
+	}
+}
+
+func TestLimitsEndpoint(t *testing.T) {
+	h := newHarness(t)
+	if c, _, _ := h.call("GET", "/api/v1/limits", "", ""); c != 401 {
+		t.Errorf("auth required: %d", c)
+	}
+	c, l, _ := h.call("GET", "/api/v1/limits", h.key1, "")
+	if c != 200 {
+		t.Fatalf("%d %v", c, l)
+	}
+	if l["idempotency_retention_seconds"].(float64) != 24*3600 {
+		t.Errorf("the idempotency window is the client's retry ceiling: %v", l["idempotency_retention_seconds"])
+	}
+	if l["max_text_length"].(float64) <= 0 {
+		t.Errorf("max_text_length: %v", l)
+	}
+	media := l["media"].(map[string]any)
+	if media["max_bytes"].(float64) <= 0 || media["inline_max_bytes"].(float64) <= 0 || len(media["allowed_types"].([]any)) == 0 {
+		t.Errorf("media limits: %v", media)
+	}
+	subs := l["subscriptions"].(map[string]any)
+	if subs["max_per_tenant"].(float64) != 10 || subs["retry_max_attempts"].(float64) != 10 || subs["retry_horizon_seconds"].(float64) < 15*3600 {
+		t.Errorf("subscription limits: %v", subs)
+	}
+	if _, ok := l["send_rate_default"].(map[string]any); !ok {
+		t.Errorf("send_rate_default: %v", l)
+	}
+}
+
+func TestMessageViewExposesProviderIDAndAcceptanceTime(t *testing.T) {
+	h := newHarness(t)
+	h.env.StartWorkers(1)
+	h.env.StartOutbox()
+	_, body, _ := h.call("POST", "/api/v1/instances", h.key1, `{"name":"a"}`)
+	id := body["id"].(string)
+	h.env.Connect(id)
+	_, sent, _ := h.call("POST", "/api/v1/messages/send", h.key1, `{"instance_id":"`+id+`","to":"5562999999999","type":"text","payload":{"text":"oi"}}`)
+	mid := sent["message_id"].(string)
+	var view map[string]any
+	deadline := 0
+	for ; deadline < 400; deadline++ {
+		_, view, _ = h.call("GET", "/api/v1/messages/"+mid, h.key1, "")
+		if view["status"] == "ACCEPTED" {
+			break
+		}
+	}
+	if view["status"] != "ACCEPTED" {
+		t.Fatalf("never accepted: %v", view)
+	}
+	if view["provider_message_id"] == nil || view["provider_message_id"] == "" || view["accepted_at"] == nil {
+		t.Errorf("an ACCEPTED message exposes the provider id (what a reply_to refers to) and when it was accepted: %v", view)
+	}
+	_, queued, _ := h.call("GET", "/api/v1/messages/"+mid, h.key2, "")
+	if _, leaked := queued["provider_message_id"]; leaked {
+		t.Error("another tenant must not see it")
+	}
+}

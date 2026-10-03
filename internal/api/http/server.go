@@ -108,6 +108,7 @@ func (s *Server) Handler() nethttp.Handler {
 	mux.HandleFunc("POST /api/v1/messages/{id}/resolve", tenant(s.resolveMessage))
 	mux.HandleFunc("GET /api/v1/operations/{id}", tenant(s.getOperation))
 
+	mux.HandleFunc("GET /api/v1/limits", tenant(func(w nethttp.ResponseWriter, _ *nethttp.Request, _ Principal) { writeJSON(w, 200, s.App.Limits()) }))
 	mux.HandleFunc("POST /api/v1/subscriptions", tenant(s.createSubscription))
 	mux.HandleFunc("GET /api/v1/subscriptions", tenant(s.listSubscriptions))
 	mux.HandleFunc("GET /api/v1/subscriptions/{id}", tenant(s.getSubscription))

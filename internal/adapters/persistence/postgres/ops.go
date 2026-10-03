@@ -141,7 +141,7 @@ func (r opRepo) ListActive(ctx context.Context, t instance.OperationType, limit 
 type msgRepo struct{ s *Store }
 
 const msgCols = `id,tenant_id,instance_id,idempotency_key,node_id,assignment_epoch,partition_key,recipient,type,payload,status,
-	provider_message_id,attempt_count,error_code,error_message,created_at,updated_at,sequence_no,accepted_at`
+	provider_message_id,attempt_count,error_code,error_message,created_at,updated_at,sequence_no,accepted_at,traceparent`
 
 func scanMsg(row pgx.Row) (*messaging.Message, error) {
 	var m messaging.Message
@@ -149,7 +149,7 @@ func scanMsg(row pgx.Row) (*messaging.Message, error) {
 	var payload []byte
 	var accepted *time.Time
 	if err := row.Scan(&m.ID, &m.TenantID, &m.InstanceID, &m.IdempotencyKey, &m.NodeID, &m.AssignmentEpoch, &m.PartitionKey,
-		&m.Recipient, &t, &payload, &st, &m.ProviderMessageID, &m.AttemptCount, &m.ErrorCode, &m.ErrorMessage, &m.CreatedAt, &m.UpdatedAt, &m.SequenceNo, &accepted); err != nil {
+		&m.Recipient, &t, &payload, &st, &m.ProviderMessageID, &m.AttemptCount, &m.ErrorCode, &m.ErrorMessage, &m.CreatedAt, &m.UpdatedAt, &m.SequenceNo, &accepted, &m.TraceParent); err != nil {
 		return nil, notFound(err)
 	}
 	m.AcceptedAt = zeroIfNil(accepted)
@@ -191,9 +191,9 @@ func (r msgRepo) create(ctx context.Context, m messaging.Message, build func(seq
 			}
 		}
 		if _, err := tx.Exec(ctx, `INSERT INTO outbound_messages(id,tenant_id,instance_id,idempotency_key,node_id,assignment_epoch,
-			partition_key,recipient,type,payload,status,sequence_no) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
+			partition_key,recipient,type,payload,status,sequence_no,traceparent) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
 			m.ID, m.TenantID, m.InstanceID, m.IdempotencyKey, m.NodeID, m.AssignmentEpoch, m.PartitionKey, m.Recipient,
-			string(m.Type), payload, string(m.Status), seq); err != nil {
+			string(m.Type), payload, string(m.Status), seq, m.TraceParent); err != nil {
 			if _, code := constraint(err); code == "23505" {
 				return errs.ErrAlreadyExists
 			}

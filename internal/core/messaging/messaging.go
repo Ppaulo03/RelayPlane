@@ -101,6 +101,8 @@ type Message struct {
 	UpdatedAt         time.Time
 	// AcceptedAt is when the provider accepted the send (zero until the message reaches ACCEPTED).
 	AcceptedAt time.Time
+	// TraceParent is the W3C trace context of the request that created the message.
+	TraceParent string
 }
 
 // Payload is the claim-check message body carried in the command.
@@ -272,13 +274,14 @@ func OutboundStatusEvent(m Message, provider string) events.Event {
 		pl.AcceptedAt = &at
 	}
 	ev := events.Event{
-		EventID:    events.EventIDFor(events.DedupeKey(m.InstanceID, events.MessageOutboundStatus, m.ID, string(m.Status))),
-		EventType:  events.MessageOutboundStatus,
-		Provider:   provider,
-		TenantID:   m.TenantID,
-		InstanceID: m.InstanceID,
-		Timestamp:  m.UpdatedAt.UTC(),
-		Payload:    pl,
+		EventID:     events.EventIDFor(events.DedupeKey(m.InstanceID, events.MessageOutboundStatus, m.ID, string(m.Status))),
+		EventType:   events.MessageOutboundStatus,
+		Provider:    provider,
+		TenantID:    m.TenantID,
+		InstanceID:  m.InstanceID,
+		Timestamp:   m.UpdatedAt.UTC(),
+		TraceParent: m.TraceParent,
+		Payload:     pl,
 	}
 	if m.NodeID != "" {
 		ev.SourceAssignment = &events.SourceAssignment{NodeID: m.NodeID, Epoch: m.AssignmentEpoch}
