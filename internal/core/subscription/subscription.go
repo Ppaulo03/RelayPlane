@@ -72,7 +72,7 @@ func containsType(list []events.Type, t events.Type) bool {
 // operational/internal: they never leave the platform.
 func TenantFacing(t events.Type) bool {
 	switch t {
-	case events.MessageReceived, events.MessageStatus, events.MessageOutboundStatus, events.InstanceStatusChanged:
+	case events.MessageReceived, events.MessageStatus, events.MessageOutboundStatus, events.MessageDeleted, events.InstanceStatusChanged:
 		return true
 	}
 	return false
@@ -80,7 +80,7 @@ func TenantFacing(t events.Type) bool {
 
 // TenantFacingTypes lists them (stable order).
 func TenantFacingTypes() []events.Type {
-	return []events.Type{events.MessageReceived, events.MessageOutboundStatus, events.MessageStatus, events.InstanceStatusChanged}
+	return []events.Type{events.MessageReceived, events.MessageOutboundStatus, events.MessageStatus, events.MessageDeleted, events.InstanceStatusChanged}
 }
 
 // DeliveryStatus is the state of one delivery.

@@ -409,6 +409,28 @@ func TestWebhookResolvesLIDSendersToPhoneNumbers(t *testing.T) {
 	}
 }
 
+// Observed against a real node: deleting a message for everyone arrives as messages.delete with the key fields and
+// status DELETED (the id is the one the message had in message.received).
+func TestWebhookMessageDeleted(t *testing.T) {
+	w := v2.Webhook{Secret: "s"}
+	out, err := w.Normalize(hook("s", "node-01", 1, `{"event":"messages.delete","instance":"i","data":{"remoteJid":"19600000000001@lid",
+		"remoteJidAlt":"5562999999999@s.whatsapp.net","fromMe":false,"id":"WAID9","participant":"","addressingMode":"lid","status":"DELETED"}}`))
+	if err != nil || len(out) != 1 || out[0].Type != events.MessageDeleted || out[0].ProviderMessageID != "WAID9" {
+		t.Fatalf("%v %+v", err, out)
+	}
+	if pl := out[0].Payload.(events.MessageDeletedPayload); pl.ProviderMessageID != "WAID9" || pl.From != "5562999999999" || pl.Group {
+		t.Errorf("%+v", pl)
+	}
+	g, _ := w.Normalize(hook("s", "node-01", 1, `{"event":"messages.delete","instance":"i","data":{"remoteJid":"1203@g.us","participant":"19600000000001@lid",
+		"participantAlt":"5562999999999@s.whatsapp.net","fromMe":false,"id":"WAID10","status":"DELETED"}}`))
+	if pl := g[0].Payload.(events.MessageDeletedPayload); pl.From != "5562999999999" || !pl.Group || pl.ChatID != "1203@g.us" {
+		t.Errorf("%+v", pl)
+	}
+	if mine, _ := w.Normalize(hook("s", "node-01", 1, `{"event":"messages.delete","instance":"i","data":{"remoteJid":"5562@s.whatsapp.net","fromMe":true,"id":"X"}}`)); len(mine) != 0 {
+		t.Errorf("deleting our own message is not an inbound fact: %+v", mine)
+	}
+}
+
 func mediaMsg(url string) messaging.OutboundMessage {
 	return messaging.OutboundMessage{ID: "m", To: "5562999999999", Type: messaging.TypeDocument, Filename: "a.pdf", Caption: "c",
 		Media: &messaging.Attachment{ContentType: "application/pdf", Size: 4, URL: url}}

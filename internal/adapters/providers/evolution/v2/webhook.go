@@ -93,6 +93,15 @@ type upsertData struct {
 	} `json:"contextInfo"`
 }
 
+type deleteData struct {
+	ID             string `json:"id"`
+	RemoteJid      string `json:"remoteJid"`
+	RemoteJidAlt   string `json:"remoteJidAlt"`
+	Participant    string `json:"participant"`
+	ParticipantAlt string `json:"participantAlt"`
+	FromMe         bool   `json:"fromMe"`
+}
+
 type updateData struct {
 	KeyID     string `json:"keyId"`
 	MessageID string `json:"messageId"`
@@ -163,6 +172,30 @@ func (w Webhook) Normalize(r ports.InboundRequest) ([]events.Inbound, error) {
 			}
 			out = append(out, events.Inbound{InstanceID: env.Instance, Type: events.MessageStatus, ProviderMessageID: id, State: status, Timestamp: at,
 				Payload: events.MessageStatusPayload{ProviderMessageID: id, Status: status}})
+		}
+		return out, nil
+
+	case "messages.delete":
+		// a revoked message: {key fields..., "status":"DELETED"} (observed). The companion "messages.edited" with type REVOKE
+		// carries no extra information and is not subscribed.
+		var items []deleteData
+		if err := unmarshalOneOrMany(env.Data, &items); err != nil {
+			return nil, err
+		}
+		var out []events.Inbound
+		for _, d := range items {
+			if d.ID == "" || d.FromMe {
+				continue
+			}
+			group := strings.HasSuffix(d.RemoteJid, "@g.us")
+			senderJid, senderAlt := d.RemoteJid, d.RemoteJidAlt
+			chatID := ""
+			if group {
+				senderJid, senderAlt, chatID = d.Participant, d.ParticipantAlt, d.RemoteJid
+			}
+			from, _ := senderNumber(senderJid, senderAlt)
+			out = append(out, events.Inbound{InstanceID: env.Instance, Type: events.MessageDeleted, ProviderMessageID: d.ID, Timestamp: at,
+				Payload: events.MessageDeletedPayload{ProviderMessageID: d.ID, From: from, Group: group, ChatID: chatID}})
 		}
 		return out, nil
 
