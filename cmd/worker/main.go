@@ -54,9 +54,11 @@ func run() error {
 
 	rt.Log.Info("worker started", "version", version, "partitions", cfg.CommandPartitions)
 	var wg sync.WaitGroup
-	wg.Add(3)
+	wg.Add(5)
 	go func() { defer wg.Done(); _ = rt.Queue.Consume(ctx, out.Handle) }()
 	go func() { defer wg.Done(); _ = rt.Bus.Subscribe(ctx, "projector", proj.Handle) }()
+	go func() { defer wg.Done(); _ = rt.Bus.Subscribe(ctx, "webhook-fanout", rt.FanOut.Handle) }()
+	go func() { defer wg.Done(); rt.Dispatcher.Run(ctx) }()
 	go func() {
 		defer wg.Done()
 		t := time.NewTicker(10 * time.Second)

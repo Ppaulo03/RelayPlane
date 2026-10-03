@@ -49,6 +49,7 @@ func run() error {
 	}
 	rc := reconciler.DefaultConfig()
 	rc.Interval, rc.InstanceInterval, rc.NodeOfflineAfter = cfg.ReconcilerInterval, cfg.InstanceInterval, cfg.NodeOfflineAfter
+	rc.DeliveredRetention = cfg.WebhookDeliveredRetention
 	rt.Log.Info("reconciler started", "version", version, "interval", rc.Interval.String())
 	_ = reconciler.New(rt.App, rc, rt.Log).Run(ctx)
 	return nil

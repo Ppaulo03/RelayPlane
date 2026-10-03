@@ -17,6 +17,9 @@ services:
       AUTHENTICATION_API_KEY: ${EVOLUTION_NODE_02_API_KEY:?set EVOLUTION_NODE_02_API_KEY}
       SEND_LATENCY: ${STUB_SEND_LATENCY:-50ms}
     ports: ["127.0.0.1:18082:8080"]
+  worker:
+    # lets the containers reach the webhook sink that cmd/loadgen runs on the host
+    extra_hosts: ["host.docker.internal:host-gateway"]
   gateway:
     depends_on: !override
       postgres: {condition: service_healthy}
