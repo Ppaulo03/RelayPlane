@@ -173,7 +173,7 @@ do namespace do tenant.
 | INV-11 binário não passa pelo broker | `media.TestEnforceInlineLimit`; contrato da fila; `systemtest.TestINV11_*` |
 | INV-12 convergência | `reconciliation.TestINV12_Converges`; `systemtest.TestINV12_ReconcilerConverges` |
 
-A suíte de sistema roda em memória (rápida) **e** contra PostgreSQL+Redis+object store (RustFS, SeaweedFS e MinIO) reais
+A suíte de sistema roda em memória (rápida) **e** contra PostgreSQL+Redis+object store (RustFS e SeaweedFS) reais
 (`RELAYPLANE_SYSTEMTEST_BACKEND=real go test -tags integration ./internal/systemtest`).
 
 ## 12. API pública

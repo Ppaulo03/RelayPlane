@@ -29,7 +29,7 @@ jobs:
       - run: go test -race -count=1 ./internal/...
 
   integration:
-    name: real PostgreSQL + Redis + every object store, chaos and load
+    name: real PostgreSQL + Redis + both object stores, chaos and load
     runs-on: ubuntu-latest
     timeout-minutes: 40
     steps:
@@ -37,7 +37,7 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
-      # adapter contract suites + the whole system suite against RustFS, SeaweedFS and MinIO
+      # adapter contract suites + the whole system suite against RustFS and SeaweedFS
       - run: make test-integration-s3
       # fault injection (Redis wipe/partition, PostgreSQL stall, worker kills, object store outage) and network jitter
       - run: make test-chaos

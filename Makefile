@@ -33,13 +33,15 @@ infra-up:
 infra-down:
 	docker compose -f $(INFRA) down -v
 
-# real PostgreSQL / Redis Streams / MinIO adapters + the whole system suite on real infrastructure
+# real PostgreSQL / Redis Streams / S3 adapters + the whole system suite on real infrastructure
 test-integration: infra-up
 	$(GO) test -tags integration -count=1 ./internal/adapters/...
 	RELAYPLANE_SYSTEMTEST_BACKEND=real $(GO) test -tags integration -count=1 ./internal/systemtest
 
 # the object-store adapter and the whole system suite against EVERY supported S3-compatible backend
-S3_BACKENDS = rustfs=127.0.0.1:59011 seaweedfs=127.0.0.1:59012 minio=127.0.0.1:59010
+# MinIO is opt-in because its official image can no longer be pulled anywhere:
+#   make test-integration-s3 COMPOSE_PROFILES=minio S3_BACKENDS="minio=127.0.0.1:59010"
+S3_BACKENDS ?= rustfs=127.0.0.1:59011 seaweedfs=127.0.0.1:59012
 test-integration-s3: infra-up
 	@set -e; for b in $(S3_BACKENDS); do name=$${b%%=*}; ep=$${b#*=}; echo "=== object store: $$name ($$ep)"; \
 	  RELAYPLANE_TEST_S3_ENDPOINT=$$ep $(GO) test -tags integration -count=1 ./internal/adapters/blob/...; \
