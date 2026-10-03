@@ -87,7 +87,7 @@ func New(ctx context.Context, cfg config.Config, service string) (*Runtime, erro
 	}
 	reg := app.NewProviderRegistry()
 	reg.Register(evolution.ProviderKey,
-		evolution.New(evolution.Config{Nodes: nodes, WebhookBaseURL: cfg.WebhookBaseURL, WebhookSecret: cfg.WebhookSecret}),
+		evolution.New(evolution.Config{Nodes: nodes, WebhookBaseURL: cfg.WebhookBaseURL, WebhookSecret: cfg.WebhookSecret, AllowedVersions: cfg.EvolutionAllowedVersions}),
 		evolution.Webhook{Secret: cfg.WebhookSecret})
 
 	acfg := app.DefaultConfig()
@@ -96,6 +96,7 @@ func New(ctx context.Context, cfg config.Config, service string) (*Runtime, erro
 	acfg.MediaPolicy.InlineMaxBytes = cfg.MediaInlineMaxBytes
 	acfg.MediaPolicy.MaxBytes = cfg.MediaMaxBytes
 	acfg.MediaTTL = cfg.MediaTTL
+	acfg.PendingTTL = cfg.MediaPendingTTL
 	acfg.MigrationVerifyTimeout = cfg.MigrationVerifyTimeout
 
 	repos := rt.Store.Repositories()

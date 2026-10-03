@@ -22,13 +22,13 @@ import (
 type opRepo struct{ s *Store }
 
 const opCols = `id,tenant_id,COALESCE(instance_id,''),type,status,step,target_node_id,source_node_id,source_epoch,
-	error_code,error_message,attempts,created_at,updated_at,completed_at`
+	error_code,error_message,attempts,created_at,updated_at,step_started_at,completed_at`
 
 func scanOp(row pgx.Row) (*instance.Operation, error) {
 	var o instance.Operation
 	var t, st string
 	if err := row.Scan(&o.ID, &o.TenantID, &o.InstanceID, &t, &st, &o.Step, &o.TargetNodeID, &o.SourceNodeID, &o.SourceEpoch,
-		&o.ErrorCode, &o.ErrorMessage, &o.Attempts, &o.CreatedAt, &o.UpdatedAt, &o.CompletedAt); err != nil {
+		&o.ErrorCode, &o.ErrorMessage, &o.Attempts, &o.CreatedAt, &o.UpdatedAt, &o.StepStartedAt, &o.CompletedAt); err != nil {
 		return nil, notFound(err)
 	}
 	o.Type, o.Status = instance.OperationType(t), instance.OperationStatus(st)
@@ -44,7 +44,7 @@ func (r opRepo) Create(ctx context.Context, op instance.Operation) error {
 		inst = op.InstanceID
 	}
 	_, err := r.s.pool.Exec(ctx, `INSERT INTO operations(id,tenant_id,instance_id,type,status,step,target_node_id,source_node_id,source_epoch,
-		error_code,error_message,attempts,created_at,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$13)`,
+		error_code,error_message,attempts,created_at,updated_at,step_started_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$13,$13)`,
 		op.ID, op.TenantID, inst, string(op.Type), string(op.Status), op.Step, op.TargetNodeID, op.SourceNodeID, op.SourceEpoch,
 		op.ErrorCode, op.ErrorMessage, op.Attempts, op.CreatedAt)
 	if name, code := constraint(err); code == "23505" {
@@ -85,8 +85,12 @@ func (r opRepo) Advance(ctx context.Context, id, from, to string, st instance.Op
 		if p.TargetNodeID != "" {
 			target = p.TargetNodeID
 		}
+		started := o.StepStartedAt
+		if from != to {
+			started = time.Now()
+		}
 		out, err = scanOp(tx.QueryRow(ctx, `UPDATE operations SET step=$2,status=$3,error_code=$4,error_message=$5,attempts=$6,
-			target_node_id=$7,updated_at=now() WHERE id=$1 RETURNING `+opCols, id, to, string(st), code, msg, attempts, target))
+			target_node_id=$7,step_started_at=$8,updated_at=now() WHERE id=$1 RETURNING `+opCols, id, to, string(st), code, msg, attempts, target, started))
 		return err
 	})
 	return out, err
@@ -216,6 +220,16 @@ func (r msgRepo) ApplyProviderStatus(ctx context.Context, instanceID, pmid strin
 		if err != nil {
 			return notFound(err)
 		}
+		if to == messaging.StatusFailed {
+			if cur != string(messaging.StatusAccepted) && cur != string(messaging.StatusUnknown) {
+				applied = false
+				return nil
+			}
+			applied = true
+			_, err = tx.Exec(ctx, `UPDATE outbound_messages SET status='FAILED',error_code='PROVIDER_FAILED',
+				error_message='provider reported the message as failed',updated_at=now() WHERE id=$1`, id)
+			return err
+		}
 		c, okc := receiptRank[messaging.Status(cur)]
 		n, okn := receiptRank[to]
 		if !okc || !okn || n <= c {
@@ -287,8 +301,8 @@ func (r blobRepo) GetByKey(ctx context.Context, key string) (*media.Blob, error)
 	return scanBlob(r.s.pool.QueryRow(ctx, `SELECT `+blobCols+` FROM blob_metadata WHERE object_key=$1`, key))
 }
 
-func (r blobRepo) MarkReady(ctx context.Context, id string, size int64, sha string) error {
-	tag, err := r.s.pool.Exec(ctx, `UPDATE blob_metadata SET status='READY',size=$2,sha256=$3 WHERE id=$1 AND status<>'DELETED'`, id, size, sha)
+func (r blobRepo) MarkReady(ctx context.Context, id string, size int64, sha string, expiresAt time.Time) error {
+	tag, err := r.s.pool.Exec(ctx, `UPDATE blob_metadata SET status='READY',size=$2,sha256=$3,expires_at=$4 WHERE id=$1 AND status<>'DELETED'`, id, size, sha, expiresAt)
 	if err != nil {
 		return err
 	}

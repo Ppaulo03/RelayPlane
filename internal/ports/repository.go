@@ -60,7 +60,9 @@ type InstanceRepository interface {
 	// transition and rejects a stale epoch (ErrStaleAssignment).
 	SetObserved(ctx context.Context, id string, epoch int64, state instance.ObservedState, at time.Time) (changed bool, err error)
 	SetProviderInstance(ctx context.Context, id string, epoch int64, providerInstanceID string) error
-	TouchHeartbeat(ctx context.Context, id string, at time.Time) error
+	// TouchHeartbeat records a provider heartbeat for the given assignment epoch;
+	// a heartbeat from an older assignment is rejected (ErrStaleAssignment).
+	TouchHeartbeat(ctx context.Context, id string, epoch int64, at time.Time) error
 	MarkReconciled(ctx context.Context, id string, at time.Time) error
 
 	Reassign(ctx context.Context, req ReassignRequest) (ownership.Assignment, error)
@@ -156,7 +158,8 @@ type BlobMetadataRepository interface {
 	Create(ctx context.Context, b media.Blob) error
 	Get(ctx context.Context, id string) (*media.Blob, error)
 	GetByKey(ctx context.Context, key string) (*media.Blob, error)
-	MarkReady(ctx context.Context, id string, size int64, sha256 string) error
+	// MarkReady flips PENDING -> READY and extends the retention to expiresAt.
+	MarkReady(ctx context.Context, id string, size int64, sha256 string, expiresAt time.Time) error
 	MarkDeleted(ctx context.Context, id string, at time.Time) error
 	// ListExpired returns non-deleted blobs whose expires_at is before `now`.
 	ListExpired(ctx context.Context, now time.Time, limit int) ([]media.Blob, error)

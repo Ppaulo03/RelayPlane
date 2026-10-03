@@ -8,6 +8,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -561,5 +564,194 @@ func TestRateLimit_PolicyHierarchyInWorker(t *testing.T) {
 	e.StartWorkers(1)
 	for _, id := range ids {
 		e.WaitMessage(id, messaging.StatusAccepted)
+	}
+}
+
+// ---- review hardening: durability before ACK ----
+
+// failTransitions makes message transitions to the given statuses fail while on() is true.
+func failTransitions(e *Env, on *atomic.Bool, to ...messaging.Status) {
+	e.Store.BeforeCommit = func(op string) error {
+		for _, s := range to {
+			if op == "message_transition:"+string(s) && on.Load() {
+				return errors.New("simulated database outage")
+			}
+		}
+		return nil
+	}
+}
+
+func TestDurability_AmbiguousOutcomeNotPersistedMeansNoAck(t *testing.T) {
+	e := NewEnv(t)
+	if e.Store == nil {
+		t.Skip("fault injection needs the in-memory store")
+	}
+	inst := e.CreateInstance(e.Tenant, "a", true)
+	var outage atomic.Bool
+	outage.Store(true)
+	failTransitions(e, &outage, messaging.StatusUnknown)
+	e.Provider.FailNext(memory.FailAmbiguous)
+	r, _, _ := e.SendText(e.Tenant, inst.ID, "maybe", "")
+	e.StartWorkers(1)
+	time.Sleep(300 * time.Millisecond)
+	if d, _ := e.Queue.Depth(bg); d != 1 {
+		t.Fatalf("the command was ACKed although UNKNOWN could not be stored (depth %d)", d)
+	}
+	if m, _ := e.Repos.Messages.Get(bg, r.MessageID); m.Status != messaging.StatusDispatching {
+		t.Fatalf("status %s", m.Status)
+	}
+	outage.Store(false) // database recovers
+	m := e.WaitMessage(r.MessageID, messaging.StatusUnknown)
+	if len(e.Provider.Sent()) != 0 {
+		t.Fatal("recovery must never resend")
+	}
+	Eventually(t, 5*time.Second, "ack after durable UNKNOWN", func() bool { d, _ := e.Queue.Depth(bg); return d == 0 })
+	_ = m
+}
+
+func TestDurability_TerminalFailureNotPersistedMeansNoAck(t *testing.T) {
+	e := NewEnv(t)
+	if e.Store == nil {
+		t.Skip("fault injection needs the in-memory store")
+	}
+	inst := e.CreateInstance(e.Tenant, "a", true)
+	var outage atomic.Bool
+	outage.Store(true)
+	failTransitions(e, &outage, messaging.StatusFailed)
+	e.Provider.FailNext(memory.FailAuth) // non-retryable provider failure
+	r, _, _ := e.SendText(e.Tenant, inst.ID, "x", "")
+	e.StartWorkers(1)
+	time.Sleep(300 * time.Millisecond)
+	if d, _ := e.Queue.Depth(bg); d != 1 {
+		t.Fatalf("FAILED could not be stored but the command was ACKed (depth %d)", d)
+	}
+	outage.Store(false)
+	m := e.WaitMessage(r.MessageID, messaging.StatusFailed)
+	if m.ErrorCode != "PROVIDER_AUTH_FAILED" {
+		t.Errorf("code %s", m.ErrorCode)
+	}
+	Eventually(t, 5*time.Second, "ack", func() bool { d, _ := e.Queue.Depth(bg); return d == 0 })
+}
+
+func TestDurability_AcceptedNotRecordedNeverResends(t *testing.T) {
+	e := NewEnv(t)
+	if e.Store == nil {
+		t.Skip("fault injection needs the in-memory store")
+	}
+	inst := e.CreateInstance(e.Tenant, "a", true)
+	var outage atomic.Bool
+	outage.Store(true)
+	failTransitions(e, &outage, messaging.StatusAccepted)
+	r, _, _ := e.SendText(e.Tenant, inst.ID, "sent once", "")
+	e.StartWorkers(1)
+	Eventually(t, 5*time.Second, "provider received it", func() bool { return len(e.Provider.Sent()) == 1 })
+	time.Sleep(200 * time.Millisecond)
+	outage.Store(false)
+	e.WaitMessage(r.MessageID, messaging.StatusUnknown)
+	if n := len(e.Provider.Sent()); n != 1 {
+		t.Fatalf("sent %d times", n)
+	}
+}
+
+// Lease loss: the first worker is still inside the provider call when another
+// worker receives the same command.
+func TestDurability_LeaseLossDuringProviderCallNeverDuplicates(t *testing.T) {
+	e := NewEnv(t)
+	inst := e.CreateInstance(e.Tenant, "a", true)
+	r, _, _ := e.SendText(e.Tenant, inst.ID, "once", "")
+	m, _ := e.Repos.Messages.Get(bg, r.MessageID)
+	env := messaging.Envelope{MessageID: m.ID, TenantID: m.TenantID, InstanceID: m.InstanceID, PartitionKey: m.InstanceID,
+		Assignment: inst.Assignment(), Type: messaging.TypeText, To: m.Recipient, Payload: messaging.Payload{Text: "once"}}
+	cmd := ports.Command{ID: m.ID, PartitionKey: m.InstanceID, Payload: env, Attempt: 1}
+
+	inCall, release := make(chan struct{}), make(chan struct{})
+	e.Provider.OnSend = func(ownership.Assignment, messaging.OutboundMessage) { close(inCall); <-release }
+	done := make(chan ports.Result, 1)
+	go func() { res, _ := e.Worker.Handle(bg, cmd); done <- res }()
+	<-inCall
+	// another worker receives the redelivered command while the first is mid-call
+	res2, err := e.Worker.Handle(bg, cmd)
+	if err != nil || res2.Disposition != ports.Ack {
+		t.Fatalf("second worker: %+v %v", res2, err)
+	}
+	close(release)
+	<-done
+	if n := len(e.Provider.Sent()); n != 1 {
+		t.Fatalf("blind duplicate: sent %d times", n)
+	}
+	if got, _ := e.Repos.Messages.Get(bg, r.MessageID); got.Status != messaging.StatusUnknown {
+		t.Fatalf("an interrupted/contested dispatch must be UNKNOWN, is %s", got.Status)
+	}
+}
+
+// Provider reports the send failed after accepting it.
+func TestProjector_ProviderFailedReceipt(t *testing.T) {
+	e := NewEnv(t)
+	e.StartProjector()
+	e.StartWorkers(1)
+	inst := e.CreateInstance(e.Tenant, "a", true)
+	r, _, _ := e.SendText(e.Tenant, inst.ID, "hi", "")
+	m := e.WaitMessage(r.MessageID, messaging.StatusAccepted)
+	if _, err := e.App.Inbound.Handle(bg, ProviderKey, inboundBody(inst.NodeID, inst.AssignmentEpoch, statusEv(inst.ID, m.ProviderMessageID, "failed"))); err != nil {
+		t.Fatal(err)
+	}
+	got := e.WaitMessage(r.MessageID, messaging.StatusFailed)
+	if got.ErrorCode != "PROVIDER_FAILED" {
+		t.Errorf("code %q", got.ErrorCode)
+	}
+}
+
+// ---- review hardening: media + migration ----
+
+func TestMedia_PendingUploadsHaveShortRetentionAndNoDirectUploadURL(t *testing.T) {
+	e := NewEnv(t)
+	data := []byte("abc")
+	sum := sha256.Sum256(data)
+	start := time.Now()
+	tk, err := e.App.Media.CreateUpload(bg, e.Tenant, app.UploadRequest{ContentType: "application/pdf", Size: 3, SHA256: hex.EncodeToString(sum[:]), Filename: "a.pdf"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := json.Marshal(tk)
+	if strings.Contains(string(raw), "upload_url") {
+		t.Fatalf("a presigned PUT would let a client store more than it declared: %s", raw)
+	}
+	if tk.ExpiresAt.After(start.Add(time.Hour)) {
+		t.Fatalf("a pending upload must expire quickly, expires %v", tk.ExpiresAt)
+	}
+	b, err := e.App.Media.Upload(bg, e.Tenant, tk.MediaID, bytes.NewReader(data))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if b.ExpiresAt.Before(start.Add(23 * time.Hour)) {
+		t.Fatalf("a READY blob must be retained for MediaTTL, expires %v", b.ExpiresAt)
+	}
+	// a body larger than declared is cut off and rejected
+	tk2, _ := e.App.Media.CreateUpload(bg, e.Tenant, app.UploadRequest{ContentType: "application/pdf", Size: 3, SHA256: hex.EncodeToString(sum[:]), Filename: "b.pdf"})
+	if _, err := e.App.Media.Upload(bg, e.Tenant, tk2.MediaID, io.MultiReader(bytes.NewReader(data), bytes.NewReader(bytes.Repeat([]byte("x"), 1<<20)))); !errors.Is(err, errs.ErrInvalidArgument) {
+		t.Fatalf("oversized body: %v", err)
+	}
+}
+
+// AlreadyExists on the target must be verified with the provider before adoption.
+func TestMigration_AdoptsExistingTargetSessionOnlyAfterVerifying(t *testing.T) {
+	e := NewEnv(t)
+	inst := e.CreateInstance(e.Tenant, "a", true)
+	other := "node-02"
+	if inst.NodeID == other {
+		other = "node-01"
+	}
+	// a previous attempt had already created the session on the target (epoch 2)
+	if _, err := e.Provider.CreateInstance(bg, ports.CreateInstanceRequest{Assignment: ownership.Assignment{InstanceID: inst.ID, NodeID: other, Epoch: 2}}); err != nil {
+		t.Fatal(err)
+	}
+	res, _, err := e.App.Migrations.Start(bg, e.Tenant, inst.ID, app.MigrateInput{TargetNodeID: other}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitMigration(t, e, res.OperationID, instance.OpSucceeded, instance.OpRunning)
+	cur, _ := e.Repos.Instances.Get(bg, inst.ID)
+	if cur.AssignmentEpoch != 2 || cur.NodeID != other || cur.ProviderInstanceID == "" {
+		t.Fatalf("adoption: %+v", cur)
 	}
 }

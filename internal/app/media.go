@@ -34,13 +34,15 @@ type UploadRequest struct {
 	Filename    string `json:"filename"`
 }
 
-// UploadTicket tells the client where to put the bytes.
+// UploadTicket tells the client where to put the bytes. Uploads always go
+// through the gateway (PUT content_url): it enforces the declared size while
+// streaming, which a presigned PUT cannot do (it would let a client store an
+// arbitrarily large object under a small declaration).
 type UploadTicket struct {
 	MediaID    string    `json:"media_id"`
 	ObjectKey  string    `json:"object_key"`
-	UploadURL  string    `json:"upload_url"`  // signed URL straight to the blob store
-	ContentURL string    `json:"content_url"` // alternative: stream through the gateway
-	ExpiresAt  time.Time `json:"expires_at"`
+	ContentURL string    `json:"content_url"`
+	ExpiresAt  time.Time `json:"expires_at"` // the upload must finish before this
 }
 
 // CreateUpload validates the declaration against the policy and reserves a
@@ -60,16 +62,11 @@ func (s *MediaService) CreateUpload(ctx context.Context, tenantID string, req Up
 	now := s.d.now()
 	b := media.Blob{ID: id, TenantID: tenantID, ObjectKey: media.ObjectKey(tenantID, id, req.Filename),
 		ContentType: req.ContentType, Size: req.Size, SHA256: req.SHA256, Filename: media.SafeFilename(req.Filename),
-		Status: media.BlobPending, ExpiresAt: now.Add(s.d.Cfg.MediaTTL), CreatedAt: now}
+		Status: media.BlobPending, ExpiresAt: now.Add(s.d.Cfg.PendingTTL), CreatedAt: now}
 	if err := s.d.Repos.Blobs.Create(ctx, b); err != nil {
 		return nil, err
 	}
-	url, err := s.d.Blob.SignedURL(ctx, b.ObjectKey, ports.SignedPut, s.d.Cfg.UploadURLTTL)
-	if err != nil {
-		return nil, err
-	}
-	return &UploadTicket{MediaID: id, ObjectKey: b.ObjectKey, UploadURL: url,
-		ContentURL: "/api/v1/media/" + id + "/content", ExpiresAt: b.ExpiresAt}, nil
+	return &UploadTicket{MediaID: id, ObjectKey: b.ObjectKey, ContentURL: "/api/v1/media/" + id + "/content", ExpiresAt: b.ExpiresAt}, nil
 }
 
 func (s *MediaService) load(ctx context.Context, tenantID, id string) (*media.Blob, error) {
@@ -117,49 +114,11 @@ func (s *MediaService) Upload(ctx context.Context, tenantID, id string, body io.
 		_ = s.d.Blob.Delete(ctx, b.ObjectKey)
 		return nil, fmt.Errorf("%w: uploaded content does not match the declared size/sha256", errs.ErrInvalidArgument)
 	}
-	if err := s.d.Repos.Blobs.MarkReady(ctx, b.ID, b.Size, b.SHA256); err != nil {
+	retain := s.d.now().Add(s.d.Cfg.MediaTTL)
+	if err := s.d.Repos.Blobs.MarkReady(ctx, b.ID, b.Size, b.SHA256, retain); err != nil {
 		return nil, err
 	}
-	b.Status = media.BlobReady
-	return b, nil
-}
-
-// Complete verifies an object uploaded directly with the signed URL.
-func (s *MediaService) Complete(ctx context.Context, tenantID, id string) (*media.Blob, error) {
-	b, err := s.load(ctx, tenantID, id)
-	if err != nil {
-		return nil, err
-	}
-	if b.Status == media.BlobReady {
-		return b, nil
-	}
-	info, err := s.d.Blob.Stat(ctx, b.ObjectKey)
-	if err != nil {
-		return nil, fmt.Errorf("%w: object not uploaded yet", errs.ErrConflict)
-	}
-	if info.Size != b.Size {
-		_ = s.d.Blob.Delete(ctx, b.ObjectKey)
-		return nil, fmt.Errorf("%w: uploaded size %d != declared %d", errs.ErrInvalidArgument, info.Size, b.Size)
-	}
-	r, err := s.d.Blob.Get(ctx, b.ObjectKey)
-	if err != nil {
-		return nil, err
-	}
-	defer r.Close()
-	h := sha256.New()
-	n, err := io.Copy(h, r)
-	if err != nil {
-		return nil, err
-	}
-	s.d.Metrics.BlobBytes.WithLabelValues("get").Add(float64(n))
-	if hex.EncodeToString(h.Sum(nil)) != b.SHA256 {
-		_ = s.d.Blob.Delete(ctx, b.ObjectKey)
-		return nil, fmt.Errorf("%w: checksum mismatch", errs.ErrInvalidArgument)
-	}
-	if err := s.d.Repos.Blobs.MarkReady(ctx, b.ID, b.Size, b.SHA256); err != nil {
-		return nil, err
-	}
-	b.Status = media.BlobReady
+	b.Status, b.ExpiresAt = media.BlobReady, retain
 	return b, nil
 }
 

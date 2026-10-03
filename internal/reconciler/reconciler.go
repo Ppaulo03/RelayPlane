@@ -224,11 +224,11 @@ func (r *Reconciler) ReconcileInstance(ctx context.Context, id string) (drifted,
 		obs.Err = qerr
 	default:
 		obs.State = state.State
-		if state.Heartbeat.IsZero() {
-			_ = d.Repos.Instances.TouchHeartbeat(ctx, inst.ID, r.Now())
-		} else {
-			_ = d.Repos.Instances.TouchHeartbeat(ctx, inst.ID, state.Heartbeat)
+		hb := state.Heartbeat
+		if hb.IsZero() {
+			hb = r.Now()
 		}
+		_ = d.Repos.Instances.TouchHeartbeat(ctx, inst.ID, inst.AssignmentEpoch, hb) // epoch-guarded: a stale owner cannot touch the new assignment
 	}
 
 	dec := reconciliation.Decide(reconciliation.Input{Instance: *inst, Observation: obs,

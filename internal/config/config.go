@@ -48,6 +48,7 @@ type Config struct {
 	MediaInlineMaxBytes int
 	MediaMaxBytes       int64
 	MediaTTL            time.Duration
+	MediaPendingTTL     time.Duration // an upload must finish within this window
 
 	AdminAPIKey    string
 	WebhookSecret  string
@@ -55,6 +56,8 @@ type Config struct {
 
 	DefaultProvider string
 	Nodes           []Node
+	// EvolutionAllowedVersions overrides the adapter's tested-version allow-list.
+	EvolutionAllowedVersions []string
 
 	RateMinInterval   time.Duration
 	RateBurst         int
@@ -80,7 +83,7 @@ func Load() (Config, error) {
 		BlobEndpoint: os.Getenv("BLOB_STORE_ENDPOINT"), BlobPublicEndpoint: os.Getenv("BLOB_STORE_PUBLIC_ENDPOINT"),
 		BlobBucket: get("BLOB_STORE_BUCKET", "relayplane-media"), BlobAccessKey: os.Getenv("BLOB_STORE_ACCESS_KEY"), BlobSecretKey: os.Getenv("BLOB_STORE_SECRET_KEY"),
 		BlobUseSSL: getBool("BLOB_STORE_USE_SSL", false), BlobPublicUseSSL: getBool("BLOB_STORE_PUBLIC_USE_SSL", false), BlobLifecycleDays: getInt("BLOB_STORE_LIFECYCLE_DAYS", 7),
-		MediaInlineMaxBytes: getInt("MEDIA_INLINE_MAX_BYTES", 262144), MediaMaxBytes: int64(getInt("MEDIA_MAX_BYTES", 100<<20)), MediaTTL: getDur("MEDIA_DEFAULT_TTL", 24*time.Hour),
+		MediaInlineMaxBytes: getInt("MEDIA_INLINE_MAX_BYTES", 262144), MediaMaxBytes: int64(getInt("MEDIA_MAX_BYTES", 100<<20)), MediaTTL: getDur("MEDIA_DEFAULT_TTL", 24*time.Hour), MediaPendingTTL: getDur("MEDIA_PENDING_TTL", 30*time.Minute),
 		AdminAPIKey: os.Getenv("ADMIN_API_KEY"), WebhookSecret: os.Getenv("WEBHOOK_SECRET"), WebhookBaseURL: os.Getenv("WEBHOOK_BASE_URL"),
 		DefaultProvider: get("DEFAULT_PROVIDER", "evolution-v2"),
 		RateMinInterval: getDur("RATE_MIN_INTERVAL", time.Second), RateBurst: getInt("RATE_BURST", 1), RateMaxPerMinute: getInt("RATE_MAX_PER_MINUTE", 30),
@@ -99,11 +102,21 @@ func Load() (Config, error) {
 			return c, fmt.Errorf("PROVIDER_NODES: %w", err)
 		}
 	}
+	for i := range c.Nodes {
+		if c.Nodes[i].Provider == "" {
+			c.Nodes[i].Provider = c.DefaultProvider
+		}
+	}
+	if v := os.Getenv("EVOLUTION_ALLOWED_VERSIONS"); v != "" {
+		c.EvolutionAllowedVersions = strings.Split(v, ",")
+	}
 	return c, nil
 }
 
-// Validate checks the settings a given role needs.
-func (c Config) Validate(needNodes bool) error {
+// Validate checks the settings every role needs. All roles resolve provider
+// nodes (gateway/reconciler to create and probe, workers to send), so a process
+// that could never reach a provider must not start "healthy".
+func (c Config) Validate() error {
 	var missing []string
 	need := func(name, v string) {
 		if v == "" {
@@ -121,17 +134,18 @@ func (c Config) Validate(needNodes bool) error {
 	if c.Env == "production" && len(c.WebhookSecret) < 16 {
 		return fmt.Errorf("WEBHOOK_SECRET must have at least 16 characters in production")
 	}
-	if needNodes {
-		for _, n := range c.Nodes {
-			if n.ID == "" || n.Endpoint == "" || n.Capacity <= 0 {
-				return fmt.Errorf("PROVIDER_NODES entry %+v needs id, endpoint and capacity > 0", redacted(n))
-			}
-		}
+	if len(c.Nodes) == 0 {
+		return fmt.Errorf("PROVIDER_NODES must list at least one provider node")
 	}
+	seen := map[string]bool{}
 	for _, n := range c.Nodes {
-		if strings.EqualFold(n.APIKey, "latest") {
-			return fmt.Errorf("node %s: invalid api key", n.ID)
+		switch {
+		case n.ID == "", n.Endpoint == "", n.Provider == "", n.APIKey == "", n.Capacity <= 0:
+			return fmt.Errorf("PROVIDER_NODES entry %+v needs id, provider, endpoint, api_key and capacity > 0", redacted(n))
+		case seen[n.ID]:
+			return fmt.Errorf("PROVIDER_NODES: duplicate node id %q (nodes are singletons with unique identities)", n.ID)
 		}
+		seen[n.ID] = true
 	}
 	return nil
 }

@@ -73,8 +73,10 @@ func (p *Projector) messageStatus(ctx context.Context, ev events.Event) error {
 		to = messaging.StatusDelivered
 	case "read":
 		to = messaging.StatusRead
+	case "failed":
+		to = messaging.StatusFailed // ACCEPTED/UNKNOWN -> FAILED when the provider reports the send failed
 	default:
-		return nil // "sent" is already ACCEPTED; failures are reported by the dispatch path
+		return nil // "sent" is already ACCEPTED
 	}
 	applied, err := p.Repos.Messages.ApplyProviderStatus(ctx, ev.InstanceID, pl.ProviderMessageID, to)
 	if errors.Is(err, errs.ErrNotFound) {

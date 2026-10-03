@@ -353,8 +353,14 @@ func (r instanceRepo) SetProviderInstance(ctx context.Context, id string, epoch 
 	return nil
 }
 
-func (r instanceRepo) TouchHeartbeat(ctx context.Context, id string, at time.Time) error {
-	_, err := r.s.pool.Exec(ctx, `UPDATE instances SET last_provider_heartbeat=$2 WHERE id=$1`, id, at)
+func (r instanceRepo) TouchHeartbeat(ctx context.Context, id string, epoch int64, at time.Time) error {
+	tag, err := r.s.pool.Exec(ctx, `UPDATE instances SET last_provider_heartbeat=$3 WHERE id=$1 AND assignment_epoch=$2`, id, epoch, at)
+	if err == nil && tag.RowsAffected() == 0 {
+		if _, gerr := r.Get(ctx, id); gerr != nil {
+			return gerr
+		}
+		return errs.ErrStaleAssignment
+	}
 	return err
 }
 
@@ -452,7 +458,7 @@ func (r instanceRepo) Reassign(ctx context.Context, req ports.ReassignRequest) (
 		if _, err := tx.Exec(ctx, `INSERT INTO instance_assignments(instance_id,node_id,epoch) VALUES($1,$2,$3)`, req.InstanceID, req.NewNodeID, newEpoch); err != nil {
 			return err
 		}
-		if _, err := tx.Exec(ctx, `UPDATE operations SET step=$2, updated_at=now() WHERE id=$1`, req.OperationID, string(ownership.StepAssignNewEpoch)); err != nil {
+		if _, err := tx.Exec(ctx, `UPDATE operations SET step=$2, step_started_at=now(), updated_at=now() WHERE id=$1`, req.OperationID, string(ownership.StepAssignNewEpoch)); err != nil {
 			return err
 		}
 		out = ownership.Assignment{InstanceID: req.InstanceID, NodeID: req.NewNodeID, Epoch: newEpoch}

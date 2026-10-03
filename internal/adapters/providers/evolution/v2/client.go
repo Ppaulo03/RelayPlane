@@ -57,6 +57,8 @@ type Config struct {
 	WebhookSecret  string // derives the per-node webhook token
 	HTTPClient     *http.Client
 	Timeout        time.Duration // per request, default 20s
+	// AllowedVersions overrides TestedVersions (exact Evolution versions accepted by ProbeNode).
+	AllowedVersions []string
 }
 
 type client struct {
@@ -208,11 +210,14 @@ func translateStatus(status int, body []byte, kind opKind) error {
 		return wrap(errs.ErrInvalidRecipient)
 	case status == http.StatusBadRequest && (strings.Contains(msg, "not connected") || strings.Contains(msg, "connection closed") || strings.Contains(msg, "closed")):
 		return wrap(errs.ErrProviderUnavailable) // socket down: the node did not send anything
-	case status == http.StatusTooManyRequests, status == http.StatusBadGateway, status == http.StatusServiceUnavailable, status == http.StatusGatewayTimeout:
-		return wrap(errs.ErrProviderUnavailable)
+	case status == http.StatusTooManyRequests:
+		return wrap(errs.ErrProviderUnavailable) // throttled before the node accepted the request
 	case status >= 500:
+		// A gateway/proxy error (502/503/504) can be returned *after* the node
+		// executed the send and the response was lost: a send is ambiguous, never
+		// blindly retried. Management calls are idempotent, so they stay retryable.
 		if kind == opSend {
-			return wrap(errs.ErrAmbiguousDispatch) // the node may have already sent it
+			return wrap(errs.ErrAmbiguousDispatch)
 		}
 		return wrap(errs.ErrProviderUnavailable)
 	}

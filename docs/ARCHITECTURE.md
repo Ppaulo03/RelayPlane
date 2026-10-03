@@ -110,15 +110,18 @@ após o claim) vira `UNKNOWN` — nunca reenvia às cegas.
 * Dedupe inbound: chave `instance|event_type|provider_message_id|state` (sent/delivered/read **não** colapsam);
   protocolo em duas fases `Begin → publish → Commit` (falha de publish ⇒ `Abort` e o provider reenvia); `event_id`
   determinístico permite dedupe a jusante. Estado de conexão usa o timestamp do evento como id (CONNECTED pode ocorrer de novo).
-* Rate limit (`core/messaging.RatePolicy`): `MinInterval, Burst, MaxPerMinute, MaxConcurrent, Cooldown`, hierarquia
-  `global < tenant < instance` com *merge* campo a campo (`ResolvePolicy`). Nenhum valor fixo no código; o worker devolve
-  `Defer(wait)` em vez de dormir. Estado local ao worker (limitação documentada no ROADMAP).
+* Rate limit (`core/messaging.RatePolicy`): `MinInterval, Burst, MaxPerMinute, MaxConcurrent, Cooldown`. A hierarquia
+  `global < tenant < instance` é de **herança de política** (*merge* campo a campo em `ResolvePolicy`): o valor mais específico
+  vence e cada instância é limitada **individualmente**. Isto **não** é uma cota agregada: "tenant X ≤ 100 msg/min somando todas as
+  instâncias" exigiria limiters global/tenant em backend distribuído (ROADMAP). Nenhum valor fixo no código; o worker devolve
+  `Defer(wait)` em vez de dormir. Estado local ao worker.
 
 ## 9. Mídia (Claim-Check) e blobs
 
-Cliente → `POST /media/uploads` (reserva `<tenant>/media/<id>/<arquivo>`, valida tipo/tamanho/sha256) → `PUT …/content`
-(stream através do gateway, sem bufferizar, com verificação de tamanho+SHA-256) **ou** upload direto por URL assinada +
-`POST …/complete` → `send` referencia `media_id`. O envelope no broker carrega só `{object_key, content_type, size, sha256, expires_at}`.
+Cliente → `POST /media/uploads` (reserva `<tenant>/media/<id>/<arquivo>`, valida tipo/tamanho/sha256; a reserva `PENDING` expira em
+`MEDIA_PENDING_TTL`, 30 min) → `PUT …/content` (stream através do gateway, sem bufferizar; o tamanho **declarado é imposto durante o
+stream** e o SHA-256 é verificado; `READY` passa a reter por `MEDIA_DEFAULT_TTL`) → `send` referencia `media_id`. Não há PUT
+assinado direto ao bucket: ele não consegue limitar o tamanho efetivo (declarar 1 MB e enviar 10 GB). O envelope no broker carrega só `{object_key, content_type, size, sha256, expires_at}`.
 Defesas: a API usa JSON estrito (campos desconhecidos, p.ex. `base64`, são rejeitados); `app.MessageService` e o adapter
 da fila aplicam o limite inline (`MEDIA_INLINE_MAX_BYTES`) — INV-11; objetos têm TTL (`blob_metadata.expires_at`),
 cleanup remove expirados e **órfãos**, e a lifecycle do bucket é rede de segurança; `CHECK` no banco impede chave fora

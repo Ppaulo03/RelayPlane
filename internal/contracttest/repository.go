@@ -409,6 +409,15 @@ func stateGuardContract(t *testing.T, f RepoFactory) {
 	if err := fx.r.Instances.UpdateDesired(ctx, "inst_1", instance.DesiredDeleted); err != nil {
 		t.Fatal(err)
 	}
+	if err := fx.r.Instances.TouchHeartbeat(ctx, "inst_1", 7, now); !errors.Is(err, errs.ErrStaleAssignment) {
+		t.Errorf("heartbeat from another epoch must be rejected: %v", err)
+	}
+	if i0, _ := fx.r.Instances.Get(ctx, "inst_1"); !i0.LastProviderHeartbeat.IsZero() {
+		t.Error("a stale heartbeat modified the instance")
+	}
+	if err := fx.r.Instances.TouchHeartbeat(ctx, "inst_1", 1, now); err != nil {
+		t.Errorf("current-epoch heartbeat: %v", err)
+	}
 	if err := fx.r.Instances.MarkReconciled(ctx, "inst_1", now); err != nil {
 		t.Fatal(err)
 	}
@@ -478,8 +487,23 @@ func operationsContract(t *testing.T, f RepoFactory) {
 	if wins.Load() != 1 {
 		t.Errorf("concurrent Advance must have exactly one winner, got %d", wins.Load())
 	}
+	stepStart := func() time.Time { o, _ := fx.r.Operations.Get(ctx, "op_1"); return o.StepStartedAt }
+	before := stepStart()
+	if before.IsZero() {
+		t.Error("step_started_at must be set")
+	}
+	time.Sleep(20 * time.Millisecond)
+	if _, err := fx.r.Operations.Advance(ctx, "op_1", string(ownership.StepFencingOldOwner), string(ownership.StepFencingOldOwner), instance.OpRunning, ports.OperationPatch{BumpAttempts: true}); err != nil {
+		t.Fatal(err)
+	}
+	if !stepStart().Equal(before) {
+		t.Error("re-recording the same step must not restart its clock")
+	}
 	if _, err := fx.r.Operations.Advance(ctx, "op_1", string(ownership.StepFencingOldOwner), string(ownership.StepBlocked), instance.OpBlocked, ports.OperationPatch{ErrorCode: "FENCE_FAILED", ErrorMessage: "boom"}); err != nil {
 		t.Fatal(err)
+	}
+	if !stepStart().After(before) {
+		t.Error("a new step must restart the step clock")
 	}
 	got, _ := fx.r.Operations.Get(ctx, "op_1")
 	if got.Status != instance.OpBlocked || got.ErrorCode != "FENCE_FAILED" || got.TargetNodeID != "node-02" {
@@ -554,6 +578,32 @@ func messagesContract(t *testing.T, f RepoFactory) {
 	final, _ := fx.r.Messages.Get(ctx, "msg_1")
 	if final.Status != messaging.StatusRead || final.ProviderMessageID != "pm-1" || final.AttemptCount != 2 {
 		t.Errorf("%+v", final)
+	}
+	if applied, _ := fx.r.Messages.ApplyProviderStatus(ctx, "inst_1", "pm-1", messaging.StatusFailed); applied {
+		t.Error("a READ message can no longer fail")
+	}
+	// provider-reported failure: ACCEPTED -> FAILED
+	m2 := m
+	m2.ID = "msg_2"
+	if err := fx.r.Messages.Create(ctx, m2); err != nil {
+		t.Fatal(err)
+	}
+	_, _ = fx.r.Messages.Transition(ctx, "msg_2", []messaging.Status{messaging.StatusQueued}, messaging.StatusDispatching, ports.MessagePatch{})
+	_, _ = fx.r.Messages.Transition(ctx, "msg_2", []messaging.Status{messaging.StatusDispatching}, messaging.StatusAccepted, ports.MessagePatch{ProviderMessageID: "pm-2"})
+	if applied, err := fx.r.Messages.ApplyProviderStatus(ctx, "inst_1", "pm-2", messaging.StatusFailed); err != nil || !applied {
+		t.Fatalf("ACCEPTED -> FAILED: %v %v", applied, err)
+	}
+	if f, _ := fx.r.Messages.Get(ctx, "msg_2"); f.Status != messaging.StatusFailed || f.ErrorCode != "PROVIDER_FAILED" {
+		t.Errorf("%+v", f)
+	}
+	// UNKNOWN -> FAILED too (an ambiguous send later reported as failed)
+	m3 := m
+	m3.ID = "msg_3"
+	_ = fx.r.Messages.Create(ctx, m3)
+	_, _ = fx.r.Messages.Transition(ctx, "msg_3", []messaging.Status{messaging.StatusQueued}, messaging.StatusDispatching, ports.MessagePatch{})
+	_, _ = fx.r.Messages.Transition(ctx, "msg_3", []messaging.Status{messaging.StatusDispatching}, messaging.StatusUnknown, ports.MessagePatch{ProviderMessageID: "pm-3"})
+	if applied, _ := fx.r.Messages.ApplyProviderStatus(ctx, "inst_1", "pm-3", messaging.StatusFailed); !applied {
+		t.Error("UNKNOWN -> FAILED must be applied")
 	}
 }
 
@@ -692,14 +742,20 @@ func blobMetaContract(t *testing.T, f RepoFactory) {
 	if err := fx.r.Blobs.Create(ctx, b); !errors.Is(err, errs.ErrAlreadyExists) {
 		t.Errorf("dup: %v", err)
 	}
-	if err := fx.r.Blobs.MarkReady(ctx, "med_1", 10, "ab"); err != nil {
+	if err := fx.r.Blobs.MarkReady(ctx, "med_1", 10, "ab", now.Add(time.Hour)); err != nil {
 		t.Fatal(err)
 	}
 	got, _ := fx.r.Blobs.GetByKey(ctx, b.ObjectKey)
 	if got.Status != media.BlobReady || got.Size != 10 || got.SHA256 != "ab" {
 		t.Errorf("%+v", got)
 	}
-	exp, _ := fx.r.Blobs.ListExpired(ctx, now, 10)
+	if got.ExpiresAt.Before(now) {
+		t.Errorf("MarkReady must extend the retention: %v", got.ExpiresAt)
+	}
+	if exp, _ := fx.r.Blobs.ListExpired(ctx, now, 10); len(exp) != 0 {
+		t.Errorf("a READY blob inside its retention is not expired: %d", len(exp))
+	}
+	exp, _ := fx.r.Blobs.ListExpired(ctx, now.Add(2*time.Hour), 10)
 	if len(exp) != 1 {
 		t.Errorf("expired: %d", len(exp))
 	}
@@ -709,7 +765,7 @@ func blobMetaContract(t *testing.T, f RepoFactory) {
 	if exp, _ := fx.r.Blobs.ListExpired(ctx, now, 10); len(exp) != 0 {
 		t.Errorf("deleted blobs are not expired candidates: %d", len(exp))
 	}
-	if err := fx.r.Blobs.MarkReady(ctx, "med_1", 1, "x"); !errors.Is(err, errs.ErrConflict) {
+	if err := fx.r.Blobs.MarkReady(ctx, "med_1", 1, "x", now); !errors.Is(err, errs.ErrConflict) {
 		t.Errorf("deleted blob cannot become ready: %v", err)
 	}
 }

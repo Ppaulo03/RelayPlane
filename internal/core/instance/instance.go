@@ -200,5 +200,7 @@ type Operation struct {
 	Attempts     int
 	CreatedAt    time.Time
 	UpdatedAt    time.Time
-	CompletedAt  *time.Time
+	// StepStartedAt is when the current Step began (phase timeouts use it).
+	StepStartedAt time.Time
+	CompletedAt   *time.Time
 }

@@ -343,14 +343,18 @@ func (r instanceRepo) SetProviderInstance(_ context.Context, id string, epoch in
 	return nil
 }
 
-func (r instanceRepo) TouchHeartbeat(_ context.Context, id string, at time.Time) error {
+func (r instanceRepo) TouchHeartbeat(_ context.Context, id string, epoch int64, at time.Time) error {
 	r.s.mu.Lock()
 	defer r.s.mu.Unlock()
-	if i, ok := r.s.instances[id]; ok {
-		i.LastProviderHeartbeat = at
-		return nil
+	i, ok := r.s.instances[id]
+	if !ok {
+		return errs.ErrNotFound
 	}
-	return errs.ErrNotFound
+	if i.AssignmentEpoch != epoch {
+		return errs.ErrStaleAssignment
+	}
+	i.LastProviderHeartbeat = at
+	return nil
 }
 
 func (r instanceRepo) MarkReconciled(_ context.Context, id string, at time.Time) error {
@@ -411,7 +415,7 @@ func (r instanceRepo) Reassign(_ context.Context, req ports.ReassignRequest) (ow
 	i.NodeID, i.AssignmentEpoch, i.UpdatedAt = req.NewNodeID, ownership.NextEpoch(i.AssignmentEpoch), now
 	r.s.assignments[i.ID] = append(r.s.assignments[i.ID], ownership.AssignmentRecord{
 		InstanceID: i.ID, NodeID: i.NodeID, Epoch: i.AssignmentEpoch, AssignedAt: now})
-	op.Step, op.UpdatedAt = string(ownership.StepAssignNewEpoch), now
+	op.Step, op.UpdatedAt, op.StepStartedAt = string(ownership.StepAssignNewEpoch), now, now
 	return i.Assignment(), nil
 }
 
@@ -500,7 +504,7 @@ func (r opRepo) Create(_ context.Context, op instance.Operation) error {
 	if op.CreatedAt.IsZero() {
 		op.CreatedAt = now
 	}
-	op.UpdatedAt = now
+	op.UpdatedAt, op.StepStartedAt = now, now
 	r.s.operations[op.ID] = &op
 	return nil
 }
@@ -529,6 +533,9 @@ func (r opRepo) Advance(_ context.Context, id, from, to string, st instance.Oper
 	if o.Type == instance.OpMigrate && from != to &&
 		!ownership.CanMigrate(ownership.MigrationStep(from), ownership.MigrationStep(to)) {
 		return nil, fmt.Errorf("%w: migration %s -> %s", errs.ErrInvalidTransition, from, to)
+	}
+	if from != to {
+		o.StepStartedAt = r.s.Now()
 	}
 	o.Step, o.Status, o.UpdatedAt = to, st, r.s.Now()
 	if p.ErrorCode != "" || st != instance.OpBlocked {
@@ -621,6 +628,9 @@ func (r msgRepo) Transition(_ context.Context, id string, from []messaging.Statu
 	if !ok {
 		return nil, errs.ErrNotFound
 	}
+	if err := r.s.fault("message_transition:" + string(to)); err != nil {
+		return nil, err
+	}
 	allowed := false
 	for _, f := range from {
 		if m.Status == f {
@@ -657,6 +667,14 @@ func (r msgRepo) ApplyProviderStatus(_ context.Context, instanceID, pmid string,
 	for _, m := range r.s.messages {
 		if m.InstanceID != instanceID || m.ProviderMessageID != pmid {
 			continue
+		}
+		if to == messaging.StatusFailed {
+			// the provider reports the send failed: only a not-yet-delivered message can be failed
+			if m.Status != messaging.StatusAccepted && m.Status != messaging.StatusUnknown {
+				return false, nil
+			}
+			m.Status, m.ErrorCode, m.ErrorMessage, m.UpdatedAt = to, "PROVIDER_FAILED", "provider reported the message as failed", r.s.Now()
+			return true, nil
 		}
 		cur, okc := statusRank[m.Status]
 		nxt, okn := statusRank[to]
@@ -733,7 +751,7 @@ func (r blobRepo) GetByKey(_ context.Context, key string) (*media.Blob, error) {
 	return nil, errs.ErrNotFound
 }
 
-func (r blobRepo) MarkReady(_ context.Context, id string, size int64, sha string) error {
+func (r blobRepo) MarkReady(_ context.Context, id string, size int64, sha string, expiresAt time.Time) error {
 	r.s.mu.Lock()
 	defer r.s.mu.Unlock()
 	b, ok := r.s.blobs[id]
@@ -743,7 +761,7 @@ func (r blobRepo) MarkReady(_ context.Context, id string, size int64, sha string
 	if b.Status == media.BlobDeleted {
 		return errs.ErrConflict
 	}
-	b.Status, b.Size, b.SHA256 = media.BlobReady, size, sha
+	b.Status, b.Size, b.SHA256, b.ExpiresAt = media.BlobReady, size, sha, expiresAt
 	return nil
 }
 

@@ -140,18 +140,11 @@ paths:
     parameters: [{$ref: '#/components/parameters/Id'}]
     put:
       tags: [media]
-      summary: Stream the content through the gateway (size and SHA-256 are verified)
+      summary: Stream the content through the gateway (the declared size is enforced while streaming; SHA-256 is verified)
       requestBody: {required: true, content: {application/octet-stream: {schema: {type: string, format: binary}}}}
       responses:
         '200': {description: READY, content: {application/json: {schema: {$ref: '#/components/schemas/Media'}}}}
         '400': {$ref: '#/components/responses/Error'}
-  /api/v1/media/{id}/complete:
-    parameters: [{$ref: '#/components/parameters/Id'}]
-    post:
-      tags: [media]
-      summary: Verify an object uploaded directly with the signed URL
-      responses:
-        '200': {description: READY, content: {application/json: {schema: {$ref: '#/components/schemas/Media'}}}}
   /api/v1/media/{id}:
     parameters: [{$ref: '#/components/parameters/Id'}]
     get:
@@ -309,7 +302,7 @@ components:
       additionalProperties: false
     UploadTicket:
       type: object
-      properties: {media_id: {type: string}, object_key: {type: string}, upload_url: {type: string}, content_url: {type: string}, expires_at: {type: string, format: date-time}}
+      properties: {media_id: {type: string}, object_key: {type: string}, content_url: {type: string}, expires_at: {type: string, format: date-time, description: the upload must finish before this}}
     Media:
       type: object
       properties: {id: {type: string}, status: {type: string, enum: [PENDING, READY, DELETED]}, content_type: {type: string}, size: {type: integer}, sha256: {type: string}, filename: {type: string}, expires_at: {type: string, format: date-time}}

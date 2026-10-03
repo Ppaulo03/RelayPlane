@@ -109,7 +109,6 @@ func (s *Server) Handler() nethttp.Handler {
 
 	mux.HandleFunc("POST /api/v1/media/uploads", tenant(s.createUpload))
 	mux.HandleFunc("PUT /api/v1/media/{id}/content", tenant(s.uploadContent))
-	mux.HandleFunc("POST /api/v1/media/{id}/complete", tenant(s.completeUpload))
 	mux.HandleFunc("GET /api/v1/media/{id}", tenant(s.getMedia))
 	mux.HandleFunc("DELETE /api/v1/media/{id}", tenant(s.deleteMedia))
 

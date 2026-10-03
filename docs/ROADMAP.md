@@ -33,7 +33,7 @@ Legenda: ✅ feito e testado · ⚠️ feito com limitação registrada · ⏭�
    Dependência: um número de teste. Ação: rodar o fluxo completo e ajustar `webhook.go` se algum campo divergir.
 2. **Migração entre nodes Evolution exige novo QR** (sessão local ao node; fencing via `logout`). Dependência: armazenamento de sessão
    compartilhável ou export/import de credenciais suportado pela Evolution.
-3. **Rate limit é local ao worker.** Como uma partição tem um único consumidor, o limite por instância é exato na prática; ao mover a
+3. **Rate limit é herança de política, não cota agregada, e é local ao worker.** Como uma partição tem um único consumidor, o limite por instância é exato na prática; ao mover a
    partição o histórico recomeça. Limites agregados (tenant/global somados entre workers) ⏭️: exige contador distribuído (Redis) —
    a interface `ratelimit.Limiter.Reserve` já comporta a troca.
 4. **Mensagens aceitas antes de uma migração viram `STALE_COMMAND`** (conforme a especificação). Reenvio é responsabilidade do cliente.

@@ -298,15 +298,39 @@ func (p *Provider) ProbeNode(ctx context.Context, nodeID string) (*ports.NodePro
 		return nil, err
 	}
 	probe := &ports.NodeProbe{Version: v.Version, Ready: true}
-	if !Compatible(v.Version) {
+	if !Compatible(v.Version, p.cfg.AllowedVersions...) {
 		probe.Ready = false
-		return probe, fmt.Errorf("%w: evolution %q is not a supported v%s release", errs.ErrProviderRejected, v.Version, SupportedMajor)
+		return probe, fmt.Errorf("%w: evolution %q is not a tested release (allowed: %s)", errs.ErrProviderRejected, v.Version, strings.Join(p.allowed(), ", "))
 	}
 	return probe, nil
 }
 
-// Compatible checks the adapter/Evolution version pairing (compatibility check).
-func Compatible(version string) bool { return strings.HasPrefix(version, SupportedMajor+".") }
+// TestedVersions are the Evolution releases this adapter was validated against.
+// Anything else is refused by ProbeNode instead of being assumed "close enough":
+// minor releases of the Evolution API have changed behaviour before.
+var TestedVersions = []string{"2.3.7", "2.4.0"}
+
+// Compatible checks the adapter/Evolution version pairing against an allow-list
+// (TestedVersions when allowed is empty).
+func Compatible(version string, allowed ...string) bool {
+	if len(allowed) == 0 {
+		allowed = TestedVersions
+	}
+	version = strings.TrimPrefix(strings.TrimSpace(version), "v")
+	for _, a := range allowed {
+		if version == strings.TrimPrefix(a, "v") {
+			return true
+		}
+	}
+	return false
+}
+
+func (p *Provider) allowed() []string {
+	if len(p.cfg.AllowedVersions) > 0 {
+		return p.cfg.AllowedVersions
+	}
+	return TestedVersions
+}
 
 // mediaRef returns the media argument Evolution expects: the short-lived signed
 // URL when available, otherwise the streamed content as base64 *inside this

@@ -315,15 +315,6 @@ func (s *Server) uploadContent(w nethttp.ResponseWriter, r *nethttp.Request, p P
 	writeJSON(w, 200, viewMedia(*b))
 }
 
-func (s *Server) completeUpload(w nethttp.ResponseWriter, r *nethttp.Request, p Principal) {
-	b, err := s.App.Media.Complete(r.Context(), p.TenantID, r.PathValue("id"))
-	if err != nil {
-		writeError(w, r, s.Log, err)
-		return
-	}
-	writeJSON(w, 200, viewMedia(*b))
-}
-
 func (s *Server) getMedia(w nethttp.ResponseWriter, r *nethttp.Request, p Principal) {
 	b, err := s.App.Media.Get(r.Context(), p.TenantID, r.PathValue("id"))
 	if err != nil {

@@ -317,7 +317,11 @@ func (s *MigrationService) startNewOwner(ctx context.Context, op *instance.Opera
 	a := inst.Assignment() // new node, new epoch
 	pi, err := provider.CreateInstance(ctx, ports.CreateInstanceRequest{Assignment: a, TenantID: inst.TenantID, Name: inst.Name})
 	if errors.Is(err, errs.ErrInstanceAlreadyExists) {
-		pi, err = &ports.ProviderInstance{ProviderInstanceID: inst.ID}, nil
+		// adopt only after the provider confirms the session really exists for this assignment
+		var st *ports.InstanceState
+		if st, err = provider.GetInstanceState(ctx, a); err == nil {
+			pi = &ports.ProviderInstance{ProviderInstanceID: inst.ID, State: st.State}
+		}
 	}
 	if err != nil {
 		if errs.Classify(err) == errs.NonRetryable {
@@ -352,7 +356,11 @@ func (s *MigrationService) verify(ctx context.Context, op *instance.Operation, i
 	if err == nil && st.State.Valid() {
 		_, _ = s.d.observe(ctx, *inst, st.State) // e.g. AWAITING_PAIRING: the session needs a re-pair
 	}
-	if s.d.now().Sub(op.CreatedAt) > s.d.Cfg.MigrationVerifyTimeout {
+	started := op.StepStartedAt
+	if started.IsZero() {
+		started = op.CreatedAt
+	}
+	if s.d.now().Sub(started) > s.d.Cfg.MigrationVerifyTimeout { // only the time spent verifying counts
 		// The new owner is active and owned; the reconciler keeps converging it.
 		return s.fail(ctx, op, "VERIFY_TIMEOUT", errors.New("new owner did not reach CONNECTED in time"))
 	}

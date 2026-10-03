@@ -12,6 +12,7 @@ import (
 
 	"github.com/relayplane/relayplane/internal/adapters/providers/evolution/v2"
 	"github.com/relayplane/relayplane/internal/contracttest"
+	"github.com/relayplane/relayplane/internal/core/errs"
 	"github.com/relayplane/relayplane/internal/core/events"
 	"github.com/relayplane/relayplane/internal/core/messaging"
 	"github.com/relayplane/relayplane/internal/core/ownership"
@@ -67,8 +68,8 @@ func (f *fakeEvolution) serve(w http.ResponseWriter, r *http.Request) {
 		k := f.fail[0]
 		f.fail = f.fail[1:]
 		switch k {
-		case contracttest.Unavailable:
-			evoErr(w, 503, "Service Unavailable")
+		case contracttest.Unavailable: // throttled before the node accepted it: provably not executed
+			evoErr(w, 429, "Too Many Requests")
 		case contracttest.AuthFailed:
 			evoErr(w, 401, "Unauthorized")
 		case contracttest.NotFound:
@@ -198,12 +199,18 @@ func TestCompatibilityCheck(t *testing.T) {
 	if err != nil || !probe.Ready || probe.Version != "2.3.7" {
 		t.Fatalf("%+v %v", probe, err)
 	}
-	f.version = "3.0.1"
-	probe, err = p.ProbeNode(t.Context(), "node-01")
-	if err == nil || probe.Ready {
-		t.Fatalf("an unsupported major version must not be READY: %+v %v", probe, err)
+	for _, bad := range []string{"3.0.1", "2.9.0", "2.3.8", "2.4.1", "1.9"} {
+		f.version = bad
+		probe, err = p.ProbeNode(t.Context(), "node-01")
+		if err == nil || probe.Ready {
+			t.Fatalf("untested version %s must not be READY: %+v %v", bad, probe, err)
+		}
 	}
-	if v2.Compatible("1.9") || !v2.Compatible("2.0.0") {
+	f.version = "2.4.0"
+	if probe, err = p.ProbeNode(t.Context(), "node-01"); err != nil || !probe.Ready {
+		t.Fatalf("2.4.0 is on the allow-list: %+v %v", probe, err)
+	}
+	if !v2.Compatible("2.3.7") || v2.Compatible("2.3.6") || !v2.Compatible("2.9.0", "2.9.0") {
 		t.Error("compatibility predicate")
 	}
 }
@@ -339,4 +346,35 @@ func TestWebhookNormalization(t *testing.T) {
 func mediaMsg(url string) messaging.OutboundMessage {
 	return messaging.OutboundMessage{ID: "m", To: "5562999999999", Type: messaging.TypeDocument, Filename: "a.pdf", Caption: "c",
 		Media: &messaging.Attachment{ContentType: "application/pdf", Size: 4, URL: url}}
+}
+
+// A gateway/proxy error on a send may have happened after the node executed it.
+func TestSend5xxIsAmbiguousButManagementCallsStayRetryable(t *testing.T) {
+	for _, status := range []int{500, 502, 503, 504} {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/instance/connectionState/inst_1" {
+				evoErr(w, status, "upstream")
+				return
+			}
+			evoErr(w, status, "upstream")
+		}))
+		p := v2.New(v2.Config{Nodes: v2.StaticNodes{"node-01": {BaseURL: srv.URL, APIKey: apiKey}}})
+		a := ownership.Assignment{InstanceID: "inst_1", NodeID: "node-01", Epoch: 1}
+		_, err := p.SendMessage(t.Context(), a, messaging.OutboundMessage{ID: "m", To: "5562", Type: messaging.TypeText, Text: "x"})
+		if errs.Classify(err) != errs.Ambiguous {
+			t.Errorf("send HTTP %d must be AMBIGUOUS, got %v (%s)", status, err, errs.Classify(err))
+		}
+		_, err = p.GetInstanceState(t.Context(), a)
+		if errs.Classify(err) != errs.Retryable {
+			t.Errorf("state HTTP %d must stay RETRYABLE, got %v", status, err)
+		}
+		srv.Close()
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { evoErr(w, 429, "slow down") }))
+	defer srv.Close()
+	p := v2.New(v2.Config{Nodes: v2.StaticNodes{"node-01": {BaseURL: srv.URL, APIKey: apiKey}}})
+	_, err := p.SendMessage(t.Context(), ownership.Assignment{InstanceID: "i", NodeID: "node-01", Epoch: 1}, messaging.OutboundMessage{ID: "m", To: "5562", Type: messaging.TypeText, Text: "x"})
+	if errs.Classify(err) != errs.Retryable {
+		t.Errorf("429 means not accepted => RETRYABLE, got %v", err)
+	}
 }

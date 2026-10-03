@@ -24,9 +24,9 @@ type Config struct {
 	DefaultProvider string            // e.g. "evolution-v2"
 	ProviderAliases map[string]string // public name -> provider key, e.g. "evolution" -> "evolution-v2"
 
-	MediaPolicy  media.Policy
-	MediaTTL     time.Duration // lifetime of uploaded blobs
-	UploadURLTTL time.Duration
+	MediaPolicy media.Policy
+	MediaTTL    time.Duration // retention of READY blobs
+	PendingTTL  time.Duration // how long a declared-but-not-uploaded blob lives
 
 	DedupTTL      time.Duration
 	DedupInflight time.Duration
@@ -42,7 +42,7 @@ func DefaultConfig() Config {
 		ProviderAliases:        map[string]string{"evolution": "evolution-v2"},
 		MediaPolicy:            media.DefaultPolicy(),
 		MediaTTL:               24 * time.Hour,
-		UploadURLTTL:           15 * time.Minute,
+		PendingTTL:             30 * time.Minute,
 		DedupTTL:               24 * time.Hour,
 		DedupInflight:          30 * time.Second,
 		MigrationVerifyTimeout: 10 * time.Minute,

@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"sync"
 	"time"
 
 	"github.com/relayplane/relayplane/internal/app"
@@ -41,6 +42,17 @@ type Outbound struct {
 	MediaPolicy   media.Policy
 	SignedURLTTL  time.Duration
 	VerifyBlobSum bool // stream-verify the checksum before sending media
+
+	pendingMu      sync.Mutex
+	pendingFailure map[string]pendingFailure // verdicts that could not be persisted yet (process-local)
+}
+
+// pendingFailure is a definitive FAILED verdict whose persistence failed. If this
+// worker sees the redelivery it applies the verdict instead of downgrading the
+// message to UNKNOWN; if the process died, UNKNOWN (safe) is the outcome.
+type pendingFailure struct {
+	code  string
+	cause string
 }
 
 // NewOutbound builds a handler with the documented defaults.
@@ -104,6 +116,13 @@ func (w *Outbound) handle(ctx context.Context, cmd ports.Command, env messaging.
 		return ports.Result{}, err
 	}
 
+	if pf, ok := w.takePending(msg.ID); ok && (msg.Status == messaging.StatusDispatching || msg.Status == messaging.StatusQueued) {
+		if res, stop := w.failFrom(ctx, msg, []messaging.Status{messaging.StatusQueued, messaging.StatusDispatching}, pf.code, errors.New(pf.cause)); stop {
+			return res, nil
+		}
+		return ack(), nil
+	}
+
 	switch msg.Status {
 	case messaging.StatusQueued:
 	case messaging.StatusDispatching:
@@ -111,7 +130,7 @@ func (w *Outbound) handle(ctx context.Context, cmd ports.Command, env messaging.
 		// whether the provider received it. Never resend blindly.
 		if _, err := w.Repos.Messages.Transition(ctx, msg.ID, []messaging.Status{messaging.StatusDispatching}, messaging.StatusUnknown,
 			ports.MessagePatch{ErrorCode: "WORKER_CRASH", ErrorMessage: "dispatch interrupted; outcome unknown"}); err != nil && !errors.Is(err, errs.ErrConflict) {
-			return ports.Result{}, err
+			return w.persistFailed(ctx, err), nil // never ACK before the ambiguous outcome is durable
 		}
 		w.Metrics.OutboundMessages.WithLabelValues(string(messaging.StatusUnknown)).Inc()
 		w.Log.WarnContext(ctx, "redelivery of an interrupted dispatch: marked UNKNOWN, not resent")
@@ -199,9 +218,12 @@ func (w *Outbound) handle(ctx context.Context, cmd ports.Command, env messaging.
 	if err == nil {
 		if _, terr := w.Repos.Messages.Transition(ctx, msg.ID, []messaging.Status{messaging.StatusDispatching}, messaging.StatusAccepted,
 			ports.MessagePatch{ProviderMessageID: sent.ProviderMessageID}); terr != nil {
-			// Sent but not recorded: returning the error redelivers the command,
-			// which then sees DISPATCHING and records UNKNOWN instead of resending.
-			return ports.Result{}, fmt.Errorf("record accepted message: %w", terr)
+			// Sent but not recorded: keep the command pending. A redelivery finds
+			// DISPATCHING and records UNKNOWN instead of resending.
+			if errors.Is(terr, errs.ErrConflict) {
+				return ack(), nil
+			}
+			return w.persistFailed(ctx, fmt.Errorf("record accepted message: %w", terr)), nil
 		}
 		w.Metrics.OutboundMessages.WithLabelValues(string(messaging.StatusAccepted)).Inc()
 		w.Log.InfoContext(ctx, "message accepted by provider", "provider_message_id", sent.ProviderMessageID)
@@ -210,8 +232,10 @@ func (w *Outbound) handle(ctx context.Context, cmd ports.Command, env messaging.
 
 	switch errs.Classify(err) {
 	case errs.Ambiguous:
-		_, _ = w.Repos.Messages.Transition(ctx, msg.ID, []messaging.Status{messaging.StatusDispatching}, messaging.StatusUnknown,
-			ports.MessagePatch{ErrorCode: "AMBIGUOUS_DISPATCH", ErrorMessage: err.Error()})
+		if _, terr := w.Repos.Messages.Transition(ctx, msg.ID, []messaging.Status{messaging.StatusDispatching}, messaging.StatusUnknown,
+			ports.MessagePatch{ErrorCode: "AMBIGUOUS_DISPATCH", ErrorMessage: err.Error()}); terr != nil && !errors.Is(terr, errs.ErrConflict) {
+			return w.persistFailed(ctx, terr), nil // do not ACK: the ambiguous outcome must become durable first
+		}
 		w.Metrics.OutboundMessages.WithLabelValues(string(messaging.StatusUnknown)).Inc()
 		w.Log.WarnContext(ctx, "dispatch outcome ambiguous; not retrying automatically", "error", err)
 		return ack(), nil
@@ -224,12 +248,24 @@ func (w *Outbound) handle(ctx context.Context, cmd ports.Command, env messaging.
 	return w.fail(ctx, msg, failureCode(err), err), nil
 }
 
+// persistFailed is the verdict when a state change that must precede the
+// broker ACK could not be stored (database outage): the command stays pending
+// and is retried without consuming attempts. Never ACK before durability.
+func (w *Outbound) persistFailed(ctx context.Context, err error) ports.Result {
+	w.Log.ErrorContext(ctx, "could not persist message state; leaving the command pending", "error", err)
+	return ports.Result{Disposition: ports.Defer, After: persistRetryDelay, Reason: "persistence unavailable"}
+}
+
+const persistRetryDelay = 2 * time.Second
+
 // retryQueued schedules a retry for a message that is still QUEUED.
 func (w *Outbound) retryQueued(ctx context.Context, cmd ports.Command, msg *messaging.Message, cause error) ports.Result {
 	delay, ok := w.Retry.Next(cmd.Attempt)
 	if !ok {
+		if res, stop := w.failFrom(ctx, msg, []messaging.Status{messaging.StatusQueued}, "RETRIES_EXHAUSTED", cause); stop {
+			return res
+		}
 		w.Metrics.OutboundDLQTotal.Inc()
-		w.failFrom(ctx, msg, []messaging.Status{messaging.StatusQueued}, "RETRIES_EXHAUSTED", cause)
 		return ports.Result{Disposition: ports.DeadLetter, Reason: "retries exhausted: " + cause.Error()}
 	}
 	w.Metrics.OutboundRetryTotal.WithLabelValues(string(errs.Retryable)).Inc()
@@ -241,13 +277,15 @@ func (w *Outbound) retryQueued(ctx context.Context, cmd ports.Command, msg *mess
 func (w *Outbound) retryDispatching(ctx context.Context, cmd ports.Command, msg *messaging.Message, cause error) ports.Result {
 	delay, ok := w.Retry.Next(cmd.Attempt)
 	if !ok {
+		if res, stop := w.failFrom(ctx, msg, []messaging.Status{messaging.StatusDispatching}, "RETRIES_EXHAUSTED", cause); stop {
+			return res
+		}
 		w.Metrics.OutboundDLQTotal.Inc()
-		w.failFrom(ctx, msg, []messaging.Status{messaging.StatusDispatching}, "RETRIES_EXHAUSTED", cause)
 		return ports.Result{Disposition: ports.DeadLetter, Reason: "retries exhausted: " + cause.Error()}
 	}
 	if _, err := w.Repos.Messages.Transition(ctx, msg.ID, []messaging.Status{messaging.StatusDispatching}, messaging.StatusQueued,
-		ports.MessagePatch{ErrorCode: "RETRYING", ErrorMessage: cause.Error()}); err != nil {
-		w.Log.ErrorContext(ctx, "could not release dispatch claim", "error", err)
+		ports.MessagePatch{ErrorCode: "RETRYING", ErrorMessage: cause.Error()}); err != nil && !errors.Is(err, errs.ErrConflict) {
+		return w.persistFailed(ctx, err) // still DISPATCHING: a redelivery would mark it UNKNOWN, so stay pending
 	}
 	w.Metrics.OutboundRetryTotal.WithLabelValues(string(errs.Retryable)).Inc()
 	w.Log.WarnContext(ctx, "retry scheduled", "attempt", cmd.Attempt, "delay", delay.String(), "reason", cause.Error())
@@ -255,18 +293,44 @@ func (w *Outbound) retryDispatching(ctx context.Context, cmd ports.Command, msg 
 }
 
 func (w *Outbound) fail(ctx context.Context, msg *messaging.Message, code string, cause error) ports.Result {
-	w.failFrom(ctx, msg, []messaging.Status{messaging.StatusQueued, messaging.StatusDispatching}, code, cause)
+	if res, stop := w.failFrom(ctx, msg, []messaging.Status{messaging.StatusQueued, messaging.StatusDispatching}, code, cause); stop {
+		return res
+	}
 	return ack()
 }
 
-func (w *Outbound) failFrom(ctx context.Context, msg *messaging.Message, from []messaging.Status, code string, cause error) {
-	if _, err := w.Repos.Messages.Transition(ctx, msg.ID, from, messaging.StatusFailed,
-		ports.MessagePatch{ErrorCode: code, ErrorMessage: cause.Error()}); err != nil {
-		w.Log.ErrorContext(ctx, "could not mark message failed", "error", err)
-		return
+// failFrom stores the terminal FAILED state. stop=true means the state could
+// not be persisted and res (a pending/defer verdict) must be returned instead
+// of acknowledging the command.
+func (w *Outbound) failFrom(ctx context.Context, msg *messaging.Message, from []messaging.Status, code string, cause error) (res ports.Result, stop bool) {
+	_, err := w.Repos.Messages.Transition(ctx, msg.ID, from, messaging.StatusFailed, ports.MessagePatch{ErrorCode: code, ErrorMessage: cause.Error()})
+	switch {
+	case err == nil:
+		w.Metrics.OutboundMessages.WithLabelValues(string(messaging.StatusFailed)).Inc()
+		w.Log.WarnContext(ctx, "message failed", "code", code, "error", cause.Error())
+		return ports.Result{}, false
+	case errors.Is(err, errs.ErrConflict):
+		return ports.Result{}, false // another actor already moved it; nothing left to persist
 	}
-	w.Metrics.OutboundMessages.WithLabelValues(string(messaging.StatusFailed)).Inc()
-	w.Log.WarnContext(ctx, "message failed", "code", code, "error", cause.Error())
+	w.rememberPending(msg.ID, pendingFailure{code: code, cause: cause.Error()})
+	return w.persistFailed(ctx, err), true
+}
+
+func (w *Outbound) rememberPending(id string, pf pendingFailure) {
+	w.pendingMu.Lock()
+	defer w.pendingMu.Unlock()
+	if w.pendingFailure == nil {
+		w.pendingFailure = map[string]pendingFailure{}
+	}
+	w.pendingFailure[id] = pf
+}
+
+func (w *Outbound) takePending(id string) (pendingFailure, bool) {
+	w.pendingMu.Lock()
+	defer w.pendingMu.Unlock()
+	pf, ok := w.pendingFailure[id]
+	delete(w.pendingFailure, id)
+	return pf, ok
 }
 
 func failureCode(err error) string {
