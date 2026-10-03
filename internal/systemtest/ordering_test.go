@@ -102,8 +102,8 @@ func TestOutbox_LostCommandIsRepublishedAndLaterMessagesWait(t *testing.T) {
 		t.Error("the barrier deferral must be visible in metrics")
 	}
 	// (with after=0 B counts as "stuck" too: its duplicate is parked behind the barrier, harmlessly)
-	if n, err := e.App.Outbox.Redispatch(bg, -time.Minute, 100); err != nil || n < 1 {
-		t.Fatalf("redispatch: %d %v", n, err)
+	if n := redispatchSoon(t, e); n < 1 {
+		t.Fatalf("redispatch: %d", n)
 	}
 	e.WaitMessage(a.MessageID, messaging.StatusAccepted)
 	e.WaitMessage(b.MessageID, messaging.StatusAccepted)
@@ -223,9 +223,21 @@ func TestRecovery_DispatchingMessageWhoseCommandWasLostIsRecovered(t *testing.T)
 	if len(e.Provider.Sent()) != 0 {
 		t.Fatalf("B must not overtake the stuck A: %v", sentTexts(e))
 	}
-	time.Sleep(25 * time.Millisecond)
-	if n, err := e.App.Outbox.Redispatch(bg, -time.Minute, 100); err != nil || n < 1 {
-		t.Fatalf("a DISPATCHING message must be recovered by the outbox: %d %v", n, err)
+	// The DISPATCHING age is stamped by the database clock and compared with the application's, so A only becomes "stuck"
+	// once any skew has elapsed: keep running the recovery pass (what the reconciler does every few seconds) until A is
+	// recovered, instead of assuming the first pass sees it.
+	var recovered int
+	Eventually(t, 10*time.Second, "the outbox recovers the DISPATCHING message", func() bool {
+		n, err := e.App.Outbox.Redispatch(bg, 0, 100)
+		if err != nil {
+			t.Fatal(err)
+		}
+		recovered += n
+		m, _ := e.Repos.Messages.Get(bg, a.MessageID)
+		return m != nil && m.Status == messaging.StatusUnknown
+	})
+	if recovered < 1 {
+		t.Fatalf("a DISPATCHING message must be recovered by the outbox: %d", recovered)
 	}
 	got := e.WaitMessage(a.MessageID, messaging.StatusUnknown)
 	if got.ErrorCode != "WORKER_CRASH" {
@@ -266,8 +278,8 @@ func TestRecovery_PurgeNeverDeletesEntriesOfRecoverableMessages(t *testing.T) {
 	}
 	e.QueueFault.Down.Store(false)
 	time.Sleep(25 * time.Millisecond) // the Windows clock ticks coarsely: let "dispatched_at < now" hold
-	if n, err := e.App.Outbox.Redispatch(bg, -time.Minute, 100); err != nil || n != 1 {
-		t.Fatalf("redispatch: %d %v", n, err)
+	if n := redispatchSoon(t, e); n != 1 {
+		t.Fatalf("redispatch: %d", n)
 	}
 	e.StartWorkers(1)
 	e.WaitMessage(a.MessageID, messaging.StatusAccepted)
@@ -277,6 +289,19 @@ func TestRecovery_PurgeNeverDeletesEntriesOfRecoverableMessages(t *testing.T) {
 	}
 }
 
-// Redispatch compares the age of an outbox entry (stamped by the DATABASE clock) with the application clock. The
-// tests above ask for "everything dispatched so far" with a negative age so a container whose clock runs ahead of the
-// host's (Docker Desktop on Windows/macOS) cannot make them flaky; production passes minutes, which dwarfs any skew.
+// redispatchSoon runs Redispatch(0) until it republishes something. Outbox entry ages are stamped by one clock (the
+// database's, or the application's) and compared with another, so on a container whose clock lags the host's (Docker
+// Desktop on Windows/macOS) an entry only becomes "old enough" once that skew has elapsed. Polling makes the tests
+// independent of it without weakening what they check; production waits minutes, which dwarfs any skew.
+func redispatchSoon(t *testing.T, e *Env) int {
+	t.Helper()
+	n := 0
+	Eventually(t, 5*time.Second, "the outbox republishes the stuck command", func() bool {
+		var err error
+		if n, err = e.App.Outbox.Redispatch(bg, 0, 100); err != nil {
+			t.Fatal(err)
+		}
+		return n > 0
+	})
+	return n
+}
