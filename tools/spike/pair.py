@@ -19,6 +19,9 @@ from pathlib import Path
 
 import httpx
 
+# work without PYTHONPATH or `pip install`: use the SDK that lives in this repository
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "sdk" / "python"))
+
 from relayplane import NotFound, RelayPlaneClient, RelayPlaneError
 
 GATEWAY = os.environ.get("GATEWAY", "http://127.0.0.1:18080")

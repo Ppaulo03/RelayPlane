@@ -363,7 +363,10 @@ func (p *Provider) mediaRef(ctx context.Context, m messaging.OutboundMessage) (s
 	if m.Media == nil {
 		return "", fmt.Errorf("%w: media message without attachment", errs.ErrProviderRejected)
 	}
-	if m.Media.URL != "" {
+	// Evolution validates `media` with class-validator isURL, which requires a dotted host: a signed URL on an internal
+	// name such as http://rustfs:9000/... is answered with 400 "Owned media must be a url or base64" (observed against the
+	// real node). Such URLs are sent as base64 instead, whenever the bytes can be read.
+	if m.Media.URL != "" && (urlAcceptedByNode(m.Media.URL) || m.Media.Open == nil) {
 		return m.Media.URL, nil
 	}
 	if m.Media.Open == nil {
@@ -375,4 +378,14 @@ func (p *Provider) mediaRef(ctx context.Context, m messaging.OutboundMessage) (s
 	}
 	defer r.Close()
 	return encodeBase64(r)
+}
+
+// urlAcceptedByNode reports whether Evolution's own URL validation (a dotted host, i.e. a domain name or an IPv4 address)
+// would accept the URL.
+func urlAcceptedByNode(raw string) bool {
+	u, err := url.Parse(raw)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") {
+		return false
+	}
+	return strings.Contains(u.Hostname(), ".")
 }
