@@ -36,5 +36,9 @@ Matriz de compatibilidade
 **Fluxo de release da imagem Evolution** (`make evolution-image`): build → confere o Baileys instalado → scan (trivy ou docker scout, se instalados; sem scanner o alvo avisa
 que **não** escaneou) → com `REGISTRY=...` faz push e imprime o digest imutável (`registry/evolution@sha256:…`) que deve ir para o compose/manifests. Não implante por tag mutável.
 
+**CI/CD:** `.github/workflows/ci.yml` (a cada PR/push em `main`) e `.github/workflows/evolution-image.yml` (manual ou tag `evolution-*`; publica
+`ghcr.io/<owner>/relayplane-evolution:<tag>` só depois do scan e imprime o digest no *job summary*). As actions de terceiros são fixadas por SHA de commit,
+o que é verificado por `TestWorkflowActionsArePinnedByCommitSHA`; atualize-as resolvendo o novo SHA da tag (`gh api repos/<org>/<repo>/git/ref/tags/<tag>`).
+
 Para atualizar um digest: `docker pull <imagem:tag>` → `docker image inspect --format '{{index .RepoDigests 0}}' <imagem:tag>` →
 atualizar **todos** os arquivos acima e esta tabela.

@@ -100,3 +100,47 @@ func TestExternalImagesArePinnedByDigest(t *testing.T) {
 		}
 	}
 }
+
+var actionRef = regexp.MustCompile(`^\s*-?\s*uses:\s*(\S+)`)
+
+// A mutable action tag (@v4) lets whoever controls that repository run code with this repository's token:
+// every third-party action in a workflow must be pinned to a full commit SHA.
+func TestWorkflowActionsArePinnedByCommitSHA(t *testing.T) {
+	root := repoRoot(t)
+	files, _ := filepath.Glob(filepath.Join(root, ".github", "workflows", "*.yml"))
+	if len(files) == 0 {
+		t.Skip("no workflows")
+	}
+	sha := regexp.MustCompile(`@[0-9a-f]{40}$`)
+	for _, f := range files {
+		b, err := os.ReadFile(f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for i, line := range strings.Split(string(b), "\n") {
+			m := actionRef.FindStringSubmatch(line)
+			if m == nil || strings.HasPrefix(m[1], "./") {
+				continue
+			}
+			if !sha.MatchString(m[1]) {
+				t.Errorf("%s:%d: action %q is not pinned to a commit SHA", filepath.Base(f), i+1, m[1])
+			}
+		}
+	}
+}
+
+// Anything that publishes an image must scan it first and print the digest to pin.
+func TestImagePublishingWorkflowScansBeforePushing(t *testing.T) {
+	b, err := os.ReadFile(filepath.Join(repoRoot(t), ".github", "workflows", "evolution-image.yml"))
+	if err != nil {
+		t.Skip("no image workflow")
+	}
+	s := string(b)
+	scan, push := strings.Index(s, "trivy-action"), strings.Index(s, "push: true")
+	if scan < 0 || push < 0 || scan > push {
+		t.Error("the image must be scanned (trivy) BEFORE the step that pushes it")
+	}
+	if !strings.Contains(s, "7.0.0-rc13") {
+		t.Error("the workflow must verify the patched Baileys version inside the built image")
+	}
+}
