@@ -125,6 +125,7 @@ spec:
             - {name: DATABASE_ENABLED, value: "true"}
             - {name: CACHE_REDIS_ENABLED, value: "false"}
             - {name: CACHE_LOCAL_ENABLED, value: "true"}
+            - {name: TZ, value: UTC}
             - {name: TELEMETRY_ENABLED, value: "false"}
             - name: HOSTNAME_ORDINAL
               valueFrom: {fieldRef: {fieldPath: metadata.name}}

@@ -230,10 +230,12 @@ func (w Webhook) Normalize(r ports.InboundRequest) ([]events.Inbound, error) {
 	return nil, nil // events RelayPlane does not model are dropped, not leaked
 }
 
-func (w Webhook) eventTime(s string) time.Time {
-	if t, err := time.Parse(time.RFC3339, s); err == nil {
-		return t.UTC()
-	}
+// eventTime is the time RelayPlane stamps on provider events that carry no timestamp of their own (connection, receipt,
+// QR). It is the ARRIVAL time: the envelope's date_time cannot be trusted. Observed against a real node, Evolution
+// formats it in the container's local time and labels it "Z" (a node with TZ=America/Sao_Paulo reports 20:08Z at 23:08Z),
+// which made the projector discard a real logout as an event older than the catalog. Nodes also run with TZ=UTC, but the
+// adapter must not depend on that. A message's own time comes from messageTimestamp (epoch seconds), which is correct.
+func (w Webhook) eventTime(string) time.Time {
 	if w.Now != nil {
 		return w.Now().UTC()
 	}
