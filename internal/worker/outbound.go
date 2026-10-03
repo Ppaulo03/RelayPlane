@@ -304,9 +304,35 @@ func (w *Outbound) barrierRecheck() time.Duration {
 	return time.Second
 }
 
-// retryQueued schedules a retry for a message that is still QUEUED.
+// attemptOf is the retry budget already spent. The authoritative counter is the
+// message's attempt_count in PostgreSQL; the broker's delivery count only
+// describes the current delivery and restarts from 1 if the broker loses its state
+// (and the outbox republishes the command). Taking the larger of the two means a
+// broker reset can never hand a message a fresh retry budget.
+func attemptOf(cmd ports.Command, msg *messaging.Message) int {
+	a := cmd.Attempt
+	if msg != nil && msg.AttemptCount > a {
+		a = msg.AttemptCount
+	}
+	return a
+}
+
+// retryQueued schedules a retry for a message that is still QUEUED (it was never
+// claimed, e.g. the instance is not connected). The failed attempt is first
+// recorded durably, because the claim that normally counts it did not happen.
 func (w *Outbound) retryQueued(ctx context.Context, cmd ports.Command, msg *messaging.Message, cause error) ports.Result {
-	delay, ok := w.Retry.Next(cmd.Attempt)
+	counted, err := w.Repos.Messages.Transition(ctx, msg.ID, []messaging.Status{messaging.StatusQueued}, messaging.StatusQueued,
+		ports.MessagePatch{BumpAttempt: true, ErrorCode: "RETRYING", ErrorMessage: cause.Error()})
+	switch {
+	case err == nil:
+		msg = counted
+	case errors.Is(err, errs.ErrConflict):
+		return ack() // someone else moved the message
+	default:
+		return w.persistFailed(ctx, err)
+	}
+	attempt := attemptOf(cmd, msg)
+	delay, ok := w.Retry.Next(attempt)
 	if !ok {
 		if res, stop := w.failFrom(ctx, msg, []messaging.Status{messaging.StatusQueued}, "RETRIES_EXHAUSTED", cause); stop {
 			return res
@@ -315,13 +341,14 @@ func (w *Outbound) retryQueued(ctx context.Context, cmd ports.Command, msg *mess
 		return ports.Result{Disposition: ports.DeadLetter, Reason: "retries exhausted: " + cause.Error()}
 	}
 	w.Metrics.OutboundRetryTotal.WithLabelValues(string(errs.Retryable)).Inc()
-	w.Log.WarnContext(ctx, "retry scheduled", "attempt", cmd.Attempt, "delay", delay.String(), "reason", cause.Error())
+	w.Log.WarnContext(ctx, "retry scheduled", "attempt", attempt, "delay", delay.String(), "reason", cause.Error())
 	return ports.Result{Disposition: ports.Retry, After: delay, MaxAttempts: w.Retry.MaxAttempts(), Reason: cause.Error()}
 }
 
 // retryDispatching releases the claim (DISPATCHING -> QUEUED) and schedules a retry.
 func (w *Outbound) retryDispatching(ctx context.Context, cmd ports.Command, msg *messaging.Message, cause error) ports.Result {
-	delay, ok := w.Retry.Next(cmd.Attempt)
+	attempt := attemptOf(cmd, msg) // msg is the post-claim record: its attempt_count includes this attempt
+	delay, ok := w.Retry.Next(attempt)
 	if !ok {
 		if res, stop := w.failFrom(ctx, msg, []messaging.Status{messaging.StatusDispatching}, "RETRIES_EXHAUSTED", cause); stop {
 			return res
@@ -334,7 +361,7 @@ func (w *Outbound) retryDispatching(ctx context.Context, cmd ports.Command, msg 
 		return w.persistFailed(ctx, err) // still DISPATCHING: a redelivery would mark it UNKNOWN, so stay pending
 	}
 	w.Metrics.OutboundRetryTotal.WithLabelValues(string(errs.Retryable)).Inc()
-	w.Log.WarnContext(ctx, "retry scheduled", "attempt", cmd.Attempt, "delay", delay.String(), "reason", cause.Error())
+	w.Log.WarnContext(ctx, "retry scheduled", "attempt", attempt, "delay", delay.String(), "reason", cause.Error())
 	return ports.Result{Disposition: ports.Retry, After: delay, MaxAttempts: w.Retry.MaxAttempts(), Reason: cause.Error()}
 }
 

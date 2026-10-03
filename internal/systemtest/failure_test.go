@@ -799,3 +799,50 @@ func TestProjector_StaleEventOfPreviousOwnerNeverAffectsTheNewAssignment(t *test
 		t.Error("the dropped stale event must be counted")
 	}
 }
+
+// 15.5 The broker loses its state (every redelivery says "attempt 1"): the retry budget lives
+// in PostgreSQL, so the message still dead-letters after the configured number of attempts.
+func TestRetryBudget_SurvivesBrokerStateLoss(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		setup func(e *Env, inst *instance.Instance)
+	}{
+		{"provider unavailable (claimed attempts)", func(e *Env, inst *instance.Instance) {
+			for i := 0; i < 5; i++ {
+				e.Provider.FailNext(memory.FailUnavailable)
+			}
+		}},
+		{"instance not connected (pre-claim attempts)", func(e *Env, inst *instance.Instance) {
+			_, _ = e.Repos.Instances.SetObserved(bg, inst.ID, inst.AssignmentEpoch, instance.Disconnected, time.Now())
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e := NewEnv(t)
+			inst := e.CreateInstance(e.Tenant, "a", true)
+			tc.setup(e, inst)
+			r, _, _ := e.SendText(e.Tenant, inst.ID, "doomed", "")
+			m, _ := e.Repos.Messages.Get(bg, r.MessageID)
+			env := messaging.Envelope{MessageID: m.ID, TenantID: m.TenantID, InstanceID: m.InstanceID, PartitionKey: m.InstanceID, Sequence: m.SequenceNo,
+				Assignment: inst.Assignment(), Type: messaging.TypeText, To: m.Recipient, Payload: messaging.Payload{Text: "doomed"}}
+			want := []time.Duration{0, 5 * time.Millisecond, 10 * time.Millisecond, 15 * time.Millisecond} // Env retry schedule
+			for i := 0; i < 5; i++ {
+				// the broker restarted from scratch: it believes this is always the first delivery
+				res, err := e.Worker.Handle(bg, ports.Command{ID: m.ID, PartitionKey: m.InstanceID, Payload: env, Attempt: 1})
+				if err != nil {
+					t.Fatal(err)
+				}
+				if i < 4 {
+					if res.Disposition != ports.Retry || res.After != want[i] {
+						t.Fatalf("attempt %d: %+v, want Retry after %v (the schedule must advance with the durable counter)", i+1, res, want[i])
+					}
+				} else if res.Disposition != ports.DeadLetter {
+					t.Fatalf("attempt 5 must dead-letter even though the broker says attempt=1: %+v", res)
+				}
+			}
+			got, _ := e.Repos.Messages.Get(bg, r.MessageID)
+			if got.Status != messaging.StatusFailed || got.ErrorCode != "RETRIES_EXHAUSTED" || got.AttemptCount != 5 {
+				t.Fatalf("status=%s code=%s attempts=%d", got.Status, got.ErrorCode, got.AttemptCount)
+			}
+		})
+	}
+}
