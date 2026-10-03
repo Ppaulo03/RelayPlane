@@ -81,13 +81,13 @@ func (r eventsRepo) Purge(ctx context.Context, before time.Time) (int64, error) 
 
 type subsRepo struct{ s *Store }
 
-const subCols = `id,tenant_id,url,event_types,instance_ids,secret_version,rotated_at,active,created_at`
+const subCols = `id,tenant_id,url,event_types,instance_ids,secret_version,rotated_at,active,created_at,exclude_groups`
 
 func scanSub(row pgx.Row) (*subscription.Subscription, error) {
 	var s subscription.Subscription
 	var types []string
 	var rotated *time.Time
-	if err := row.Scan(&s.ID, &s.TenantID, &s.URL, &types, &s.InstanceIDs, &s.SecretVersion, &rotated, &s.Active, &s.CreatedAt); err != nil {
+	if err := row.Scan(&s.ID, &s.TenantID, &s.URL, &types, &s.InstanceIDs, &s.SecretVersion, &rotated, &s.Active, &s.CreatedAt, &s.ExcludeGroups); err != nil {
 		return nil, notFound(err)
 	}
 	for _, t := range types {
@@ -109,8 +109,8 @@ func (r subsRepo) Create(ctx context.Context, s subscription.Subscription) error
 	if s.CreatedAt.IsZero() {
 		s.CreatedAt = time.Now().UTC()
 	}
-	_, err := r.s.pool.Exec(ctx, `INSERT INTO subscriptions(id,tenant_id,url,event_types,instance_ids,secret_version,active,created_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8)`,
-		s.ID, s.TenantID, s.URL, types, ids, s.SecretVersion, s.Active, s.CreatedAt)
+	_, err := r.s.pool.Exec(ctx, `INSERT INTO subscriptions(id,tenant_id,url,event_types,instance_ids,secret_version,active,created_at,exclude_groups) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+		s.ID, s.TenantID, s.URL, types, ids, s.SecretVersion, s.Active, s.CreatedAt, s.ExcludeGroups)
 	if name, code := constraint(err); err != nil {
 		switch {
 		case code == "23505":

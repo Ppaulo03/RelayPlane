@@ -13,6 +13,7 @@ import (
 	"github.com/relayplane/relayplane/internal/core/errs"
 	"github.com/relayplane/relayplane/internal/core/instance"
 	"github.com/relayplane/relayplane/internal/core/media"
+	"github.com/relayplane/relayplane/internal/core/messaging"
 	"github.com/relayplane/relayplane/internal/core/ownership"
 	"github.com/relayplane/relayplane/internal/idempotency"
 	"github.com/relayplane/relayplane/internal/observability"
@@ -35,6 +36,9 @@ type Config struct {
 	MaxTextLength          int
 
 	Subscriptions SubscriptionConfig
+
+	// DefaultRate is the default outbound pacing (informational: reported by GET /limits; the worker enforces it).
+	DefaultRate messaging.RatePolicy
 }
 
 // DefaultConfig returns production-leaning defaults.

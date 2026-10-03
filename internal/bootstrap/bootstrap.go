@@ -24,6 +24,7 @@ import (
 	"github.com/relayplane/relayplane/internal/app"
 	"github.com/relayplane/relayplane/internal/config"
 	"github.com/relayplane/relayplane/internal/core/media"
+	"github.com/relayplane/relayplane/internal/core/messaging"
 	"github.com/relayplane/relayplane/internal/core/routing"
 	"github.com/relayplane/relayplane/internal/delivery"
 	"github.com/relayplane/relayplane/internal/idempotency"
@@ -106,6 +107,8 @@ func New(ctx context.Context, cfg config.Config, service string) (*Runtime, erro
 	acfg.MediaTTL = cfg.MediaTTL
 	acfg.PendingTTL = cfg.MediaPendingTTL
 	acfg.MigrationVerifyTimeout = cfg.MigrationVerifyTimeout
+	acfg.DefaultRate = messaging.RatePolicy{MinInterval: cfg.RateMinInterval, Burst: cfg.RateBurst, MaxPerMinute: cfg.RateMaxPerMinute,
+		MaxConcurrent: cfg.RateMaxConcurrent, Cooldown: cfg.RateCooldown}
 	subKey := subscriptionKey(cfg)
 	acfg.Subscriptions = app.SubscriptionConfig{ServerKey: subKey, MaxPerTenant: cfg.WebhooksMaxPerTenant,
 		AllowInsecureURLs: cfg.WebhooksAllowInsecure, AllowPrivateDestinations: cfg.WebhooksAllowPrivate}

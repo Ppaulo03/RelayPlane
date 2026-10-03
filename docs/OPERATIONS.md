@@ -28,6 +28,16 @@ cria uma entrega por assinatura (`UNIQUE(subscription_id, event_id)`: reentrega 
 * **Segurança (SSRF):** em produção a URL deve ser `https` e resolver para endereço **público**; o IP é validado **no momento da conexão** (derrota DNS rebinding), redirects nunca são seguidos, não há proxy ambiente e a resposta é lida só até 64 KiB.
   Em desenvolvimento (`APP_ENV≠production`) `http://` e redes privadas são aceitos; force com `WEBHOOKS_ALLOW_PRIVATE_DESTINATIONS` / `WEBHOOKS_ALLOW_INSECURE`.
 * **Idempotência de envio:** a janela em que a mesma `Idempotency-Key` devolve a mesma mensagem é `IDEMPOTENCY_TTL` (padrão **24 h**, mínimo 1 min). Um cliente que reenvia depois disso cria **outra** mensagem.
+* **Criação idempotente:** `POST /subscriptions` aceita `Idempotency-Key`; repetir a chamada (um script de deploy que roda duas vezes) devolve a MESMA subscription
+  (`200` + `Idempotent-Replayed: true`) **sem o segredo**; se ele foi perdido, use `rotate-secret`. A mesma chave com outro corpo é `422`.
+* **Filtro de grupos:** `exclude_groups: true` descarta `message.received` de conversas em grupo para aquela subscription.
+* **Trace:** o webhook leva o header `traceparent`. Os eventos de status (`message.outbound_status`) carregam o trace do `POST /messages/send` que criou a mensagem
+  (o consumidor liga seu trace ao do envio); eventos que nascem no provedor (mensagem recebida) levam o trace da própria entrega.
+* **`GET /api/v1/limits`:** janela de idempotência (`idempotency_retention_seconds`), limites de texto e mídia, ritmo de envio padrão e garantias de webhook
+  (`retry_max_attempts`, `retry_horizon_seconds`). O cliente deve conferir na partida que o seu horizonte de retry fica abaixo da janela de idempotência
+  (o SDK Python tem `Limits.assert_retry_horizon_within_idempotency`).
+* **`GET /messages/{id}`** expõe `provider_message_id`, `accepted_at` e `error_message`: é o id ao qual o `reply_to_provider_message_id` de uma resposta se refere,
+  e permite reconciliar por polling um evento que não chegou.
 * **Operação:** métricas `relayplane_webhook_*` e `relayplane_event_outbox_published_total`; alertas `RelayPlaneWebhookDeadLetters`, `…Backlog`, `…CircuitOpen`, `RelayPlaneEventOutboxStalled`.
   Entregas concluídas são apagadas após `WEBHOOK_DELIVERED_RETENTION` (7 d); a DLQ nunca é apagada sozinha.
 

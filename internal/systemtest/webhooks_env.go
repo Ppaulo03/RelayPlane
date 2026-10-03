@@ -15,15 +15,16 @@ var SubscriptionKey = []byte("systemtest-subscription-key")
 
 // Received is one request the fake tenant endpoint got.
 type Received struct {
-	URL       string
-	EventID   string
-	EventType string
-	Body      []byte
-	Signature string
-	Timestamp int64
-	Attempt   string
-	At        time.Time
-	Status    int // what the endpoint answered
+	URL         string
+	EventID     string
+	EventType   string
+	Body        []byte
+	Signature   string
+	Timestamp   int64
+	Attempt     string
+	Traceparent string
+	At          time.Time
+	Status      int // what the endpoint answered
 }
 
 // Receiver is the tenant's webhook endpoint (and the WebhookSender) in tests.
@@ -39,7 +40,7 @@ func (r *Receiver) Send(_ context.Context, req ports.WebhookRequest) (int, error
 	ts, _ := strconv.ParseInt(req.Headers[subscription.HeaderTimestamp], 10, 64)
 	rec := Received{URL: req.URL, EventID: req.Headers[subscription.HeaderEventID], EventType: req.Headers[subscription.HeaderEventType],
 		Body: append([]byte(nil), req.Body...), Signature: req.Headers[subscription.HeaderSignature], Timestamp: ts,
-		Attempt: req.Headers[subscription.HeaderAttempt], At: time.Now()}
+		Attempt: req.Headers[subscription.HeaderAttempt], Traceparent: req.Headers["traceparent"], At: time.Now()}
 	r.mu.Lock()
 	n := 0
 	for _, x := range r.reqs {
