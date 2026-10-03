@@ -273,6 +273,9 @@ func main() {
 		}
 		miss := sink.missing(all, accepted...)
 		fmt.Printf("webhooks: %s; %d of %d messages never got their status event\n", sink.summary(), len(miss), len(all))
+		for _, id := range miss[:min(len(miss), 5)] {
+			fmt.Println("no status event for message", id)
+		}
 		bad = bad || len(miss) > 0 || sink.badSignatures() > 0
 	}
 	st, serr := readStubs(*stubs)

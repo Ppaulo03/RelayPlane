@@ -22,6 +22,7 @@ type webhookSink struct {
 
 	mu         sync.Mutex
 	srv        *http.Server
+	failedOnce map[string]bool                // events that already got their injected failure
 	events     map[string]struct{}            // distinct event ids accepted
 	deliveries int                            // accepted requests (including redeliveries of the same event)
 	statuses   map[string]map[string]struct{} // message id -> statuses seen
@@ -30,7 +31,7 @@ type webhookSink struct {
 }
 
 func startSink(listen string, failRate float64) (*webhookSink, error) {
-	s := &webhookSink{failRate: failRate, events: map[string]struct{}{}, statuses: map[string]map[string]struct{}{}}
+	s := &webhookSink{failRate: failRate, events: map[string]struct{}{}, failedOnce: map[string]bool{}, statuses: map[string]map[string]struct{}{}}
 	ln, err := net.Listen("tcp", listen)
 	if err != nil {
 		return nil, err
@@ -62,12 +63,22 @@ func (s *webhookSink) handle(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "bad signature", http.StatusUnauthorized)
 		return
 	}
+	// Each event fails AT MOST ONCE. Random failures could hit the same event several times in a row (3 in a row is ~0.1 %,
+	// i.e. a couple per 2000 deliveries) and push its retry past any reasonable test window (the schedule is 5 s, 30 s, 2 min,
+	// 10 min...), which tests the dice, not RelayPlane. One failure per event still proves retry-then-deliver.
 	if failRate > 0 && rand.Float64() < failRate {
+		id := r.Header.Get(subscription.HeaderEventID)
 		s.mu.Lock()
-		s.failed++
+		first := !s.failedOnce[id]
+		if first {
+			s.failedOnce[id] = true
+			s.failed++
+		}
 		s.mu.Unlock()
-		http.Error(w, "injected failure", http.StatusInternalServerError)
-		return
+		if first {
+			http.Error(w, "injected failure", http.StatusInternalServerError)
+			return
+		}
 	}
 	var ev struct {
 		EventID   string `json:"event_id"`
