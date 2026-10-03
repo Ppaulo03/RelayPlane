@@ -95,3 +95,36 @@ async def test_subscriptions_api_roundtrip_and_secret_hygiene():
     assert seen[0][3] == {"url": "https://agent.example.com/h", "event_types": ["message.received"]}
     assert ("GET", "/api/v1/subscriptions/sub_1/deliveries", "limit=5&status=DEAD", None) in seen
     assert ("POST", "/api/v1/deliveries/dlv_1/redeliver", "", None) in seen
+
+
+async def test_subscription_create_is_idempotent_and_message_exposes_the_provider_id():
+    calls = []
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        calls.append((req.method, req.url.path, req.headers.get("idempotency-key")))
+        sub = {"id": "sub_1", "url": "https://agent.example.com/h", "event_types": [], "instance_ids": [], "exclude_groups": True, "active": True}
+        if req.url.path == "/api/v1/subscriptions":
+            if len([c for c in calls if c[1] == "/api/v1/subscriptions"]) == 1:
+                return httpx.Response(201, json={**sub, "secret": "whsec_abc"})
+            return httpx.Response(200, json=sub, headers={"Idempotent-Replayed": "true"})
+        if req.url.path.startswith("/api/v1/messages/"):
+            return httpx.Response(200, json={"id": "msg_1", "status": "ACCEPTED", "provider_message_id": "3EB0AAA",
+                                             "accepted_at": "2026-10-03T10:00:00Z", "error_message": ""})
+        return httpx.Response(200, json={"idempotency_retention_seconds": 86400, "max_text_length": 4096,
+                                         "media": {"max_bytes": 1000, "allowed_types": ["image/*"]},
+                                         "subscriptions": {"max_per_tenant": 10, "retry_max_attempts": 10, "retry_horizon_seconds": 60000}})
+
+    rp = RelayPlaneClient("http://gw.test", "key", transport=httpx.MockTransport(handler))
+    async with rp:
+        first = await rp.subscriptions.create("https://agent.example.com/h", exclude_groups=True, idempotency_key="bootstrap-1")
+        again = await rp.subscriptions.create("https://agent.example.com/h", exclude_groups=True, idempotency_key="bootstrap-1")
+        assert first.secret == "whsec_abc" and not first.replayed and first.exclude_groups
+        assert again.id == first.id and again.replayed and again.secret is None
+        msg = await rp.messages.get("msg_1")
+        assert msg.provider_message_id == "3EB0AAA" and msg.accepted_at == "2026-10-03T10:00:00Z"
+        lim = await rp.limits.get()
+    assert [c[2] for c in calls if c[1] == "/api/v1/subscriptions"] == ["bootstrap-1", "bootstrap-1"]
+    assert lim.idempotency_retention_seconds == 86400 and lim.max_subscriptions_per_tenant == 10 and lim.media_allowed_types == ("image/*",)
+    lim.assert_retry_horizon_within_idempotency(3600)
+    with pytest.raises(ValueError):
+        lim.assert_retry_horizon_within_idempotency(90000)  # a late retry would create a second message
