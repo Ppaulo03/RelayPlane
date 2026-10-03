@@ -11,7 +11,11 @@ import argparse
 import asyncio
 import json
 import os
+import sys
 from pathlib import Path
+
+# work without PYTHONPATH or `pip install`: use the SDK that lives in this repository
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "sdk" / "python"))
 
 from relayplane import RelayPlaneClient
 

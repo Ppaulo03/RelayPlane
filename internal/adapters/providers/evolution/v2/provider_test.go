@@ -1,8 +1,10 @@
 package v2_test
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -189,6 +191,36 @@ func TestMediaIsSentByReferenceOrStreamedNeverThroughBroker(t *testing.T) {
 	}
 	if f.lastSend["media"] != "http://blob/x?sig=1" || f.lastSend["mediatype"] != "document" || f.lastSend["mimetype"] != "application/pdf" {
 		t.Fatalf("sendMedia body: %v", f.lastSend)
+	}
+}
+
+// Observed against the real node: Evolution answers 400 "Owned media must be a url or base64" to a signed URL on an internal
+// host name (http://rustfs:9000/...), because its isURL check needs a dotted host.
+func TestMediaOnAnInternalHostIsSentAsBase64(t *testing.T) {
+	f := newFake(t)
+	p := newProvider(f)
+	a := ownership.Assignment{InstanceID: "inst_m", NodeID: "node-01", Epoch: 1}
+	ctx := t.Context()
+	_, _ = p.CreateInstance(ctx, ports.CreateInstanceRequest{Assignment: a})
+	f.instances["inst_m"].state = "open"
+	open := func(context.Context) (io.ReadCloser, error) { return io.NopCloser(strings.NewReader("data")), nil }
+
+	m := mediaMsg("http://rustfs:9000/b/k?sig=1")
+	m.Media.Open = open
+	if _, err := p.SendMessage(ctx, a, m); err != nil {
+		t.Fatal(err)
+	}
+	if f.lastSend["media"] != "ZGF0YQ==" {
+		t.Fatalf("an internal host must be sent as base64, got %v", f.lastSend["media"])
+	}
+
+	m = mediaMsg("https://files.example.com/b/k?sig=1")
+	m.Media.Open = open
+	if _, err := p.SendMessage(ctx, a, m); err != nil {
+		t.Fatal(err)
+	}
+	if f.lastSend["media"] != "https://files.example.com/b/k?sig=1" {
+		t.Fatalf("a public URL stays a URL, got %v", f.lastSend["media"])
 	}
 }
 
