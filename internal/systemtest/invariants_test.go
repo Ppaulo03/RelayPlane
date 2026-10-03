@@ -69,6 +69,16 @@ func waitMigration(t *testing.T, e *Env, opID string, want ...instance.Operation
 	return op
 }
 
+// finishMigration pairs the new owner (the user scans the QR on the new node) and
+// lets the migration's own VERIFY step observe it. While a migration is active the
+// reconciler deliberately stays out of the way, so this is the only way forward.
+func finishMigration(t *testing.T, e *Env, instanceID, opID string) {
+	t.Helper()
+	cur, _ := e.Repos.Instances.Get(bg, instanceID)
+	e.Provider.SetStateOn(cur.NodeID, instanceID, instance.Connected)
+	waitMigration(t, e, opID, instance.OpSucceeded)
+}
+
 // INV-02 + INV-08: a command accepted under an old epoch is never dispatched.
 func TestINV02_INV08_StaleCommandNeverReachesProvider(t *testing.T) {
 	e := NewEnv(t)
@@ -92,7 +102,7 @@ func TestINV02_INV08_StaleCommandNeverReachesProvider(t *testing.T) {
 	if cur.AssignmentEpoch != 2 {
 		t.Fatalf("epoch %d", cur.AssignmentEpoch)
 	}
-	e.Connect(inst.ID) // pair the new owner
+	finishMigration(t, e, inst.ID, mr.OperationID) // pair the new owner
 
 	e.StartWorkers(2)
 	for _, id := range ids {

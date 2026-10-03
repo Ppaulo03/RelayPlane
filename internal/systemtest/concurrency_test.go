@@ -191,7 +191,7 @@ func TestConcurrent_SendsDuringMigrationNeverReachWrongOwner(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitMigration(t, e, res.OperationID, instance.OpSucceeded, instance.OpRunning)
-	e.Connect(inst.ID)
+	finishMigration(t, e, inst.ID, res.OperationID)
 	time.Sleep(50 * time.Millisecond)
 	close(stop)
 	wg.Wait()

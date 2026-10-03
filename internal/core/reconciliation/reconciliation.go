@@ -71,7 +71,7 @@ func Decide(in Input) Decision {
 		d.Drift = false
 		return d
 	}
-	if inst.ObservedState == instance.Migrating && in.MigrationActive {
+	if in.MigrationActive { // independent of observed_state: it lags the operation row
 		d.Reason = "migration in progress"
 		return d
 	}

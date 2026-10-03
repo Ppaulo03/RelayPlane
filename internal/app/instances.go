@@ -93,7 +93,25 @@ func (s *InstanceService) create(ctx context.Context, tenantID, id, name, provid
 // assignment. It is idempotent and is also used by the reconciler to resume
 // provisioning that a crashed gateway left behind: a provider that already has
 // the session ("already exists") is adopted rather than recreated.
-func (s *InstanceService) Provision(ctx context.Context, inst instance.Instance) (*instance.Instance, error) {
+func (s *InstanceService) Provision(ctx context.Context, inst instance.Instance) (out *instance.Instance, err error) {
+	err = s.d.WithInstanceControl(ctx, inst.ID, lockWait, func(ctx context.Context) error {
+		fresh, gerr := s.d.Repos.Instances.Get(ctx, inst.ID) // re-read under the lock
+		if gerr != nil {
+			return gerr
+		}
+		out, gerr = s.ProvisionLocked(ctx, *fresh)
+		return gerr
+	})
+	return out, err
+}
+
+// ProvisionLocked is Provision for callers that already hold the
+// instance-control lock (the reconciler) and loaded inst under it.
+func (s *InstanceService) ProvisionLocked(ctx context.Context, inst instance.Instance) (*instance.Instance, error) {
+	if inst.DeletedAt != nil || inst.DesiredState == instance.DesiredDeleted ||
+		inst.ObservedState == instance.Deleting || inst.ObservedState == instance.Deleted || inst.ObservedState == instance.Failed {
+		return &inst, nil // nothing to provision any more (a delete won the race)
+	}
 	ctx, span := observability.Start(ctx, "instance.provision")
 	defer span.End()
 	ctx = instanceCtx(ctx, inst)
@@ -190,14 +208,19 @@ func (s *InstanceService) Delete(ctx context.Context, tenantID, id, idemKey stri
 	return idempotency.Do(ctx, s.d.Idem, tenantID, idemKey, "delete_instance", hash,
 		func() string { return id },
 		func(ctx context.Context, id string) (OperationResult, error) {
-			inst, err := s.d.loadForTenant(ctx, tenantID, id)
-			if err != nil {
-				return OperationResult{}, err
-			}
-			if op, err := s.d.Repos.Operations.FindActive(ctx, inst.ID, instance.OpMigrate); err == nil {
-				return OperationResult{}, fmt.Errorf("%w: migration %s in progress", errs.ErrConflict, op.ID)
-			}
-			return s.requestDelete(ctx, *inst)
+			var out OperationResult
+			err := s.d.WithInstanceControl(ctx, id, lockWait, func(ctx context.Context) error {
+				inst, err := s.d.loadForTenant(ctx, tenantID, id) // fresh, under the lock
+				if err != nil {
+					return err
+				}
+				if op, err := s.d.Repos.Operations.FindActive(ctx, inst.ID, instance.OpMigrate); err == nil {
+					return fmt.Errorf("%w: migration %s in progress", errs.ErrConflict, op.ID)
+				}
+				out, err = s.requestDelete(ctx, *inst)
+				return err
+			})
+			return out, err
 		})
 }
 
@@ -218,7 +241,7 @@ func (s *InstanceService) requestDelete(ctx context.Context, inst instance.Insta
 		}
 		inst.ObservedState = instance.Deleting
 	}
-	done, err := s.FinishDelete(ctx, inst)
+	done, err := s.FinishDeleteLocked(ctx, inst)
 	if err != nil {
 		return OperationResult{}, err
 	}
@@ -232,7 +255,20 @@ func (s *InstanceService) requestDelete(ctx context.Context, inst instance.Insta
 // FinishDelete removes the provider session and releases ownership. It returns
 // done=false (and no error) when the provider is unreachable; the reconciler
 // retries. A session that is already gone counts as deleted.
-func (s *InstanceService) FinishDelete(ctx context.Context, inst instance.Instance) (bool, error) {
+func (s *InstanceService) FinishDelete(ctx context.Context, inst instance.Instance) (done bool, err error) {
+	err = s.d.WithInstanceControl(ctx, inst.ID, lockWait, func(ctx context.Context) error {
+		fresh, gerr := s.d.Repos.Instances.Get(ctx, inst.ID) // re-read under the lock
+		if gerr != nil {
+			return gerr
+		}
+		done, gerr = s.FinishDeleteLocked(ctx, *fresh)
+		return gerr
+	})
+	return done, err
+}
+
+// FinishDeleteLocked is FinishDelete for callers holding the instance-control lock.
+func (s *InstanceService) FinishDeleteLocked(ctx context.Context, inst instance.Instance) (bool, error) {
 	ctx = instanceCtx(ctx, inst)
 	opID := deleteOpID(inst.ID)
 	if inst.NodeID != "" {
@@ -278,7 +314,15 @@ func (s *InstanceService) mustBeLive(inst *instance.Instance) error {
 }
 
 // Reconnect sets the desired state to CONNECTED and asks the owner to reconnect.
-func (s *InstanceService) Reconnect(ctx context.Context, tenantID, id string) (OperationResult, error) {
+func (s *InstanceService) Reconnect(ctx context.Context, tenantID, id string) (out OperationResult, err error) {
+	err = s.d.WithInstanceControl(ctx, id, lockWait, func(ctx context.Context) (e error) {
+		out, e = s.reconnect(ctx, tenantID, id)
+		return e
+	})
+	return out, err
+}
+
+func (s *InstanceService) reconnect(ctx context.Context, tenantID, id string) (OperationResult, error) {
 	inst, err := s.d.loadForTenant(ctx, tenantID, id)
 	if err != nil {
 		return OperationResult{}, err
@@ -317,7 +361,15 @@ func (s *InstanceService) Reconnect(ctx context.Context, tenantID, id string) (O
 }
 
 // Logout sets the desired state to DISCONNECTED and closes the session.
-func (s *InstanceService) Logout(ctx context.Context, tenantID, id string) (OperationResult, error) {
+func (s *InstanceService) Logout(ctx context.Context, tenantID, id string) (out OperationResult, err error) {
+	err = s.d.WithInstanceControl(ctx, id, lockWait, func(ctx context.Context) (e error) {
+		out, e = s.logout(ctx, tenantID, id)
+		return e
+	})
+	return out, err
+}
+
+func (s *InstanceService) logout(ctx context.Context, tenantID, id string) (OperationResult, error) {
 	inst, err := s.d.loadForTenant(ctx, tenantID, id)
 	if err != nil {
 		return OperationResult{}, err

@@ -176,16 +176,27 @@ func (r *Reconciler) ReconcileInstances(ctx context.Context) Stats {
 }
 
 // ReconcileInstance reconciles one instance. It returns whether drift was
-// found and whether a corrective action was taken.
+// found and whether a corrective action was taken. The whole pass runs inside
+// the instance-control lock shared with migration, delete, logout, reconnect and
+// provisioning; when another lifecycle operation owns the instance the pass is
+// skipped (it is retried on the next one).
 func (r *Reconciler) ReconcileInstance(ctx context.Context, id string) (drifted, acted bool, err error) {
-	d := r.deps()
-	lease, ok, lerr := d.Locker.TryLock(ctx, "reconcile:"+id, 2*r.Cfg.CallTimeout)
-	if lerr != nil || !ok {
-		return false, false, lerr
+	berr := r.deps().WithInstanceControl(ctx, id, 0, func(ctx context.Context) error {
+		drifted, acted, err = r.reconcileLocked(ctx, id)
+		return nil
+	})
+	if errors.Is(berr, errs.ErrInProgress) {
+		return false, false, nil
 	}
-	defer lease.Release(ctx) //nolint:errcheck
+	if berr != nil {
+		return false, false, berr
+	}
+	return drifted, acted, err
+}
 
-	inst, err := d.Repos.Instances.Get(ctx, id)
+func (r *Reconciler) reconcileLocked(ctx context.Context, id string) (drifted, acted bool, err error) {
+	d := r.deps()
+	inst, err := d.Repos.Instances.Get(ctx, id) // loaded under the lock
 	if err != nil {
 		return false, false, err
 	}
@@ -246,6 +257,17 @@ func (r *Reconciler) ReconcileInstance(ctx context.Context, id string) (drifted,
 	r.Log.InfoContext(ctx, "reconciling", "action", dec.Action, "reason", dec.Reason,
 		"desired", inst.DesiredState, "observed", inst.ObservedState)
 
+	// Re-read the assignment right before any side effect: a decision taken on
+	// a stale copy must never be executed against an old owner.
+	if cur, gerr := d.Repos.Instances.Get(ctx, inst.ID); gerr != nil {
+		return dec.Drift, false, gerr
+	} else if cur.AssignmentEpoch != inst.AssignmentEpoch || cur.NodeID != inst.NodeID || cur.DeletedAt != nil {
+		d.Metrics.EpochMismatchTotal.Inc()
+		r.Log.WarnContext(ctx, "assignment changed during reconciliation; dropping the stale action", "action", dec.Action,
+			"epoch", inst.AssignmentEpoch, "current_epoch", cur.AssignmentEpoch)
+		return dec.Drift, false, nil
+	}
+
 	switch dec.Action {
 	case reconciliation.ActionUpdateObserved:
 		err = r.record(ctx, inst, dec.Observed, dec.Reason)
@@ -274,9 +296,9 @@ func (r *Reconciler) ReconcileInstance(ctx context.Context, id string) (drifted,
 			}
 			cur.ObservedState = instance.Deleting
 		}
-		_, err = r.App.Instances.FinishDelete(ctx, cur)
+		_, err = r.App.Instances.FinishDeleteLocked(ctx, cur)
 	case reconciliation.ActionCreate:
-		_, err = r.App.Instances.Provision(ctx, *inst)
+		_, err = r.App.Instances.ProvisionLocked(ctx, *inst)
 	}
 	return dec.Drift, err == nil, err
 }

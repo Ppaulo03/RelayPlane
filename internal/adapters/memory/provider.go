@@ -38,6 +38,36 @@ type FakeProvider struct {
 	ConnectLeadsTo instance.ObservedState
 	// Caps are the advertised capabilities.
 	Caps ports.ProviderCapabilities
+	// BeforeCall, when set, runs (outside any lock) before a provider method executes;
+	// tests use it to interleave other operations at an exact point.
+	BeforeCall func(method string, a ownership.Assignment)
+
+	calls []Call
+}
+
+// Call is one recorded provider call.
+type Call struct {
+	Method     string
+	Assignment ownership.Assignment
+}
+
+// Calls returns every provider call so far, in order.
+func (f *FakeProvider) Calls() []Call {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]Call(nil), f.calls...)
+}
+
+func (f *FakeProvider) enter(method string, a ownership.Assignment) {
+	f.mu.Lock()
+	hook := f.BeforeCall
+	f.mu.Unlock()
+	if hook != nil {
+		hook(method, a)
+	}
+	f.mu.Lock()
+	f.calls = append(f.calls, Call{method, a})
+	f.mu.Unlock()
 }
 
 type fakeInst struct {
@@ -171,6 +201,7 @@ func (f *FakeProvider) Sent() []SentMessage {
 }
 
 func (f *FakeProvider) CreateInstance(_ context.Context, req ports.CreateInstanceRequest) (*ports.ProviderInstance, error) {
+	f.enter("CreateInstance", req.Assignment)
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if err := f.injected(false); err != nil {
@@ -200,6 +231,7 @@ func (f *FakeProvider) get(a ownership.Assignment) (*fakeInst, error) {
 }
 
 func (f *FakeProvider) DeleteInstance(_ context.Context, a ownership.Assignment) error {
+	f.enter("DeleteInstance", a)
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if err := f.injected(false); err != nil {
@@ -213,6 +245,7 @@ func (f *FakeProvider) DeleteInstance(_ context.Context, a ownership.Assignment)
 }
 
 func (f *FakeProvider) GetInstanceState(_ context.Context, a ownership.Assignment) (*ports.InstanceState, error) {
+	f.enter("GetInstanceState", a)
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if err := f.injected(false); err != nil {
@@ -274,6 +307,7 @@ func (f *FakeProvider) SendMessage(_ context.Context, a ownership.Assignment, m 
 func (f *FakeProvider) Capabilities(context.Context) ports.ProviderCapabilities { return f.Caps }
 
 func (f *FakeProvider) ConnectInstance(_ context.Context, a ownership.Assignment) error {
+	f.enter("ConnectInstance", a)
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if err := f.injected(false); err != nil {
@@ -291,6 +325,7 @@ func (f *FakeProvider) ConnectInstance(_ context.Context, a ownership.Assignment
 }
 
 func (f *FakeProvider) Disconnect(_ context.Context, a ownership.Assignment) error {
+	f.enter("Disconnect", a)
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if err := f.injected(false); err != nil {

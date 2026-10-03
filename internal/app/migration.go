@@ -47,14 +47,23 @@ func (s *MigrationService) Start(ctx context.Context, tenantID, instanceID strin
 	return idempotency.Do(ctx, s.d.Idem, tenantID, idemKey, "migrate_instance", hash,
 		func() string { return ids.New("op") },
 		func(ctx context.Context, opID string) (MigrateResult, error) {
-			return s.start(ctx, tenantID, instanceID, in, opID)
+			var res MigrateResult
+			var kick string
+			err := s.d.WithInstanceControl(ctx, instanceID, lockWait, func(ctx context.Context) (e error) {
+				res, kick, e = s.start(ctx, tenantID, instanceID, in, opID)
+				return e
+			})
+			if err == nil && kick != "" {
+				s.Kick(kick) // after the lock is released: Drive takes it
+			}
+			return res, err
 		})
 }
 
-func (s *MigrationService) start(ctx context.Context, tenantID, instanceID string, in MigrateInput, opID string) (MigrateResult, error) {
+func (s *MigrationService) start(ctx context.Context, tenantID, instanceID string, in MigrateInput, opID string) (MigrateResult, string, error) {
 	inst, err := s.d.loadForTenant(ctx, tenantID, instanceID)
 	if err != nil {
-		return MigrateResult{}, err
+		return MigrateResult{}, "", err
 	}
 	ctx = instanceCtx(ctx, *inst)
 
@@ -62,23 +71,22 @@ func (s *MigrationService) start(ctx context.Context, tenantID, instanceID strin
 		if existing.Status == instance.OpBlocked {
 			if _, err := s.d.Repos.Operations.Advance(ctx, existing.ID, string(ownership.StepBlocked),
 				string(ownership.StepFencingOldOwner), instance.OpRunning, ports.OperationPatch{}); err != nil {
-				return MigrateResult{}, err
+				return MigrateResult{}, "", err
 			}
-			s.Kick(existing.ID)
-			return MigrateResult{OperationID: existing.ID, Status: instance.OpRunning, Step: string(ownership.StepFencingOldOwner)}, nil
+			return MigrateResult{OperationID: existing.ID, Status: instance.OpRunning, Step: string(ownership.StepFencingOldOwner)}, existing.ID, nil
 		}
-		return MigrateResult{OperationID: existing.ID, Status: existing.Status, Step: existing.Step}, nil
+		return MigrateResult{OperationID: existing.ID, Status: existing.Status, Step: existing.Step}, "", nil
 	}
 
 	if err := s.inst.mustBeLive(inst); err != nil {
-		return MigrateResult{}, err
+		return MigrateResult{}, "", err
 	}
 	if inst.DesiredState == instance.DesiredDeleted {
-		return MigrateResult{}, fmt.Errorf("%w: instance is being deleted", errs.ErrConflict)
+		return MigrateResult{}, "", fmt.Errorf("%w: instance is being deleted", errs.ErrConflict)
 	}
 	target, err := s.chooseTarget(ctx, inst, in.TargetNodeID)
 	if err != nil {
-		return MigrateResult{}, err
+		return MigrateResult{}, "", err
 	}
 	op := instance.Operation{ID: opID, TenantID: tenantID, InstanceID: inst.ID, Type: instance.OpMigrate,
 		Status: instance.OpRunning, Step: string(ownership.StepRequested),
@@ -87,21 +95,20 @@ func (s *MigrationService) start(ctx context.Context, tenantID, instanceID strin
 		if errors.Is(err, errs.ErrInProgress) { // lost a race with a concurrent request: join its operation
 			cur, gerr := s.d.Repos.Operations.FindActive(ctx, inst.ID, instance.OpMigrate)
 			if gerr != nil {
-				return MigrateResult{}, gerr
+				return MigrateResult{}, "", gerr
 			}
-			return MigrateResult{OperationID: cur.ID, Status: cur.Status, Step: cur.Step}, nil
+			return MigrateResult{OperationID: cur.ID, Status: cur.Status, Step: cur.Step}, "", nil
 		}
 		if errors.Is(err, errs.ErrAlreadyExists) { // resumed idempotent request
 			cur, gerr := s.d.Repos.Operations.Get(ctx, opID)
 			if gerr != nil {
-				return MigrateResult{}, gerr
+				return MigrateResult{}, "", gerr
 			}
-			return MigrateResult{OperationID: cur.ID, Status: cur.Status, Step: cur.Step}, nil
+			return MigrateResult{OperationID: cur.ID, Status: cur.Status, Step: cur.Step}, "", nil
 		}
-		return MigrateResult{}, err
+		return MigrateResult{}, "", err
 	}
-	s.Kick(opID)
-	return MigrateResult{OperationID: opID, Status: instance.OpRunning, Step: op.Step}, nil
+	return MigrateResult{OperationID: opID, Status: instance.OpRunning, Step: op.Step}, opID, nil
 }
 
 // chooseTarget validates an explicit target or places the instance anew,
@@ -146,36 +153,45 @@ func (s *MigrationService) Kick(opID string) {
 	}()
 }
 
-// Drive advances a migration as far as it can go. It is safe to call from
-// several processes: a lease avoids duplicated work and every step is a
-// compare-and-set on the operation row.
+// Drive advances a migration as far as it can go while holding the
+// instance-control lock (shared with the reconciler, delete, logout, reconnect
+// and provisioning). It is safe to call from several processes: a busy
+// instance is skipped and every step is a compare-and-set on the operation row.
 func (s *MigrationService) Drive(ctx context.Context, opID string) error {
-	lease, ok, err := s.d.Locker.TryLock(ctx, "migration:"+opID, 2*time.Minute)
-	if err != nil || !ok {
+	op, err := s.d.Repos.Operations.Get(ctx, opID)
+	if err != nil {
 		return err
 	}
-	defer lease.Release(ctx) //nolint:errcheck
-	for i := 0; i < 12; i++ {
-		op, err := s.d.Repos.Operations.Get(ctx, opID)
-		if err != nil {
-			return err
-		}
-		if op.Type != instance.OpMigrate || !op.Status.IsActive() {
-			return nil
-		}
-		inst, err := s.d.Repos.Instances.Get(ctx, op.InstanceID)
-		if err != nil {
-			return err
-		}
-		progressed, err := s.step(ctx, op, inst)
-		if err != nil {
-			return err
-		}
-		if !progressed {
-			return nil
-		}
+	if op.Type != instance.OpMigrate || !op.Status.IsActive() || op.InstanceID == "" {
+		return nil
 	}
-	return nil
+	err = s.d.WithInstanceControl(ctx, op.InstanceID, 2*time.Second, func(ctx context.Context) error {
+		for i := 0; i < 12; i++ {
+			op, err := s.d.Repos.Operations.Get(ctx, opID)
+			if err != nil {
+				return err
+			}
+			if !op.Status.IsActive() {
+				return nil
+			}
+			inst, err := s.d.Repos.Instances.Get(ctx, op.InstanceID) // fresh, under the lock
+			if err != nil {
+				return err
+			}
+			progressed, err := s.step(ctx, op, inst)
+			if err != nil {
+				return err
+			}
+			if !progressed {
+				return nil
+			}
+		}
+		return nil
+	})
+	if errors.Is(err, errs.ErrInProgress) {
+		return nil // another lifecycle operation owns the instance right now; try again later
+	}
+	return err
 }
 
 func (s *MigrationService) adv(ctx context.Context, op *instance.Operation, to ownership.MigrationStep, st instance.OperationStatus, p ports.OperationPatch) error {

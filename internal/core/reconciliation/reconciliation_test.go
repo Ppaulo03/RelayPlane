@@ -72,6 +72,12 @@ func TestDecide_SkipsActiveMigration(t *testing.T) {
 	if d := Decide(i); d.Action != ActionNone {
 		t.Fatalf("must not interfere with an active migration: %+v", d)
 	}
+	// the operation row is the truth, not observed_state (which can lag behind it)
+	i2 := in(instance.DesiredConnected, instance.Connected, Observation{State: instance.Disconnected})
+	i2.MigrationActive = true
+	if d := Decide(i2); d.Action != ActionNone {
+		t.Fatalf("an active migration blocks corrective actions whatever observed_state says: %+v", d)
+	}
 	i.MigrationActive = false // blocked migration: reconcile normally
 	if d := Decide(i); d.Action == ActionNone {
 		t.Fatalf("blocked migration must not freeze the instance: %+v", d)
