@@ -12,6 +12,25 @@
 
 Portas: gateway `HTTP_PORT` (8080); worker/reconciler expõem `/metrics` e `/health/*` em `OPS_PORT` (9090).
 
+## Eventos para o tenant (webhooks de saída)
+
+O tenant se inscreve com `POST /api/v1/subscriptions {url, event_types?, instance_ids?}` e passa a receber `message.received` (com `reply_to_provider_message_id`,
+e o `timestamp` do envelope é o carimbo do **provedor**), `message.outbound_status` (`ACCEPTED`, `DELIVERED`, `READ`, `FAILED`, `UNKNOWN` das mensagens que ele enviou,
+com `accepted_at` e `sequence_no`), `message.status` e `instance.status_changed`. QR codes e violações de ownership nunca saem da plataforma.
+
+**Caminho:** a mudança de status da mensagem grava o evento na tabela `event_outbox` **na mesma transação** → o reconciler publica no bus (a cada ~1 s) → o worker (`webhook-fanout`)
+cria uma entrega por assinatura (`UNIQUE(subscription_id, event_id)`: reentrega do bus nunca duplica) → o dispatcher faz o POST assinado.
+
+* **Assinatura:** `X-RelayPlane-Signature: v1=<hex>` = HMAC-SHA256(`<timestamp>.<body>`) com o segredo `whsec_…` (mostrado só na criação e na rotação; derivado de `SUBSCRIPTION_SECRET`/`WEBHOOK_SECRET`, não fica no banco).
+  O consumidor deve rejeitar timestamps fora de ~5 min e **deduplicar por `X-RelayPlane-Event-Id`**. `POST …/rotate-secret` emite outro segredo; por 24 h as requisições levam as duas assinaturas.
+* **Garantia:** pelo menos uma vez. Retry com backoff (5 s, 30 s, 2 min, 10 min, 30 min, 1 h, 2 h, 4 h, 8 h; ±20 %) e depois **DLQ** (`GET …/deliveries?status=DEAD`, `POST /deliveries/{id}/redeliver`).
+  Circuit breaker por destino (5 falhas seguidas → pausa de 30 s…5 min, **sem gastar tentativas** dos itens na fila). Ordem: no máximo uma entrega em voo por (assinatura, instância), melhor esforço; o consumidor deve usar o `timestamp` do evento.
+* **Segurança (SSRF):** em produção a URL deve ser `https` e resolver para endereço **público**; o IP é validado **no momento da conexão** (derrota DNS rebinding), redirects nunca são seguidos, não há proxy ambiente e a resposta é lida só até 64 KiB.
+  Em desenvolvimento (`APP_ENV≠production`) `http://` e redes privadas são aceitos; force com `WEBHOOKS_ALLOW_PRIVATE_DESTINATIONS` / `WEBHOOKS_ALLOW_INSECURE`.
+* **Idempotência de envio:** a janela em que a mesma `Idempotency-Key` devolve a mesma mensagem é `IDEMPOTENCY_TTL` (padrão **24 h**, mínimo 1 min). Um cliente que reenvia depois disso cria **outra** mensagem.
+* **Operação:** métricas `relayplane_webhook_*` e `relayplane_event_outbox_published_total`; alertas `RelayPlaneWebhookDeadLetters`, `…Backlog`, `…CircuitOpen`, `RelayPlaneEventOutboxStalled`.
+  Entregas concluídas são apagadas após `WEBHOOK_DELIVERED_RETENTION` (7 d); a DLQ nunca é apagada sozinha.
+
 ## Testes de caos
 
 `make test-chaos` injeta falhas na infraestrutura real (docker compose pause/restart de Redis e PostgreSQL, workers cancelados em voo) enquanto
@@ -48,6 +67,8 @@ Medido (Docker local no Windows, 60 instâncias, 3000 mensagens, provider com 50
 Adicionar workers só ajuda até haver uma partição por worker. Para mais vazão, aumente `COMMAND_PARTITIONS` (e tenha instâncias suficientes: duas mensagens da mesma
 instância nunca são processadas em paralelo). A partição de uma instância é `fnv32a(instance_id) % N`: **mude `N` apenas com a fila vazia** (`relayplane_outbound_queue_depth` = 0);
 reduzir `N` deixa streams antigos sem consumidor.
+O `loadgen` também sobe um receptor de webhook próprio (`WEBHOOK_FAIL_RATE`, padrão 10 %, responde 500 a uma fração das requisições), assina a subscription do tenant e confere que **todo** status
+de mensagem chegou como evento, com assinatura válida, apesar das falhas injetadas e dos kills de workers (1000 mensagens, 114 respostas 500 injetadas: 1000 eventos distintos recebidos, 0 assinaturas inválidas).
 Com 6 kills em ~1 min (6000 mensagens): 5988 `ACCEPTED`, 12 `UNKNOWN`, 5999 envios no provider, 0 duplicatas, 0 fora de ordem.
 
 ## Object store (S3-compatível)

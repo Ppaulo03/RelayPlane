@@ -28,6 +28,10 @@ Deltas específicos deste repositório (o `AGENTS.md` global continua valendo).
 * **Vazão de envio = partições, não workers** (`COMMAND_PARTITIONS`, medido com `make test-load-stack`: 1, 3 e 12 workers entregam o mesmo ~170-200 msg/s a 32 partições;
   8 → 83, 128 → 325). `docker kill` não aciona a restart policy do compose (o script de caos faz `docker start` depois). O `loadgen` mede entrega pelos contadores do stub,
   não pelo polling de status (polling serial de milhares de mensagens fingia um teto).
+* **Eventos para o tenant (subscriptions):** o evento de status de uma mensagem é gravado em `event_outbox` na MESMA transação da mudança de status (`Transition`/`ApplyProviderStatus`
+  nos dois repositórios) e publicado no bus pelo reconciler; sem isso um crash entre o banco e o bus perdia o evento. O segredo de assinatura é DERIVADO (`DeriveSecret`), nunca guardado.
+  O vetor de assinatura dourado (`TestSignatureGoldenVectorMatchesThePythonSDK` / `test_webhooks.py`) precisa ser igual nos dois lados. Teste que usa `Redispatch(bg, 0, ...)` com Postgres em Docker
+  Desktop é instável (relógio do container adiantado em relação ao host): use idade negativa.
 * **Redis sem persistência:** após restart o consumer group some e `XREADGROUP` devolve `NOGROUP`; o adapter recria o grupo (queue e bus). Descoberto por
   `make test-chaos` (usa `docker compose pause/restart` nos containers de `deploy/docker/compose.infra.yml`; tmpfs do Postgres é perdido em stop/start, por isso ele só é pausado).
 * **Object store:** `minio/minio` saiu do Docker Hub (community edition em manutenção reduzida). O adapter S3 é genérico; `make test-integration-s3`

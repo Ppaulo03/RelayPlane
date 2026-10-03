@@ -20,6 +20,8 @@ import (
 	"github.com/relayplane/relayplane/internal/core/instance"
 	"github.com/relayplane/relayplane/internal/core/messaging"
 	"github.com/relayplane/relayplane/internal/core/routing"
+	"github.com/relayplane/relayplane/internal/core/subscription"
+	"github.com/relayplane/relayplane/internal/delivery"
 	"github.com/relayplane/relayplane/internal/idempotency"
 	"github.com/relayplane/relayplane/internal/observability"
 	"github.com/relayplane/relayplane/internal/ports"
@@ -52,6 +54,11 @@ type Env struct {
 	Tenant     string // primary tenant id
 	Tenant2    string
 
+	// Webhooks: the tenant-facing event delivery pipeline with a controllable receiver in place of the network.
+	Receiver   *Receiver
+	FanOut     *delivery.FanOut
+	Dispatcher *delivery.Dispatcher
+
 	ctx    context.Context
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
@@ -83,10 +90,15 @@ type RecBus struct {
 	ports.EventBus
 	mu  sync.Mutex
 	log []events.Event
+	// Down makes Publish fail (the broker is unavailable).
+	Down atomic.Bool
 }
 
 // Publish implements ports.EventBus.
 func (b *RecBus) Publish(ctx context.Context, ev events.Event) error {
+	if b.Down.Load() {
+		return errors.New("event bus unavailable")
+	}
 	if err := b.EventBus.Publish(ctx, ev); err != nil {
 		return err
 	}
@@ -146,6 +158,7 @@ func NewEnv(t *testing.T) *Env {
 	cfg := app.DefaultConfig()
 	cfg.MediaPolicy.InlineMaxBytes = InlineLimit
 	cfg.MigrationVerifyTimeout = 300 * time.Millisecond
+	cfg.Subscriptions = app.SubscriptionConfig{ServerKey: SubscriptionKey, AllowInsecureURLs: true, AllowPrivateDestinations: true}
 	idem := idempotency.NewService(e.Repos.Idempotency)
 	idem.StaleAfter = 50 * time.Millisecond
 	e.App = app.New(app.Deps{Repos: e.Repos, Providers: reg, Queue: e.Queue, Bus: e.Bus, Blob: e.Blob, Locker: e.Locker,
@@ -164,6 +177,12 @@ func NewEnv(t *testing.T) *Env {
 	rc.Policy.CreateStuckAfter = 0
 	rc.CallTimeout = 2 * time.Second
 	e.Reconciler = reconciler.New(e.App, rc, log)
+
+	e.Receiver = &Receiver{}
+	e.FanOut = &delivery.FanOut{Repos: e.Repos, Log: log, Metrics: e.Metrics}
+	e.Dispatcher = &delivery.Dispatcher{Repos: e.Repos, Sender: e.Receiver, ServerKey: SubscriptionKey, Metrics: e.Metrics, Log: log,
+		Retry: subscription.RetryPolicy{Schedule: []time.Duration{20 * time.Millisecond, 20 * time.Millisecond, 20 * time.Millisecond, 20 * time.Millisecond, 20 * time.Millisecond, 20 * time.Millisecond}},
+		Poll:  5 * time.Millisecond, Breaker: delivery.NewBreaker(1000, time.Millisecond, time.Millisecond)}
 
 	e.ctx, e.cancel = context.WithCancel(context.Background())
 	t.Cleanup(func() { e.cancel(); e.wg.Wait() })
@@ -215,6 +234,7 @@ func (e *Env) StartOutbox() {
 		defer t.Stop()
 		for {
 			_, _ = e.App.Outbox.DispatchPending(e.ctx, 100)
+			_, _ = e.App.EventOutbox.PublishPending(e.ctx, 100)
 			select {
 			case <-e.ctx.Done():
 				return

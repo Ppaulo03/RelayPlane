@@ -50,6 +50,19 @@ Legenda: ✅ feito e testado · ⚠️ feito com limitação registrada · ⏭�
 | Carga multi-processo (gateway + workers + reconciler em containers, kill -9 de workers) com verificação do lado do provider | ✅ `make test-load-stack` |
 | Carga com provider real (WhatsApp) | ⏭️ depende de números reais |
 
+## Eventos para o tenant (requisito do conversation_agent)
+
+| Item | Estado |
+|---|---|
+| Subscriptions por tenant (API, HMAC, rotação com grace, limite por tenant) | ✅ |
+| Entrega at-least-once: retry com backoff, DLQ, redelivery, circuit breaker por destino | ✅ |
+| Anti-SSRF no momento da conexão, sem redirects, resposta limitada | ✅ |
+| `reply_to_provider_message_id` e timestamp do provedor no `message.received` | ✅ |
+| `message.outbound_status` durável (outbox transacional) com `accepted_at` | ✅ |
+| `IDEMPOTENCY_TTL` configurável (padrão 24 h) | ✅ |
+| Sequência inbound confiável (`source_sequence`) | ⏭️ o provedor não expõe; o consumidor ordena pelo `timestamp` do evento |
+| Entrega estritamente ordenada por instância | ⏭️ melhor esforço (um em voo por assinatura+instância); estrita exigiria bloquear a fila atrás de uma entrega em retry |
+
 ## Limitações e riscos conhecidos (decisões conscientes)
 
 0. **CVE-2026-48063 (Baileys):** mitigado com imagem derivada (Baileys `7.0.0-rc13`), validada com a stack real (create, QR, webhooks, delete). Pendente de homologação: pareamento com número real e, a médio prazo, migrar para uma release oficial da Evolution que já traga Baileys ≥ rc12 (as tags `2.4.0-rc2`/`latest` ainda não trazem; `homolog` não migra o banco).

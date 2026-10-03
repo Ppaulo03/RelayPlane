@@ -1,0 +1,332 @@
+// Package delivery moves tenant-facing events from the event bus to the tenants' webhook destinations:
+//
+//	EventBus --FanOut--> webhook_deliveries --Dispatcher--> signed POST (at-least-once, retries, DLQ)
+//
+// Guarantees: a delivery row is created once per (subscription, event) however many times the bus redelivers the
+// event; a delivery is retried with backoff until it succeeds or lands in the DLQ; a destination that keeps failing
+// is shielded by a circuit breaker so it cannot consume the worker; the consumer must dedupe by event id.
+package delivery
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"log/slog"
+	"math/rand"
+	"net/url"
+	"strconv"
+	"sync"
+	"time"
+
+	"github.com/relayplane/relayplane/internal/core/errs"
+	"github.com/relayplane/relayplane/internal/core/events"
+	"github.com/relayplane/relayplane/internal/core/ids"
+	"github.com/relayplane/relayplane/internal/core/subscription"
+	"github.com/relayplane/relayplane/internal/observability"
+	"github.com/relayplane/relayplane/internal/ports"
+)
+
+// FanOut is the EventBus consumer that turns one event into one delivery per matching subscription.
+type FanOut struct {
+	Repos   ports.Repositories
+	Log     *slog.Logger
+	Now     func() time.Time
+	Metrics *observability.Metrics
+}
+
+// Handle is the ports.EventHandler of the "webhook-fanout" consumer group. Returning an error makes the bus
+// redeliver the event; Enqueue is idempotent, so that is always safe.
+func (f *FanOut) Handle(ctx context.Context, ev events.Event) error {
+	if !subscription.TenantFacing(ev.EventType) || ev.TenantID == "" {
+		return nil
+	}
+	subs, err := f.Repos.Subscriptions.ListActive(ctx, ev.TenantID)
+	if err != nil {
+		return err
+	}
+	now := time.Now()
+	if f.Now != nil {
+		now = f.Now()
+	}
+	var ds []subscription.Delivery
+	for _, s := range subs {
+		if !s.Matches(ev) {
+			continue
+		}
+		ds = append(ds, subscription.Delivery{ID: ids.New("dlv"), SubscriptionID: s.ID, TenantID: ev.TenantID, InstanceID: ev.InstanceID,
+			EventID: ev.EventID, EventType: ev.EventType, Event: ev, Status: subscription.DeliveryPending, CreatedAt: now.UTC(), NextAttemptAt: now.UTC()})
+	}
+	if len(ds) == 0 {
+		return nil
+	}
+	_, err = f.Repos.Deliveries.Enqueue(ctx, ds)
+	return err
+}
+
+// Dispatcher claims due deliveries and POSTs them.
+type Dispatcher struct {
+	Repos     ports.Repositories
+	Sender    ports.WebhookSender
+	ServerKey []byte
+	Retry     subscription.RetryPolicy
+	Metrics   *observability.Metrics
+	Log       *slog.Logger
+	Now       func() time.Time
+	// Rand returns a number in [0,1) for retry jitter (default math/rand).
+	Rand func() float64
+
+	BatchSize      int           // deliveries claimed per pass (default 50)
+	Concurrency    int           // parallel POSTs (default 8)
+	Lease          time.Duration // how long a claimed delivery is exclusive (default 1m)
+	RequestTimeout time.Duration // per POST (default 5s)
+	Poll           time.Duration // pause when idle (default 250ms)
+
+	Breaker *Breaker
+}
+
+func (d *Dispatcher) now() time.Time {
+	if d.Now != nil {
+		return d.Now()
+	}
+	return time.Now()
+}
+
+func (d *Dispatcher) defaults() {
+	if d.BatchSize <= 0 {
+		d.BatchSize = 50
+	}
+	if d.Concurrency <= 0 {
+		d.Concurrency = 8
+	}
+	if d.Lease <= 0 {
+		d.Lease = time.Minute
+	}
+	if d.RequestTimeout <= 0 {
+		d.RequestTimeout = 5 * time.Second
+	}
+	if d.Poll <= 0 {
+		d.Poll = 250 * time.Millisecond
+	}
+	if d.Rand == nil {
+		d.Rand = rand.Float64
+	}
+	if d.Breaker == nil {
+		d.Breaker = NewBreaker(5, 30*time.Second, 5*time.Minute)
+	}
+	if len(d.Retry.Schedule) == 0 {
+		d.Retry = subscription.DefaultRetry()
+	}
+	if d.Log == nil {
+		d.Log = slog.Default()
+	}
+	if d.Metrics == nil {
+		d.Metrics = observability.NewMetrics()
+	}
+}
+
+// Run dispatches until ctx is cancelled.
+func (d *Dispatcher) Run(ctx context.Context) {
+	d.defaults()
+	for ctx.Err() == nil {
+		n, err := d.RunOnce(ctx)
+		if err != nil && ctx.Err() == nil {
+			d.Log.WarnContext(ctx, "webhook dispatch pass failed", "error", err)
+		}
+		if n == 0 {
+			select {
+			case <-ctx.Done():
+			case <-time.After(d.Poll):
+			}
+		}
+	}
+}
+
+// RunOnce claims and processes one batch; it returns how many deliveries were handled.
+func (d *Dispatcher) RunOnce(ctx context.Context) (int, error) {
+	d.defaults()
+	claimed, err := d.Repos.Deliveries.ClaimDue(ctx, d.now(), d.Lease, d.BatchSize)
+	if err != nil || len(claimed) == 0 {
+		return 0, err
+	}
+	sem := make(chan struct{}, d.Concurrency)
+	var wg sync.WaitGroup
+	for _, dl := range claimed {
+		sem <- struct{}{}
+		wg.Add(1)
+		go func(dl subscription.Delivery) {
+			defer func() { <-sem; wg.Done() }()
+			d.process(ctx, dl)
+		}(dl)
+	}
+	wg.Wait()
+	d.Metrics.WebhookBreakersOpen.Set(float64(d.Breaker.OpenCount(d.now())))
+	return len(claimed), nil
+}
+
+func (d *Dispatcher) process(ctx context.Context, dl subscription.Delivery) {
+	ctx = observability.With(ctx, observability.KeyTenantID, dl.TenantID, observability.KeyInstanceID, dl.InstanceID)
+	ctx, span := observability.Start(ctx, "webhook.deliver")
+	defer span.End()
+	rctx := context.WithoutCancel(ctx) // bookkeeping must survive a shutdown that interrupts the POST
+
+	sub, err := d.Repos.Subscriptions.GetByID(rctx, dl.SubscriptionID)
+	if err != nil || !sub.Active {
+		_ = d.Repos.Deliveries.MarkDead(rctx, dl.ID, "subscription removed or inactive")
+		d.Metrics.WebhookDeliveries.WithLabelValues("dead").Inc()
+		return
+	}
+	host := hostOf(sub.URL)
+	now := d.now()
+	if until, open := d.Breaker.Check(host, now); open {
+		// the destination is known to be failing: wait without spending the delivery's retry budget
+		_ = d.Repos.Deliveries.Postpone(rctx, dl.ID, until)
+		d.Metrics.WebhookDeliveries.WithLabelValues("postponed").Inc()
+		return
+	}
+
+	body, err := json.Marshal(dl.Event)
+	if err != nil {
+		_ = d.Repos.Deliveries.MarkDead(rctx, dl.ID, "event not serializable: "+err.Error())
+		return
+	}
+	ts := now.Unix()
+	var sigs []string
+	for _, sec := range subscription.SigningSecrets(d.ServerKey, *sub, now) {
+		sigs = append(sigs, subscription.Sign(sec, ts, body))
+	}
+	req := ports.WebhookRequest{URL: sub.URL, Body: body, Timeout: d.RequestTimeout, Headers: map[string]string{
+		"Content-Type":               "application/json",
+		"User-Agent":                 "RelayPlane-Webhooks/1",
+		subscription.HeaderEventID:   dl.EventID,
+		subscription.HeaderEventType: string(dl.EventType),
+		subscription.HeaderTimestamp: strconv.FormatInt(ts, 10),
+		subscription.HeaderSignature: subscription.SignatureHeader(sigs...),
+		subscription.HeaderAttempt:   strconv.Itoa(dl.Attempts + 1),
+	}}
+	start := time.Now()
+	status, serr := d.Sender.Send(ctx, req)
+	d.Metrics.WebhookLatency.Observe(time.Since(start).Seconds())
+
+	switch {
+	case serr == nil && status >= 200 && status < 300:
+		d.Breaker.Success(host)
+		if err := d.Repos.Deliveries.MarkDelivered(rctx, dl.ID, d.now()); err != nil {
+			d.Log.ErrorContext(ctx, "could not record a delivered webhook (it will be sent again)", "delivery_id", dl.ID, "error", err)
+			return
+		}
+		d.Metrics.WebhookDeliveries.WithLabelValues("delivered").Inc()
+	case errors.Is(serr, errs.ErrDestinationBlocked):
+		// permanent: no retry can make a forbidden destination acceptable
+		_ = d.Repos.Deliveries.MarkDead(rctx, dl.ID, serr.Error())
+		d.Metrics.WebhookDeliveries.WithLabelValues("dead").Inc()
+		d.Log.WarnContext(ctx, "webhook destination refused", "subscription_id", sub.ID, "error", serr)
+	default:
+		d.Breaker.Failure(host, d.now())
+		msg := failureText(status, serr)
+		if delay, ok := d.Retry.Next(dl.Attempts+1, d.Rand()); ok {
+			_ = d.Repos.Deliveries.MarkRetry(rctx, dl.ID, d.now().Add(delay), msg)
+			d.Metrics.WebhookDeliveries.WithLabelValues("retry").Inc()
+			return
+		}
+		_ = d.Repos.Deliveries.MarkDead(rctx, dl.ID, msg)
+		d.Metrics.WebhookDeliveries.WithLabelValues("dead").Inc()
+		d.Log.WarnContext(ctx, "webhook delivery exhausted its retries (DLQ)", "subscription_id", sub.ID, "delivery_id", dl.ID, "error", msg)
+	}
+}
+
+func failureText(status int, err error) string {
+	if err != nil {
+		t := err.Error()
+		if len(t) > 300 {
+			t = t[:300]
+		}
+		return "transport error: " + t
+	}
+	return fmt.Sprintf("http %d", status)
+}
+
+func hostOf(raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return raw
+	}
+	return u.Host
+}
+
+// ---- circuit breaker ----
+
+// Breaker opens a destination after `threshold` consecutive failures and keeps it open for an exponentially
+// growing cool-down (base .. max). While open, deliveries are postponed without counting an attempt, so one dead
+// endpoint cannot burn the retry budgets of everything queued for it nor occupy the dispatcher's concurrency.
+// State is per process (each worker protects itself); that is deliberate: it needs no coordination.
+type Breaker struct {
+	threshold int
+	base, max time.Duration
+	mu        sync.Mutex
+	hosts     map[string]*breakerState
+}
+
+type breakerState struct {
+	failures int
+	trips    int
+	openTill time.Time
+}
+
+// NewBreaker returns a breaker.
+func NewBreaker(threshold int, base, max time.Duration) *Breaker {
+	return &Breaker{threshold: threshold, base: base, max: max, hosts: map[string]*breakerState{}}
+}
+
+// Check reports whether the destination is open and until when. After the cool-down it lets requests through again
+// ("half-open"): the next success closes it, the next failure re-opens it for longer.
+func (b *Breaker) Check(host string, now time.Time) (time.Time, bool) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	s := b.hosts[host]
+	if s == nil || !now.Before(s.openTill) {
+		return time.Time{}, false
+	}
+	return s.openTill, true
+}
+
+// Failure records a failed attempt.
+func (b *Breaker) Failure(host string, now time.Time) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	s := b.hosts[host]
+	if s == nil {
+		s = &breakerState{}
+		b.hosts[host] = s
+	}
+	s.failures++
+	if s.failures >= b.threshold {
+		cool := b.base << s.trips
+		if cool > b.max || cool <= 0 {
+			cool = b.max
+		}
+		s.trips++
+		s.openTill = now.Add(cool)
+		s.failures = b.threshold - 1 // half-open: one more failure re-opens it
+	}
+}
+
+// Success closes the destination.
+func (b *Breaker) Success(host string) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	delete(b.hosts, host)
+}
+
+// OpenCount is how many destinations are currently open.
+func (b *Breaker) OpenCount(now time.Time) int {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	n := 0
+	for _, s := range b.hosts {
+		if now.Before(s.openTill) {
+			n++
+		}
+	}
+	return n
+}

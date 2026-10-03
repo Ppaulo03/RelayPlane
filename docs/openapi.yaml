@@ -13,6 +13,7 @@ tags:
   - {name: instances}
   - {name: messages}
   - {name: operations}
+  - {name: subscriptions, description: Webhook delivery of events to your system}
   - {name: media}
   - {name: admin, description: Requires the admin key}
   - {name: ops}
@@ -131,6 +132,66 @@ paths:
       responses:
         '200': {description: OK, content: {application/json: {schema: {$ref: '#/components/schemas/Message'}}}}
         '409': {$ref: '#/components/responses/Error'}
+  /api/v1/subscriptions:
+    post:
+      tags: [subscriptions]
+      summary: Subscribe a URL to your events (message.received, message.outbound_status, ...)
+      description: |
+        RelayPlane POSTs each event to `url` signed with HMAC-SHA256 (`X-RelayPlane-Signature: v1=<hex>` over `<timestamp>.<body>`,
+        `X-RelayPlane-Timestamp`, `X-RelayPlane-Event-Id`, `X-RelayPlane-Event-Type`). Delivery is at-least-once with retries
+        (up to 10 attempts over ~16 h) and a dead-letter queue; deduplicate by `event_id`. The signing secret is returned ONLY here
+        and on rotation. In production the URL must be https and resolve to a public address (checked again at delivery time).
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/CreateSubscription'}}}}
+      responses:
+        '201': {description: Created (includes the one-time `secret`), content: {application/json: {schema: {$ref: '#/components/schemas/Subscription'}}}}
+        '400': {$ref: '#/components/responses/Error'}
+        '409': {$ref: '#/components/responses/Error'}   # subscription limit per tenant reached
+    get:
+      tags: [subscriptions]
+      responses:
+        '200': {description: OK, content: {application/json: {schema: {type: object, properties: {subscriptions: {type: array, items: {$ref: '#/components/schemas/Subscription'}}}}}}}
+  /api/v1/subscriptions/{id}:
+    parameters: [{$ref: '#/components/parameters/Id'}]
+    get:
+      tags: [subscriptions]
+      responses:
+        '200': {description: OK, content: {application/json: {schema: {$ref: '#/components/schemas/Subscription'}}}}
+        '404': {$ref: '#/components/responses/Error'}
+    delete:
+      tags: [subscriptions]
+      summary: Delete the subscription and its pending deliveries
+      responses:
+        '204': {description: Deleted}
+        '404': {$ref: '#/components/responses/Error'}
+  /api/v1/subscriptions/{id}/rotate-secret:
+    parameters: [{$ref: '#/components/parameters/Id'}]
+    post:
+      tags: [subscriptions]
+      summary: Issue a new signing secret; the previous one keeps signing for 24 h (both signatures are sent)
+      responses:
+        '200': {description: OK (includes the new one-time `secret`), content: {application/json: {schema: {$ref: '#/components/schemas/Subscription'}}}}
+        '404': {$ref: '#/components/responses/Error'}
+  /api/v1/subscriptions/{id}/deliveries:
+    parameters: [{$ref: '#/components/parameters/Id'}]
+    get:
+      tags: [subscriptions]
+      summary: Delivery log of the subscription (`status=DEAD` is the dead-letter queue)
+      parameters:
+        - {name: status, in: query, schema: {type: string, enum: [PENDING, DELIVERED, DEAD]}}
+        - {name: limit, in: query, schema: {type: integer, minimum: 1, maximum: 200, default: 50}}
+      responses:
+        '200': {description: OK, content: {application/json: {schema: {type: object, properties: {deliveries: {type: array, items: {$ref: '#/components/schemas/WebhookDelivery'}}}}}}}
+        '400': {$ref: '#/components/responses/Error'}
+        '404': {$ref: '#/components/responses/Error'}
+  /api/v1/deliveries/{id}/redeliver:
+    parameters: [{$ref: '#/components/parameters/Id'}]
+    post:
+      tags: [subscriptions]
+      summary: Send a dead-lettered delivery again with a fresh retry budget
+      responses:
+        '202': {description: Accepted}
+        '404': {$ref: '#/components/responses/Error'}
+        '409': {$ref: '#/components/responses/Error'}   # only DEAD deliveries can be redelivered
   /api/v1/operations/{id}:
     parameters: [{$ref: '#/components/parameters/Id'}]
     get:
@@ -293,6 +354,41 @@ components:
     SendResponse:
       type: object
       properties: {message_id: {type: string}, status: {type: string, enum: [QUEUED]}}
+    CreateSubscription:
+      type: object
+      required: [url]
+      additionalProperties: false
+      properties:
+        url: {type: string, format: uri}
+        event_types:
+          type: array
+          description: Empty = every tenant-facing event
+          items: {type: string, enum: [message.received, message.outbound_status, message.status, instance.status_changed]}
+        instance_ids: {type: array, items: {type: string}, description: Empty = every instance of the tenant}
+    Subscription:
+      type: object
+      properties:
+        id: {type: string}
+        url: {type: string}
+        event_types: {type: array, items: {type: string}}
+        instance_ids: {type: array, items: {type: string}}
+        active: {type: boolean}
+        created_at: {type: string, format: date-time}
+        secret: {type: string, description: "whsec_... shown only on creation and rotation"}
+        previous_secret_valid_until: {type: string, format: date-time}
+    WebhookDelivery:
+      type: object
+      properties:
+        id: {type: string}
+        event_id: {type: string}
+        event_type: {type: string}
+        instance_id: {type: string}
+        status: {type: string, enum: [PENDING, DELIVERED, DEAD]}
+        attempts: {type: integer}
+        next_attempt_at: {type: string, format: date-time}
+        last_error: {type: string}
+        created_at: {type: string, format: date-time}
+        delivered_at: {type: string, format: date-time}
     Message:
       type: object
       properties:

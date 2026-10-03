@@ -302,3 +302,100 @@ func TestMediaUploadHardCap(t *testing.T) {
 		t.Fatal("a rejected upload left an object behind")
 	}
 }
+
+func TestSubscriptionsAPI(t *testing.T) {
+	h := newHarness(t)
+	if c, _, _ := h.call("POST", "/api/v1/subscriptions", "", `{"url":"http://agent.local/h"}`); c != 401 {
+		t.Errorf("no key: %d", c)
+	}
+	if c, _, _ := h.call("POST", "/api/v1/subscriptions", h.admin, `{"url":"http://agent.local/h"}`); c != 403 {
+		t.Errorf("admin keys are not tenants: %d", c)
+	}
+
+	c, sub, _ := h.call("POST", "/api/v1/subscriptions", h.key1, `{"url":"http://agent.local/h","event_types":["message.received","message.outbound_status"]}`)
+	if c != 201 {
+		t.Fatalf("create: %d %v", c, sub)
+	}
+	id, _ := sub["id"].(string)
+	secret, _ := sub["secret"].(string)
+	if id == "" || !strings.HasPrefix(secret, "whsec_") {
+		t.Fatalf("the signing secret is shown once, at creation: %v", sub)
+	}
+	types, _ := sub["event_types"].([]any)
+	if len(types) != 2 || sub["active"] != true {
+		t.Errorf("view: %v", sub)
+	}
+
+	// the secret is never shown again
+	_, got, _ := h.call("GET", "/api/v1/subscriptions/"+id, h.key1, "")
+	if _, leaked := got["secret"]; leaked || got["url"] != "http://agent.local/h" {
+		t.Errorf("GET must not expose the secret: %v", got)
+	}
+	_, list, _ := h.call("GET", "/api/v1/subscriptions", h.key1, "")
+	if raw, _ := json.Marshal(list); strings.Contains(string(raw), "whsec_") {
+		t.Errorf("LIST leaked a secret: %s", raw)
+	}
+
+	// tenant isolation: another tenant sees nothing and can change nothing
+	for _, call := range [][3]string{{"GET", "/api/v1/subscriptions/" + id, ""}, {"DELETE", "/api/v1/subscriptions/" + id, ""},
+		{"POST", "/api/v1/subscriptions/" + id + "/rotate-secret", ""}, {"GET", "/api/v1/subscriptions/" + id + "/deliveries", ""}} {
+		if c, _, _ := h.call(call[0], call[1], h.key2, call[2]); c != 404 {
+			t.Errorf("TENANT ISOLATION %s %s: %d", call[0], call[1], c)
+		}
+	}
+	if _, l2, _ := h.call("GET", "/api/v1/subscriptions", h.key2, ""); len(l2["subscriptions"].([]any)) != 0 {
+		t.Errorf("TENANT ISOLATION on list: %v", l2)
+	}
+
+	// validation
+	for name, body := range map[string]string{
+		"scheme":        `{"url":"ftp://agent.local/h"}`,
+		"credentials":   `{"url":"http://user:pw@agent.local/h"}`,
+		"event type":    `{"url":"http://agent.local/h","event_types":["instance.qrcode_updated"]}`,
+		"unknown field": `{"url":"http://agent.local/h","secret":"mine"}`,
+		"foreign inst":  `{"url":"http://agent.local/h","instance_ids":["inst_does_not_exist"]}`,
+	} {
+		if c, _, _ := h.call("POST", "/api/v1/subscriptions", h.key1, body); c != 400 {
+			t.Errorf("%s must be rejected with 400, got %d", name, c)
+		}
+	}
+
+	// rotation: a new secret, the old one stays valid only for the grace period
+	c, rot, _ := h.call("POST", "/api/v1/subscriptions/"+id+"/rotate-secret", h.key1, "")
+	if c != 200 || rot["secret"] == secret || !strings.HasPrefix(rot["secret"].(string), "whsec_") || rot["previous_secret_valid_until"] == nil {
+		t.Errorf("rotate: %d %v", c, rot)
+	}
+
+	_, dl, _ := h.call("GET", "/api/v1/subscriptions/"+id+"/deliveries?status=DEAD", h.key1, "")
+	if ds, ok := dl["deliveries"].([]any); !ok || len(ds) != 0 {
+		t.Errorf("deliveries: %v", dl)
+	}
+	if c, _, _ := h.call("GET", "/api/v1/subscriptions/"+id+"/deliveries?status=BOGUS", h.key1, ""); c != 400 {
+		t.Errorf("unknown status: %d", c)
+	}
+	if c, _, _ := h.call("POST", "/api/v1/deliveries/dlv_nope/redeliver", h.key1, ""); c != 404 {
+		t.Errorf("redeliver unknown: %d", c)
+	}
+
+	if c, _, _ := h.call("DELETE", "/api/v1/subscriptions/"+id, h.key1, ""); c != 204 {
+		t.Errorf("delete: %d", c)
+	}
+	if c, _, _ := h.call("GET", "/api/v1/subscriptions/"+id, h.key1, ""); c != 404 {
+		t.Errorf("deleted: %d", c)
+	}
+}
+
+func TestSubscriptionsPerTenantLimit(t *testing.T) {
+	h := newHarness(t)
+	for i := 0; i < 10; i++ { // the default limit
+		if c, _, _ := h.call("POST", "/api/v1/subscriptions", h.key1, `{"url":"http://agent.local/h"}`); c != 201 {
+			t.Fatalf("create %d: %d", i, c)
+		}
+	}
+	if c, _, _ := h.call("POST", "/api/v1/subscriptions", h.key1, `{"url":"http://agent.local/h"}`); c != 409 {
+		t.Errorf("over the limit: %d", c)
+	}
+	if c, _, _ := h.call("POST", "/api/v1/subscriptions", h.key2, `{"url":"http://agent.local/h"}`); c != 201 {
+		t.Errorf("the limit is per tenant: %d", c)
+	}
+}

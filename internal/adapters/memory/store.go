@@ -17,6 +17,7 @@ import (
 	"github.com/relayplane/relayplane/internal/core/messaging"
 	"github.com/relayplane/relayplane/internal/core/ownership"
 	"github.com/relayplane/relayplane/internal/core/routing"
+	"github.com/relayplane/relayplane/internal/core/subscription"
 	"github.com/relayplane/relayplane/internal/ports"
 )
 
@@ -37,6 +38,9 @@ type Store struct {
 	dedup       map[string]dedupRow
 	nextSeq     map[string]int64
 	outbox      []*messaging.OutboxEntry
+	eventOutbox []*outboxEvent
+	subs        map[string]*subscription.Subscription
+	deliveries  map[string]*deliveryRow
 
 	// BeforeCommit lets failure tests inject a fault into multi-step writes
 	// (simulating a transaction rollback). Return an error to abort.
@@ -63,6 +67,8 @@ func NewStore() *Store {
 		blobs:       map[string]*media.Blob{},
 		idem:        map[string]ports.IdempotencyRecord{},
 		dedup:       map[string]dedupRow{},
+		subs:        map[string]*subscription.Subscription{},
+		deliveries:  map[string]*deliveryRow{},
 		nextSeq:     map[string]int64{},
 	}
 }
@@ -73,6 +79,7 @@ func (s *Store) Repositories() ports.Repositories {
 		Tenants: tenantRepo{s}, Instances: instanceRepo{s}, Nodes: nodeRepo{s},
 		Operations: opRepo{s}, Messages: msgRepo{s}, Blobs: blobRepo{s},
 		Idempotency: idemRepo{s}, Dedup: dedupRepo{s},
+		Events: eventsRepo{s}, Subscriptions: subsRepo{s}, Deliveries: deliveriesRepo{s},
 	}
 }
 
@@ -680,6 +687,9 @@ func (r msgRepo) Transition(_ context.Context, id string, from []messaging.Statu
 		return nil, fmt.Errorf("%w: message %s -> %s", errs.ErrInvalidTransition, m.Status, to)
 	}
 	m.Status, m.UpdatedAt = to, r.s.Now()
+	if to == messaging.StatusAccepted {
+		m.AcceptedAt = m.UpdatedAt
+	}
 	if p.ProviderMessageID != "" {
 		m.ProviderMessageID = p.ProviderMessageID
 	}
@@ -689,6 +699,7 @@ func (r msgRepo) Transition(_ context.Context, id string, from []messaging.Statu
 	if p.BumpAttempt {
 		m.AttemptCount++
 	}
+	r.s.emitOutbound(m)
 	c := *m
 	return &c, nil
 }
@@ -710,6 +721,7 @@ func (r msgRepo) ApplyProviderStatus(_ context.Context, instanceID, pmid string,
 				return false, nil
 			}
 			m.Status, m.ErrorCode, m.ErrorMessage, m.UpdatedAt = to, "PROVIDER_FAILED", "provider reported the message as failed", r.s.Now()
+			r.s.emitOutbound(m)
 			return true, nil
 		}
 		cur, okc := statusRank[m.Status]
@@ -718,6 +730,7 @@ func (r msgRepo) ApplyProviderStatus(_ context.Context, instanceID, pmid string,
 			return false, nil
 		}
 		m.Status, m.UpdatedAt = to, r.s.Now()
+		r.s.emitOutbound(m)
 		return true, nil
 	}
 	return false, errs.ErrNotFound

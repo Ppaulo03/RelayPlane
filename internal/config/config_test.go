@@ -54,3 +54,43 @@ func TestLoadDefaultsNodeProviderAndAllowedVersions(t *testing.T) {
 		t.Fatalf("%+v", c)
 	}
 }
+
+func TestWebhookDestinationsAreStrictOutsideDevelopment(t *testing.T) {
+	t.Setenv("APP_ENV", "production")
+	c, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.WebhooksAllowPrivate || c.WebhooksAllowInsecure {
+		t.Fatalf("production must default to https + public destinations only: %+v", c)
+	}
+	t.Setenv("APP_ENV", "development")
+	if c, _ = Load(); !c.WebhooksAllowPrivate || !c.WebhooksAllowInsecure {
+		t.Errorf("development lets the agent run on a private docker network over http: %+v", c)
+	}
+	t.Setenv("APP_ENV", "production")
+	t.Setenv("WEBHOOKS_ALLOW_PRIVATE_DESTINATIONS", "true")
+	if c, _ = Load(); !c.WebhooksAllowPrivate {
+		t.Error("an operator can opt in explicitly")
+	}
+}
+
+func TestTenantWebhookAndIdempotencySettings(t *testing.T) {
+	c, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.IdempotencyTTL.Hours() != 24 || c.WebhooksMaxPerTenant != 10 || c.WebhookDeliveryWorkers != 8 || c.WebhookDeliveredRetention.Hours() != 7*24 {
+		t.Errorf("defaults: %+v", c)
+	}
+	v := valid()
+	v.IdempotencyTTL = 5 * 1e9 // 5s
+	if err := v.Validate(); err == nil {
+		t.Error("an idempotency window under a minute defeats safe client retries")
+	}
+	v = valid()
+	v.Env, v.SubscriptionSecret = "production", "short"
+	if err := v.Validate(); err == nil || strings.Contains(err.Error(), "short") {
+		t.Errorf("a short subscription secret is rejected without being echoed: %v", err)
+	}
+}
