@@ -1,0 +1,322 @@
+openapi: 3.0.3
+info:
+  title: RelayPlane API
+  version: 0.1.0
+  description: >
+    Control plane for stateful messaging sessions. The tenant is derived from the API key; payloads never carry a tenant id.
+    The API is provider-agnostic: it exposes no provider, node or epoch details.
+servers:
+  - url: http://localhost:8080
+security:
+  - bearerAuth: []
+tags:
+  - {name: instances}
+  - {name: messages}
+  - {name: operations}
+  - {name: media}
+  - {name: admin, description: Requires the admin key}
+  - {name: ops}
+paths:
+  /api/v1/instances:
+    post:
+      tags: [instances]
+      summary: Create an instance (automatic placement)
+      parameters: [{$ref: '#/components/parameters/IdempotencyKey'}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/CreateInstanceRequest'}
+      responses:
+        '201': {description: Created, headers: {Idempotent-Replayed: {$ref: '#/components/headers/Replayed'}}, content: {application/json: {schema: {$ref: '#/components/schemas/CreateInstanceResponse'}}}}
+        '202': {description: Accepted; provisioning continues (status CREATING), content: {application/json: {schema: {$ref: '#/components/schemas/CreateInstanceResponse'}}}}
+        '400': {$ref: '#/components/responses/Error'}
+        '422': {$ref: '#/components/responses/Error'}
+        '503': {$ref: '#/components/responses/Error'}
+    get:
+      tags: [instances]
+      summary: List the tenant's instances
+      responses:
+        '200': {description: OK, content: {application/json: {schema: {type: object, properties: {instances: {type: array, items: {$ref: '#/components/schemas/Instance'}}}}}}}
+  /api/v1/instances/{id}:
+    parameters: [{$ref: '#/components/parameters/Id'}]
+    get:
+      tags: [instances]
+      responses:
+        '200': {description: OK, content: {application/json: {schema: {$ref: '#/components/schemas/Instance'}}}}
+        '404': {$ref: '#/components/responses/Error'}
+    delete:
+      tags: [instances]
+      summary: Request deletion (desired_state=DELETED); the reconciler converges if the node is unavailable
+      parameters: [{$ref: '#/components/parameters/IdempotencyKey'}]
+      responses:
+        '202': {description: Accepted, content: {application/json: {schema: {$ref: '#/components/schemas/OperationRef'}}}}
+        '404': {$ref: '#/components/responses/Error'}
+  /api/v1/instances/{id}/qrcode:
+    parameters: [{$ref: '#/components/parameters/Id'}]
+    get:
+      tags: [instances]
+      summary: Pairing QR (never cached)
+      responses:
+        '200': {description: OK, content: {application/json: {schema: {$ref: '#/components/schemas/Pairing'}}}}
+        '409': {$ref: '#/components/responses/Error'}
+        '501': {$ref: '#/components/responses/Error'}
+  /api/v1/instances/{id}/pairing-code:
+    parameters: [{$ref: '#/components/parameters/Id'}]
+    get:
+      tags: [instances]
+      responses:
+        '200': {description: OK, content: {application/json: {schema: {$ref: '#/components/schemas/Pairing'}}}}
+        '501': {$ref: '#/components/responses/Error'}
+  /api/v1/instances/{id}/reconnect:
+    parameters: [{$ref: '#/components/parameters/Id'}]
+    post:
+      tags: [instances]
+      responses:
+        '200': {description: OK, content: {application/json: {schema: {$ref: '#/components/schemas/OperationRef'}}}}
+  /api/v1/instances/{id}/logout:
+    parameters: [{$ref: '#/components/parameters/Id'}]
+    post:
+      tags: [instances]
+      responses:
+        '200': {description: OK, content: {application/json: {schema: {$ref: '#/components/schemas/OperationRef'}}}}
+  /api/v1/instances/{id}/migrate:
+    parameters: [{$ref: '#/components/parameters/Id'}]
+    post:
+      tags: [instances]
+      summary: Migrate to another node (physical fencing before the new owner; MIGRATION_BLOCKED if fencing fails)
+      parameters: [{$ref: '#/components/parameters/IdempotencyKey'}]
+      requestBody:
+        content:
+          application/json:
+            schema: {type: object, properties: {target_node_id: {type: string}}, additionalProperties: false}
+      responses:
+        '202': {description: Accepted, content: {application/json: {schema: {$ref: '#/components/schemas/MigrateResponse'}}}}
+        '409': {$ref: '#/components/responses/Error'}
+        '503': {$ref: '#/components/responses/Error'}
+  /api/v1/instances/{id}/rate-policy:
+    parameters: [{$ref: '#/components/parameters/Id'}]
+    put:
+      tags: [instances]
+      summary: Instance-level rate policy override (0 fields inherit)
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/RatePolicy'}}}}
+      responses:
+        '200': {description: OK, content: {application/json: {schema: {$ref: '#/components/schemas/RatePolicy'}}}}
+  /api/v1/messages/send:
+    post:
+      tags: [messages]
+      summary: Enqueue an outbound message (asynchronous, ordered per instance)
+      parameters: [{$ref: '#/components/parameters/IdempotencyKey'}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/SendRequest'}}}}
+      responses:
+        '202': {description: Queued, headers: {Idempotent-Replayed: {$ref: '#/components/headers/Replayed'}}, content: {application/json: {schema: {$ref: '#/components/schemas/SendResponse'}}}}
+        '400': {$ref: '#/components/responses/Error'}
+        '404': {$ref: '#/components/responses/Error'}
+        '409': {$ref: '#/components/responses/Error'}
+        '413': {$ref: '#/components/responses/Error'}
+        '422': {$ref: '#/components/responses/Error'}
+  /api/v1/messages/{id}:
+    parameters: [{$ref: '#/components/parameters/Id'}]
+    get:
+      tags: [messages]
+      responses:
+        '200': {description: OK, content: {application/json: {schema: {$ref: '#/components/schemas/Message'}}}}
+        '404': {$ref: '#/components/responses/Error'}
+  /api/v1/operations/{id}:
+    parameters: [{$ref: '#/components/parameters/Id'}]
+    get:
+      tags: [operations]
+      responses:
+        '200': {description: OK, content: {application/json: {schema: {$ref: '#/components/schemas/Operation'}}}}
+        '404': {$ref: '#/components/responses/Error'}
+  /api/v1/media/uploads:
+    post:
+      tags: [media]
+      summary: Declare an upload (Claim-Check). Binary content never travels through the broker.
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/UploadRequest'}}}}
+      responses:
+        '201': {description: Created, content: {application/json: {schema: {$ref: '#/components/schemas/UploadTicket'}}}}
+  /api/v1/media/{id}/content:
+    parameters: [{$ref: '#/components/parameters/Id'}]
+    put:
+      tags: [media]
+      summary: Stream the content through the gateway (size and SHA-256 are verified)
+      requestBody: {required: true, content: {application/octet-stream: {schema: {type: string, format: binary}}}}
+      responses:
+        '200': {description: READY, content: {application/json: {schema: {$ref: '#/components/schemas/Media'}}}}
+        '400': {$ref: '#/components/responses/Error'}
+  /api/v1/media/{id}/complete:
+    parameters: [{$ref: '#/components/parameters/Id'}]
+    post:
+      tags: [media]
+      summary: Verify an object uploaded directly with the signed URL
+      responses:
+        '200': {description: READY, content: {application/json: {schema: {$ref: '#/components/schemas/Media'}}}}
+  /api/v1/media/{id}:
+    parameters: [{$ref: '#/components/parameters/Id'}]
+    get:
+      tags: [media]
+      responses:
+        '200': {description: OK, content: {application/json: {schema: {$ref: '#/components/schemas/Media'}}}}
+    delete:
+      tags: [media]
+      responses:
+        '204': {description: Deleted}
+  /api/v1/nodes:
+    get:
+      tags: [admin]
+      responses:
+        '200': {description: OK, content: {application/json: {schema: {type: object, properties: {nodes: {type: array, items: {$ref: '#/components/schemas/Node'}}}}}}}
+  /api/v1/nodes/{id}/drain:
+    parameters: [{$ref: '#/components/parameters/Id'}]
+    post:
+      tags: [admin]
+      summary: Stop assigning new instances to the node
+      responses:
+        '200': {description: OK, content: {application/json: {schema: {$ref: '#/components/schemas/Node'}}}}
+  /api/v1/nodes/{id}/resume:
+    parameters: [{$ref: '#/components/parameters/Id'}]
+    post:
+      tags: [admin]
+      responses:
+        '200': {description: OK, content: {application/json: {schema: {$ref: '#/components/schemas/Node'}}}}
+  /api/v1/tenants:
+    post:
+      tags: [admin]
+      summary: Create a tenant; the API key is returned once
+      requestBody: {required: true, content: {application/json: {schema: {type: object, required: [name], properties: {name: {type: string}}, additionalProperties: false}}}}
+      responses:
+        '201': {description: Created, content: {application/json: {schema: {type: object, properties: {id: {type: string}, name: {type: string}, api_key: {type: string}}}}}}
+  /api/v1/tenants/{id}/rate-policy:
+    parameters: [{$ref: '#/components/parameters/Id'}]
+    put:
+      tags: [admin]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/RatePolicy'}}}}
+      responses:
+        '200': {description: OK}
+  /webhooks/{provider}:
+    post:
+      tags: [ops]
+      summary: Provider callback (authenticated by a per-node token; validated against the current assignment)
+      security: []
+      parameters:
+        - {name: provider, in: path, required: true, schema: {type: string}}
+        - {name: node, in: query, required: true, schema: {type: string}}
+        - {name: epoch, in: query, schema: {type: integer}}
+      responses:
+        '200': {description: Processed (published/duplicates/ignored)}
+        '401': {$ref: '#/components/responses/Error'}
+        '409': {description: OWNERSHIP_VIOLATION, content: {application/json: {schema: {$ref: '#/components/schemas/ErrorBody'}}}}
+  /health/live:
+    get: {tags: [ops], security: [], responses: {'200': {description: alive}}}
+  /health/ready:
+    get: {tags: [ops], security: [], responses: {'200': {description: ready}, '503': {description: a dependency is unavailable}}}
+  /metrics:
+    get: {tags: [ops], security: [], responses: {'200': {description: Prometheus metrics}}}
+components:
+  securitySchemes:
+    bearerAuth: {type: http, scheme: bearer, description: Tenant API key (or admin key for admin routes)}
+  headers:
+    Replayed: {schema: {type: string, enum: ['true']}, description: Present when the response is a replay of an earlier idempotent request}
+  parameters:
+    Id: {name: id, in: path, required: true, schema: {type: string}}
+    IdempotencyKey: {name: Idempotency-Key, in: header, schema: {type: string}, description: Same key + same payload returns the same result; a different payload yields 422}
+  responses:
+    Error: {description: Error, content: {application/json: {schema: {$ref: '#/components/schemas/ErrorBody'}}}}
+  schemas:
+    ErrorBody:
+      type: object
+      properties:
+        error:
+          type: object
+          properties:
+            code: {type: string, enum: [unauthenticated, forbidden, not_found, invalid_argument, idempotency_key_reuse, request_in_progress, conflict, invalid_state, already_exists, stale_command, stale_assignment, ownership_violation, fencing_required, migration_blocked, pairing_unavailable, payload_too_large, capability_not_supported, no_capacity, provider_unavailable, provider_error, internal]}
+            message: {type: string}
+    CreateInstanceRequest:
+      type: object
+      required: [name]
+      properties: {name: {type: string, maxLength: 100}, provider: {type: string, description: optional provider family}}
+      additionalProperties: false
+    CreateInstanceResponse:
+      type: object
+      properties: {id: {type: string}, status: {$ref: '#/components/schemas/ObservedState'}, operation_id: {type: string}}
+    ObservedState:
+      type: string
+      enum: [ALLOCATING, CREATING, AWAITING_PAIRING, CONNECTING, CONNECTED, DISCONNECTED, RECONNECTING, LOGGED_OUT, MIGRATING, DELETING, DELETED, FAILED]
+    Instance:
+      type: object
+      properties:
+        id: {type: string}
+        name: {type: string}
+        status: {$ref: '#/components/schemas/ObservedState'}
+        desired_state: {type: string, enum: [CONNECTED, DISCONNECTED, DELETED]}
+        observed_state: {$ref: '#/components/schemas/ObservedState'}
+        last_status_change: {type: string, format: date-time}
+        created_at: {type: string, format: date-time}
+    Pairing:
+      type: object
+      properties: {qrcode: {type: string}, pairing_code: {type: string}, expires_at: {type: string, format: date-time}}
+    OperationRef:
+      type: object
+      properties: {operation_id: {type: string}, status: {type: string, enum: [PENDING, RUNNING, BLOCKED, SUCCEEDED, FAILED]}, error_code: {type: string}}
+    MigrateResponse:
+      type: object
+      properties: {operation_id: {type: string}, status: {type: string}, step: {type: string, enum: [MIGRATION_REQUESTED, FENCING_OLD_OWNER, MIGRATION_BLOCKED, OLD_OWNER_FENCED, ASSIGN_NEW_EPOCH, START_NEW_OWNER, VERIFY_CONNECTION, CONNECTED]}}
+    Operation:
+      type: object
+      properties:
+        id: {type: string}
+        type: {type: string, enum: [CREATE_INSTANCE, DELETE_INSTANCE, RECONNECT, LOGOUT, MIGRATE]}
+        status: {type: string}
+        step: {type: string}
+        instance_id: {type: string}
+        error_code: {type: string}
+        error_message: {type: string}
+        created_at: {type: string, format: date-time}
+        updated_at: {type: string, format: date-time}
+        completed_at: {type: string, format: date-time}
+    SendRequest:
+      type: object
+      required: [instance_id, to, type, payload]
+      properties:
+        instance_id: {type: string}
+        to: {type: string, example: '5562999999999'}
+        type: {type: string, enum: [text, image, audio, video, document]}
+        payload:
+          type: object
+          description: text -> text; media types -> media_id of an uploaded object (no inline binary)
+          properties: {text: {type: string}, media_id: {type: string}, caption: {type: string}, filename: {type: string}}
+          additionalProperties: false
+      additionalProperties: false
+    SendResponse:
+      type: object
+      properties: {message_id: {type: string}, status: {type: string, enum: [QUEUED]}}
+    Message:
+      type: object
+      properties:
+        id: {type: string}
+        status: {type: string, enum: [QUEUED, DISPATCHING, ACCEPTED, DELIVERED, READ, FAILED, UNKNOWN]}
+        to: {type: string}
+        type: {type: string}
+        attempts: {type: integer}
+        error_code: {type: string}
+        created_at: {type: string, format: date-time}
+        updated_at: {type: string, format: date-time}
+    UploadRequest:
+      type: object
+      required: [content_type, size, sha256]
+      properties: {content_type: {type: string}, size: {type: integer, format: int64}, sha256: {type: string, description: hex}, filename: {type: string}}
+      additionalProperties: false
+    UploadTicket:
+      type: object
+      properties: {media_id: {type: string}, object_key: {type: string}, upload_url: {type: string}, content_url: {type: string}, expires_at: {type: string, format: date-time}}
+    Media:
+      type: object
+      properties: {id: {type: string}, status: {type: string, enum: [PENDING, READY, DELETED]}, content_type: {type: string}, size: {type: integer}, sha256: {type: string}, filename: {type: string}, expires_at: {type: string, format: date-time}}
+    Node:
+      type: object
+      properties: {id: {type: string}, provider: {type: string}, provider_version: {type: string}, capacity: {type: integer}, active_instances: {type: integer}, status: {type: string, enum: [STARTING, READY, DEGRADED, DRAINING, OFFLINE]}, heartbeat_at: {type: string, format: date-time}}
+    RatePolicy:
+      type: object
+      properties: {min_interval_ms: {type: integer}, burst: {type: integer}, max_per_minute: {type: integer}, max_concurrent: {type: integer}, cooldown_ms: {type: integer}}
+      additionalProperties: false

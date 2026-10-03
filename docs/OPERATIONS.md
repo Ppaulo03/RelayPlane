@@ -1,0 +1,83 @@
+# Runbook operacional
+
+## Componentes e escala
+
+| Componente | Réplicas | Observações |
+|---|---|---|
+| `gateway` | N (stateless) | API + webhooks atrás de um load balancer. `AUTO_MIGRATE=true` aplica migrations (lock consultivo no PostgreSQL). |
+| `worker` | N | `docker compose up -d --scale worker=3`. Partições do broker são divididas por lease; adicionar/remover workers rebalanceia sozinho em segundos. |
+| `reconciler` | 1..N | Réplicas são seguras (lease por instância + CAS no catálogo). 2 réplicas para HA. |
+| `evolution-node-XX` | **exatamente 1 por identidade** | Singleton stateful. Escalar = **adicionar** `node-03`, `node-04`… (novo container, novo banco, nova entrada em `PROVIDER_NODES`), nunca replicar. |
+| `postgres`, `redis`, `minio` | conforme provedor | PostgreSQL é a fonte de verdade; Redis guarda comandos/eventos em trânsito. |
+
+Portas: gateway `HTTP_PORT` (8080); worker/reconciler expõem `/metrics` e `/health/*` em `OPS_PORT` (9090).
+
+## Configuração
+
+Ver `.env.example`. Obrigatórias: `DATABASE_URL`, `BLOB_STORE_*`, `WEBHOOK_SECRET`, `ADMIN_API_KEY` (gateway),
+`PROVIDER_NODES` (JSON: `id, provider, endpoint, api_key, capacity`). **Segredos não têm default** e as imagens são pinadas
+por digest ([VERSIONS](VERSIONS.md)). `BLOB_STORE_PUBLIC_ENDPOINT` deve ser definido **só no gateway** (URLs assinadas para
+clientes); workers usam o endpoint interno, que é o que os nodes Evolution alcançam para baixar mídia.
+
+## Operações comuns
+
+```bash
+# estado dos nodes (admin)
+curl -H "Authorization: Bearer $ADMIN" :8080/api/v1/nodes
+# parar de alocar novas instâncias num node (sessões existentes ficam onde estão)
+curl -X POST -H "Authorization: Bearer $ADMIN" :8080/api/v1/nodes/node-01/drain
+curl -X POST -H "Authorization: Bearer $ADMIN" :8080/api/v1/nodes/node-01/resume
+# rate policy (override por tenant/instância; campos 0 herdam do nível superior)
+curl -X PUT -H "Authorization: Bearer $ADMIN" :8080/api/v1/tenants/<tenant_id>/rate-policy -d '{"min_interval_ms":1500,"max_per_minute":20}'
+curl -X PUT -H "Authorization: Bearer $KEY"   :8080/api/v1/instances/<id>/rate-policy     -d '{"min_interval_ms":300}'
+```
+
+### Adicionar um node
+1. Suba o container `evolution-node-03` (nova API key, novo banco `evolution_node_03`).
+2. Acrescente-o a `PROVIDER_NODES` e reinicie gateway/reconciler/worker (o seed é idempotente; o node nasce `STARTING` e o
+   Reconciler o promove a `READY` após a primeira sonda bem-sucedida).
+
+### Drenar/aposentar um node
+`drain` ⇒ nenhuma instância nova. Para esvaziar: `POST /instances/{id}/migrate` para cada instância (veja abaixo).
+**Atenção:** sessões Evolution são locais ao node; a migração faz *logout* no node antigo (fencing físico) e cria a sessão
+no novo, exigindo **novo pareamento (QR)**. A operação fica em `VERIFY_CONNECTION` até a sessão conectar.
+
+### Migração e `MIGRATION_BLOCKED`
+`POST /api/v1/instances/{id}/migrate` (opcional `{"target_node_id":"node-02"}`) devolve `operation_id`. Acompanhe com
+`GET /api/v1/operations/{id}` (`step`: `MIGRATION_REQUESTED → … → CONNECTED`).
+`status=BLOCKED, error_code=FENCING_FAILED` significa que o owner antigo **não pôde ser provado fechado** (node fora do ar,
+capability ausente). Nada foi trocado; a instância continua com o owner e o epoch antigos. Corrija o node e repita
+`POST …/migrate` (retoma a mesma operação). Métrica/alerta: `relayplane_migration_blocked_total`.
+
+### DLQ de comandos
+Mensagens que esgotaram os retries ficam `FAILED/RETRIES_EXHAUSTED` no catálogo e o comando em `relayplane:dlq`:
+```bash
+redis-cli XREVRANGE relayplane:dlq + - COUNT 20
+```
+Eventos que falham em todos os consumidores 10× vão para `relayplane:events:dead`. `UNKNOWN` (resultado ambíguo) **não** é
+reenviado automaticamente: confirme no WhatsApp e, se necessário, reenvie com nova `Idempotency-Key`.
+
+## Observabilidade
+
+* `/metrics` (Prometheus). Regras de alerta de referência: [`deploy/prometheus/alerts.yml`](../deploy/prometheus/alerts.yml).
+* Alertas prioritários: `relayplane_ownership_violation_total` (possível split-brain), `relayplane_assignment_epoch_mismatch_total`,
+  `relayplane_migration_blocked_total`, `relayplane_reconciliation_drift_total` persistente,
+  `relayplane_provider_node_health == 0`, `relayplane_outbound_queue_depth` crescente, `relayplane_outbound_dlq_total`.
+* Logs JSON com `trace_id`, `tenant_id`, `instance_id`, `message_id`, `node_id`, `provider`, `assignment_epoch`, `operation_id`.
+  Segredos e corpos de mensagem são redigidos. Defina `LOG_LEVEL=debug` somente temporariamente.
+* Tracing: `OTEL_EXPORTER_OTLP_ENDPOINT=http://collector:4318`.
+
+## Backup e recuperação
+
+* PostgreSQL: backup regular (catálogo, assignments, operações, mensagens). É a única fonte de verdade do ownership.
+* Redis: AOF habilitado no compose; perder o Redis perde comandos *em trânsito*: o *outbox sweeper* do Reconciler
+  republica mensagens `QUEUED` há mais de 2 min (ordem relativa a mensagens novas fica *best effort* nesse caso).
+* Volumes dos nodes Evolution (`evolution_node_XX`): contêm as credenciais das sessões; faça backup do banco do node.
+
+## Restart/atualização
+
+* Gateway/worker/reconciler: *rolling restart* seguro. Workers devolvem partições ao encerrar; comandos em andamento
+  ficam pendentes e são reentregues (idempotentes).
+* Evolution: atualize **um node por vez**, com versão pinada; use `drain` antes. Não existe upgrade global destrutivo:
+  novas instâncias podem ir para `evolution-v3` quando o adapter existir, as atuais permanecem em v2.
+* Migrations: aditivas e idempotentes (`schema_migrations`).
