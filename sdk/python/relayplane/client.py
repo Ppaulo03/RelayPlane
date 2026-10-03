@@ -11,7 +11,7 @@ from typing import Any, Union
 import httpx
 
 from .errors import from_response
-from .models import (CreatedInstance, Instance, Media, Message, Operation, OperationRef, Pairing, SentMessage)
+from .models import (CreatedInstance, Instance, Media, Message, Operation, OperationRef, Pairing, SentMessage, Subscription, WebhookDelivery)
 
 DEFAULT_TIMEOUT = 30.0
 
@@ -190,6 +190,48 @@ class MediaAPI:
         await self._h.request("DELETE", f"/api/v1/media/{media_id}")
 
 
+class SubscriptionsAPI:
+    """Webhook delivery of your events (message.received, message.outbound_status, ...). See relayplane.webhooks to verify requests."""
+
+    def __init__(self, http: _Http):
+        self._h = http
+
+    async def create(self, url: str, *, event_types: list[str] | None = None, instance_ids: list[str] | None = None) -> Subscription:
+        """The returned subscription carries the signing secret ONCE; store it."""
+        body: dict[str, Any] = {"url": url}
+        if event_types:
+            body["event_types"] = event_types
+        if instance_ids:
+            body["instance_ids"] = instance_ids
+        out, _ = await self._h.request("POST", "/api/v1/subscriptions", json=body)
+        return Subscription.from_dict(out)
+
+    async def list(self) -> list[Subscription]:
+        out, _ = await self._h.request("GET", "/api/v1/subscriptions")
+        return [Subscription.from_dict(s) for s in out.get("subscriptions", [])]
+
+    async def get(self, subscription_id: str) -> Subscription:
+        out, _ = await self._h.request("GET", f"/api/v1/subscriptions/{subscription_id}")
+        return Subscription.from_dict(out)
+
+    async def delete(self, subscription_id: str) -> None:
+        await self._h.request("DELETE", f"/api/v1/subscriptions/{subscription_id}")
+
+    async def rotate_secret(self, subscription_id: str) -> Subscription:
+        """New secret (shown once). For 24 h requests carry both signatures, so you can switch without a gap."""
+        out, _ = await self._h.request("POST", f"/api/v1/subscriptions/{subscription_id}/rotate-secret")
+        return Subscription.from_dict(out)
+
+    async def deliveries(self, subscription_id: str, *, status: str | None = None, limit: int = 50) -> list[WebhookDelivery]:
+        """`status="DEAD"` is the dead-letter queue."""
+        q = f"?limit={limit}" + (f"&status={status}" if status else "")
+        out, _ = await self._h.request("GET", f"/api/v1/subscriptions/{subscription_id}/deliveries{q}")
+        return [WebhookDelivery.from_dict(d) for d in out.get("deliveries", [])]
+
+    async def redeliver(self, delivery_id: str) -> None:
+        await self._h.request("POST", f"/api/v1/deliveries/{delivery_id}/redeliver")
+
+
 class RelayPlaneClient:
     """Entry point: `async with RelayPlaneClient(url, key) as rp: ...`"""
 
@@ -200,6 +242,7 @@ class RelayPlaneClient:
         self.messages = MessagesAPI(self._http)
         self.operations = OperationsAPI(self._http)
         self.media = MediaAPI(self._http)
+        self.subscriptions = SubscriptionsAPI(self._http)
 
     async def __aenter__(self) -> "RelayPlaneClient":
         return self

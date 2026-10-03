@@ -60,7 +60,7 @@ if [ "${CHAOS_KILL:-0}" = 1 ]; then
   trap 'kill $CHAOS_PID 2>/dev/null; cleanup' EXIT
 fi
 set +e
-go run ./cmd/loadgen -gateway http://127.0.0.1:18080 -admin-key "$ADMIN_API_KEY" -instances "$INSTANCES" -messages "$MESSAGES" -timeout "${LOAD_TIMEOUT:-5m}" \
+go run ./cmd/loadgen -webhook-listen "0.0.0.0:${WEBHOOK_SINK_PORT:-18090}" -webhook-url "http://host.docker.internal:${WEBHOOK_SINK_PORT:-18090}/hook" -webhook-fail-rate "${WEBHOOK_FAIL_RATE:-0.1}" -gateway http://127.0.0.1:18080 -admin-key "$ADMIN_API_KEY" -instances "$INSTANCES" -messages "$MESSAGES" -timeout "${LOAD_TIMEOUT:-5m}" \
   -allow-unknown="$([ "${CHAOS_KILL:-0}" = 1 ] && echo true || echo false)" \
   -stubs "http://127.0.0.1:18081=$EVOLUTION_NODE_01_API_KEY,http://127.0.0.1:18082=$EVOLUTION_NODE_02_API_KEY"
 status=$?

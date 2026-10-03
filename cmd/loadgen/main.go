@@ -18,13 +18,16 @@ import (
 )
 
 var (
-	gateway   = flag.String("gateway", "http://127.0.0.1:8080", "gateway base URL")
-	adminKey  = flag.String("admin-key", os.Getenv("ADMIN_API_KEY"), "admin API key")
-	instances = flag.Int("instances", 20, "instances to create")
-	messages  = flag.Int("messages", 2000, "total messages")
-	stubs     = flag.String("stubs", "", "comma separated url=apikey of the load stubs to read /_stats from")
-	allowUnk  = flag.Bool("allow-unknown", false, "UNKNOWN is a legitimate end state (workers are killed mid-send); delivered count may then exceed ACCEPTED by at most the UNKNOWN count")
-	timeout   = flag.Duration("timeout", 5*time.Minute, "how long to wait for the delivery to finish")
+	gateway       = flag.String("gateway", "http://127.0.0.1:8080", "gateway base URL")
+	adminKey      = flag.String("admin-key", os.Getenv("ADMIN_API_KEY"), "admin API key")
+	instances     = flag.Int("instances", 20, "instances to create")
+	messages      = flag.Int("messages", 2000, "total messages")
+	stubs         = flag.String("stubs", "", "comma separated url=apikey of the load stubs to read /_stats from")
+	allowUnk      = flag.Bool("allow-unknown", false, "UNKNOWN is a legitimate end state (workers are killed mid-send); delivered count may then exceed ACCEPTED by at most the UNKNOWN count")
+	webhookListen = flag.String("webhook-listen", "", "address to listen on for the tenant webhook sink, e.g. 0.0.0.0:18090 (enables the webhook check)")
+	webhookURL    = flag.String("webhook-url", "", "URL the gateway/worker containers use to reach the sink, e.g. http://host.docker.internal:18090/hook")
+	webhookFail   = flag.Float64("webhook-fail-rate", 0.1, "fraction of webhook requests the sink answers with 500 (exercises retries)")
+	timeout       = flag.Duration("timeout", 5*time.Minute, "how long to wait for the delivery to finish")
 )
 
 var hc = &http.Client{Timeout: 30 * time.Second}
@@ -99,6 +102,25 @@ func main() {
 	}
 	// a load test must not be shaped by the anti-ban limits: lift the per-tenant policy
 	_, _ = call("PUT", "/api/v1/tenants/"+tenant.ID+"/rate-policy", *adminKey, "", map[string]any{}, nil)
+
+	var sink *webhookSink
+	if *webhookListen != "" {
+		if *webhookURL == "" {
+			fatal("-webhook-url is required with -webhook-listen")
+		}
+		var err error
+		if sink, err = startSink(*webhookListen, *webhookFail); err != nil {
+			fatal("webhook sink: %v", err)
+		}
+		var sub struct {
+			Secret string `json:"secret"`
+		}
+		if _, err := call("POST", "/api/v1/subscriptions", tenant.APIKey, "", map[string]any{"url": *webhookURL, "event_types": []string{"message.outbound_status"}}, &sub); err != nil {
+			fatal("create subscription: %v", err)
+		}
+		sink.setSecret(sub.Secret)
+		fmt.Printf("webhook subscription created (sink on %s, %.0f%% injected failures)\n", *webhookListen, *webhookFail*100)
+	}
 
 	ids := make([]string, *instances)
 	for i := range ids {
@@ -233,6 +255,25 @@ func main() {
 	}
 	if len(pending) > 0 {
 		fmt.Printf("%d messages never reached a terminal state\n", len(pending))
+	}
+	if sink != nil {
+		var all []string
+		for _, l := range byInst {
+			all = append(all, l...)
+		}
+		// every message reaches ACCEPTED (or UNKNOWN when its worker died mid-send): the tenant must be told, through the
+		// webhook, despite the injected endpoint failures and worker kills. Retries back off, so allow generous time.
+		accepted := []string{"ACCEPTED"}
+		if *allowUnk {
+			accepted = append(accepted, "UNKNOWN")
+		}
+		deadline := time.Now().Add(*timeout)
+		for time.Now().Before(deadline) && len(sink.missing(all, accepted...)) > 0 {
+			time.Sleep(500 * time.Millisecond)
+		}
+		miss := sink.missing(all, accepted...)
+		fmt.Printf("webhooks: %s; %d of %d messages never got their status event\n", sink.summary(), len(miss), len(all))
+		bad = bad || len(miss) > 0 || sink.badSignatures() > 0
 	}
 	st, serr := readStubs(*stubs)
 	if serr != nil {

@@ -23,6 +23,45 @@ class Instance:
 
 
 @dataclass(frozen=True)
+class Subscription:
+    id: str
+    url: str
+    event_types: tuple
+    instance_ids: tuple
+    active: bool
+    created_at: str = ""
+    # only set on creation / rotation: the signing secret is shown once
+    secret: str | None = None
+    previous_secret_valid_until: str | None = None
+
+    @classmethod
+    def from_dict(cls, d: dict[str, Any]) -> "Subscription":
+        return cls(id=d["id"], url=d["url"], event_types=tuple(d.get("event_types") or ()), instance_ids=tuple(d.get("instance_ids") or ()),
+                   active=bool(d.get("active", True)), created_at=d.get("created_at", ""), secret=d.get("secret"),
+                   previous_secret_valid_until=d.get("previous_secret_valid_until"))
+
+    def __repr__(self) -> str:  # the secret must never reach a log line
+        shown = "<redacted>" if self.secret else None
+        return f"Subscription(id={self.id!r}, url={self.url!r}, event_types={self.event_types!r}, secret={shown})"
+
+
+@dataclass(frozen=True)
+class WebhookDelivery:
+    id: str
+    event_id: str
+    event_type: str
+    instance_id: str
+    status: str
+    attempts: int
+    last_error: str = ""
+
+    @classmethod
+    def from_dict(cls, d: dict[str, Any]) -> "WebhookDelivery":
+        return cls(id=d["id"], event_id=d["event_id"], event_type=d.get("event_type", ""), instance_id=d.get("instance_id", ""),
+                   status=d.get("status", ""), attempts=int(d.get("attempts", 0)), last_error=d.get("last_error", ""))
+
+
+@dataclass(frozen=True)
 class CreatedInstance:
     id: str
     status: str
