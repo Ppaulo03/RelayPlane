@@ -29,6 +29,8 @@ class Subscription:
     event_types: tuple
     instance_ids: tuple
     active: bool
+    exclude_groups: bool = False
+    replayed: bool = False
     created_at: str = ""
     # only set on creation / rotation: the signing secret is shown once
     secret: str | None = None
@@ -37,12 +39,39 @@ class Subscription:
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> "Subscription":
         return cls(id=d["id"], url=d["url"], event_types=tuple(d.get("event_types") or ()), instance_ids=tuple(d.get("instance_ids") or ()),
-                   active=bool(d.get("active", True)), created_at=d.get("created_at", ""), secret=d.get("secret"),
+                   active=bool(d.get("active", True)), exclude_groups=bool(d.get("exclude_groups", False)), created_at=d.get("created_at", ""), secret=d.get("secret"),
                    previous_secret_valid_until=d.get("previous_secret_valid_until"))
 
     def __repr__(self) -> str:  # the secret must never reach a log line
         shown = "<redacted>" if self.secret else None
         return f"Subscription(id={self.id!r}, url={self.url!r}, event_types={self.event_types!r}, secret={shown})"
+
+
+@dataclass(frozen=True)
+class Limits:
+    """Effective limits of the deployment (GET /api/v1/limits)."""
+    idempotency_retention_seconds: int
+    max_text_length: int
+    media_max_bytes: int
+    media_allowed_types: tuple
+    max_subscriptions_per_tenant: int
+    webhook_retry_max_attempts: int
+    webhook_retry_horizon_seconds: int
+    raw: dict
+
+    @classmethod
+    def from_dict(cls, d: dict[str, Any]) -> "Limits":
+        media, subs = d.get("media") or {}, d.get("subscriptions") or {}
+        return cls(idempotency_retention_seconds=int(d.get("idempotency_retention_seconds", 0)), max_text_length=int(d.get("max_text_length", 0)),
+                   media_max_bytes=int(media.get("max_bytes", 0)), media_allowed_types=tuple(media.get("allowed_types") or ()),
+                   max_subscriptions_per_tenant=int(subs.get("max_per_tenant", 0)), webhook_retry_max_attempts=int(subs.get("retry_max_attempts", 0)),
+                   webhook_retry_horizon_seconds=int(subs.get("retry_horizon_seconds", 0)), raw=d)
+
+    def assert_retry_horizon_within_idempotency(self, sender_retry_horizon_seconds: float) -> None:
+        """A sender that retries with the same Idempotency-Key beyond the retention window would create a SECOND message."""
+        if sender_retry_horizon_seconds > self.idempotency_retention_seconds:
+            raise ValueError(f"sender retry horizon {sender_retry_horizon_seconds}s exceeds the idempotency retention "
+                             f"{self.idempotency_retention_seconds}s: a late retry would duplicate the message")
 
 
 @dataclass(frozen=True)
@@ -117,12 +146,17 @@ class Message:
     attempts: int = 0
     error_code: str = ""
     sequence_no: int = 0
+    # set once the provider ACCEPTED the message: the id an answer's reply_to_provider_message_id refers to
+    provider_message_id: str = ""
+    accepted_at: str = ""
+    error_message: str = ""
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> "Message":
         return cls(id=d["id"], status=d.get("status", ""), to=d.get("to", ""), type=d.get("type", ""),
                    attempts=int(d.get("attempts", 0)), error_code=d.get("error_code", ""),
-                   sequence_no=int(d.get("sequence_no", 0)))
+                   sequence_no=int(d.get("sequence_no", 0)), provider_message_id=d.get("provider_message_id", ""),
+                   accepted_at=d.get("accepted_at", ""), error_message=d.get("error_message", ""))
 
 
 @dataclass(frozen=True)

@@ -132,10 +132,17 @@ paths:
       responses:
         '200': {description: OK, content: {application/json: {schema: {$ref: '#/components/schemas/Message'}}}}
         '409': {$ref: '#/components/responses/Error'}
+  /api/v1/limits:
+    get:
+      tags: [operations]
+      summary: Effective limits and guarantees of this deployment (idempotency window, sizes, rates, webhook retries)
+      responses:
+        '200': {description: OK, content: {application/json: {schema: {$ref: '#/components/schemas/Limits'}}}}
   /api/v1/subscriptions:
     post:
       tags: [subscriptions]
       summary: Subscribe a URL to your events (message.received, message.outbound_status, ...)
+      parameters: [{$ref: '#/components/parameters/IdempotencyKey'}]
       description: |
         RelayPlane POSTs each event to `url` signed with HMAC-SHA256 (`X-RelayPlane-Signature: v1=<hex>` over `<timestamp>.<body>`,
         `X-RelayPlane-Timestamp`, `X-RelayPlane-Event-Id`, `X-RelayPlane-Event-Type`). Delivery is at-least-once with retries
@@ -144,7 +151,9 @@ paths:
       requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/CreateSubscription'}}}}
       responses:
         '201': {description: Created (includes the one-time `secret`), content: {application/json: {schema: {$ref: '#/components/schemas/Subscription'}}}}
+        '200': {description: Replay of an Idempotency-Key (the SAME subscription; the secret is not shown again - rotate it if it was lost), headers: {Idempotent-Replayed: {$ref: '#/components/headers/Replayed'}}, content: {application/json: {schema: {$ref: '#/components/schemas/Subscription'}}}}
         '400': {$ref: '#/components/responses/Error'}
+        '422': {$ref: '#/components/responses/Error'}
         '409': {$ref: '#/components/responses/Error'}   # subscription limit per tenant reached
     get:
       tags: [subscriptions]
@@ -365,6 +374,7 @@ components:
           description: Empty = every tenant-facing event
           items: {type: string, enum: [message.received, message.outbound_status, message.status, instance.status_changed]}
         instance_ids: {type: array, items: {type: string}, description: Empty = every instance of the tenant}
+        exclude_groups: {type: boolean, default: false, description: Drop message.received events of group chats}
     Subscription:
       type: object
       properties:
@@ -372,6 +382,7 @@ components:
         url: {type: string}
         event_types: {type: array, items: {type: string}}
         instance_ids: {type: array, items: {type: string}}
+        exclude_groups: {type: boolean}
         active: {type: boolean}
         created_at: {type: string, format: date-time}
         secret: {type: string, description: "whsec_... shown only on creation and rotation"}
@@ -398,9 +409,33 @@ components:
         type: {type: string}
         attempts: {type: integer}
         sequence_no: {type: integer, format: int64, description: per-instance dispatch order}
+        provider_message_id: {type: string, description: "Set once the provider ACCEPTED the message: the id that an answer's reply_to_provider_message_id refers to"}
+        accepted_at: {type: string, format: date-time, description: When the provider accepted the send}
         error_code: {type: string}
+        error_message: {type: string}
         created_at: {type: string, format: date-time}
         updated_at: {type: string, format: date-time}
+    Limits:
+      type: object
+      properties:
+        idempotency_retention_seconds: {type: integer, description: "A request repeated with the same Idempotency-Key inside this window returns the original result; after it the key creates a NEW resource. Keep your retry horizon below it."}
+        max_text_length: {type: integer}
+        media:
+          type: object
+          properties:
+            max_bytes: {type: integer, format: int64}
+            inline_max_bytes: {type: integer}
+            allowed_types: {type: array, items: {type: string}}
+        send_rate_default:
+          type: object
+          description: Default outbound pacing per instance (tenant/instance policies may tighten it)
+          properties: {min_interval_ms: {type: integer}, burst: {type: integer}, max_per_minute: {type: integer}, max_concurrent: {type: integer}}
+        subscriptions:
+          type: object
+          properties:
+            max_per_tenant: {type: integer}
+            retry_max_attempts: {type: integer}
+            retry_horizon_seconds: {type: integer, description: Roughly how long a failing delivery is retried before it reaches the dead-letter queue}
     UploadRequest:
       type: object
       required: [content_type, size, sha256]

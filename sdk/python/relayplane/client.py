@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import hashlib
 import mimetypes
 import time
@@ -11,7 +12,7 @@ from typing import Any, Union
 import httpx
 
 from .errors import from_response
-from .models import (CreatedInstance, Instance, Media, Message, Operation, OperationRef, Pairing, SentMessage, Subscription, WebhookDelivery)
+from .models import (CreatedInstance, Instance, Media, Message, Operation, OperationRef, Limits, Pairing, SentMessage, Subscription, WebhookDelivery)
 
 DEFAULT_TIMEOUT = 30.0
 
@@ -190,21 +191,39 @@ class MediaAPI:
         await self._h.request("DELETE", f"/api/v1/media/{media_id}")
 
 
+class LimitsAPI:
+    """What this deployment guarantees; assert it at startup instead of hard-coding assumptions."""
+
+    def __init__(self, http: _Http):
+        self._h = http
+
+    async def get(self) -> Limits:
+        out, _ = await self._h.request("GET", "/api/v1/limits")
+        return Limits.from_dict(out)
+
+
 class SubscriptionsAPI:
     """Webhook delivery of your events (message.received, message.outbound_status, ...). See relayplane.webhooks to verify requests."""
 
     def __init__(self, http: _Http):
         self._h = http
 
-    async def create(self, url: str, *, event_types: list[str] | None = None, instance_ids: list[str] | None = None) -> Subscription:
-        """The returned subscription carries the signing secret ONCE; store it."""
+    async def create(self, url: str, *, event_types: list[str] | None = None, instance_ids: list[str] | None = None,
+                     exclude_groups: bool = False, idempotency_key: str | None = None) -> Subscription:
+        """The returned subscription carries the signing secret ONCE; store it.
+
+        With an ``idempotency_key`` a repeated call (a deploy script that runs twice) returns the SAME subscription with
+        ``replayed=True`` and without the secret: rotate it with ``rotate_secret`` if it was lost."""
         body: dict[str, Any] = {"url": url}
         if event_types:
             body["event_types"] = event_types
         if instance_ids:
             body["instance_ids"] = instance_ids
-        out, _ = await self._h.request("POST", "/api/v1/subscriptions", json=body)
-        return Subscription.from_dict(out)
+        if exclude_groups:
+            body["exclude_groups"] = True
+        out, resp = await self._h.request("POST", "/api/v1/subscriptions", json=body, idempotency_key=idempotency_key)
+        sub = Subscription.from_dict(out)
+        return dataclasses.replace(sub, replayed=_replayed(resp))
 
     async def list(self) -> list[Subscription]:
         out, _ = await self._h.request("GET", "/api/v1/subscriptions")
@@ -243,6 +262,7 @@ class RelayPlaneClient:
         self.operations = OperationsAPI(self._http)
         self.media = MediaAPI(self._http)
         self.subscriptions = SubscriptionsAPI(self._http)
+        self.limits = LimitsAPI(self._http)
 
     async def __aenter__(self) -> "RelayPlaneClient":
         return self
