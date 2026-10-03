@@ -21,7 +21,7 @@ Legenda: ✅ feito e testado · ⚠️ feito com limitação registrada · ⏭�
 | Reconciler (drift, adoção, retomada, probe de nodes, dispatcher do outbox, janitor) | ✅ | |
 | Outbox transacional + `sequence_no` + barreira `UNKNOWN` (INV-07 de ponta a ponta) | ✅ | ver ARCHITECTURE §6 |
 | Serialização de lifecycle (`instance-control`) | ✅ | `TestLifecycle_*` |
-| BlobStore S3-compatível, Claim-Check, validações, TTL, cleanup de órfãos | ✅ | RustFS (padrão), SeaweedFS e MinIO reais nos testes |
+| BlobStore S3-compatível, Claim-Check, validações, TTL, cleanup de órfãos | ✅ | RustFS (padrão) e SeaweedFS reais nos testes e no CI; MinIO só opt-in (imagem não baixável) |
 | Observabilidade: métricas, logs estruturados, tracing OTel | ✅ | |
 | SDK Python (instances, messages, operations, media) | ✅ | 14 testes + smoke contra a stack |
 | Docker Compose (gateway, worker, reconciler, postgres, redis, rustfs|seaweedfs|minio por perfil, evolution-node-01/02) | ✅ | executado de ponta a ponta com Evolution v2.3.7 real |

@@ -13,7 +13,7 @@ Nenhum componente crítico usa `latest`. Imagens são referenciadas por **tag + 
 | Redis | `7.4.4-alpine` | `sha256:ee9e8748ace004102a267f7b8265dab2c618317df22507b89d16a8add7154273` |
 | Object store (padrão) RustFS | `1.0.1` (`rustfs/rustfs`) | `sha256:1803faef57627e2d9c2e7d89d655d712ddded5389040054987163043fecb6a3c` |
 | Object store SeaweedFS | `4.47` (`chrislusf/seaweedfs`) | `sha256:ce9e796f1fe6f06968f4c04bdaf8f678dad9c8acdfef3d244133d71bfa6bf882` |
-| Object store MinIO (legado, perfil `minio`) | `RELEASE.2025-09-07T16-13-09Z` (`quay.io/minio/minio`) | `sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e` |
+| Object store MinIO (legado, opt-in, **imagem não mais baixável**; perfil `minio`) | `RELEASE.2025-09-07T16-13-09Z` (`quay.io/minio/minio`) | `sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e` |
 | Go (build) | `golang:1.26.5-alpine` | `sha256:0178a641fbb4858c5f1b48e34bdaabe0350a330a1b1149aabd498d0699ff5fb2` |
 | Go (testes com `-race`) | `golang:1.26.5` | `sha256:705e964a93a2fd2e75c7d59bb7d781b57e30f12293ffde5175c69229e18fb678` |
 | Runtime | `gcr.io/distroless/static-debian12:nonroot` | `sha256:afa5c872c891853ca7fcf1f12c3edb23f7eeef36189728842dd51042ff57f7ab` |

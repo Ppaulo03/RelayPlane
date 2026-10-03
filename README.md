@@ -6,7 +6,7 @@ envia mensagens de forma **assíncrona e ordenada por instância**, normaliza ev
 reconcilia continuamente *estado desejado* × *estado observado*.
 
 O primeiro provider é a **Evolution API v2**, o broker é **Redis Streams**, a persistência é **PostgreSQL**
-e a mídia usa qualquer **object store compatível com S3** (Claim-Check; testado com RustFS, SeaweedFS e MinIO). Nenhum deles é conhecido pelo domínio: são *adapters*
+e a mídia usa qualquer **object store compatível com S3** (Claim-Check; testado com RustFS e SeaweedFS; MinIO legado, opt-in). Nenhum deles é conhecido pelo domínio: são *adapters*
 (Ports & Adapters / Hexagonal). O documento de design original está em
 [`docs/design/original-design.md`](docs/design/original-design.md).
 
@@ -54,10 +54,10 @@ async with RelayPlaneClient("http://localhost:8080", api_key) as rp:
 ## Desenvolvimento
 
 ```bash
-make infra-up        # postgres/redis + RustFS/SeaweedFS/MinIO de teste (portas 55440/56390/59011/59012/59010)
+make infra-up        # postgres/redis + RustFS/SeaweedFS de teste (portas 55440/56390/59011/59012; MinIO opt-in na 59010)
 make test            # unit + contract + sistema (em memória): rápido, sem infraestrutura
 make test-integration# adapters reais + suíte de sistema contra PostgreSQL+Redis+RustFS
-make test-integration-s3 # o mesmo contra TODOS os object stores suportados (RustFS, SeaweedFS, MinIO)
+make test-integration-s3 # o mesmo contra TODOS os object stores suportados (RustFS e SeaweedFS)
 make test-race       # race detector (em container Docker golang: o Windows local não tem gcc)
 make sdk-test        # SDK Python
 ```

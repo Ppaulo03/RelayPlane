@@ -31,7 +31,7 @@ Deltas específicos deste repositório (o `AGENTS.md` global continua valendo).
 * **Redis sem persistência:** após restart o consumer group some e `XREADGROUP` devolve `NOGROUP`; o adapter recria o grupo (queue e bus). Descoberto por
   `make test-chaos` (usa `docker compose pause/restart` nos containers de `deploy/docker/compose.infra.yml`; tmpfs do Postgres é perdido em stop/start, por isso ele só é pausado).
 * **Object store:** `minio/minio` saiu do Docker Hub (community edition em manutenção reduzida). O adapter S3 é genérico; `make test-integration-s3`
-  roda contrato + suíte de sistema em RustFS, SeaweedFS e MinIO. SeaweedFS: cada bucket é uma *collection* que pré-aloca volumes (30 GB por padrão):
+  roda contrato + suíte de sistema em RustFS e SeaweedFS (MinIO é opt-in: o tag no quay.io passou a exigir autenticação e o CI falhou no pull, só havia cache local). SeaweedFS: cada bucket é uma *collection* que pré-aloca volumes (30 GB por padrão):
   o teste cria um bucket por teste, então a infra de teste usa `-master.volumeSizeLimitMB=32 -volume.max=2000`; sem isso → "internal error".
   `docker compose down` não remove serviços de perfis inativos: use `docker compose --profile "*" down -v` ao trocar de backend.
   minio-go trunca em silêncio um corpo maior que o tamanho declarado → `Put` do adapter usa `exactReader`.
