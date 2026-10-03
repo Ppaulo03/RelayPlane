@@ -3,7 +3,10 @@
 package systemtest
 
 import (
+	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"os/exec"
 	"sync"
@@ -182,4 +185,78 @@ func TestChaos_WorkersKilledMidFlight(t *testing.T) {
 	}
 	<-done
 	tr.assertConverges(t)
+}
+
+// The object store disappears (paused) while media is uploaded and while a media message is being delivered.
+// Uploads fail cleanly (nothing half-stored, no READY blob without bytes); a media message waits for the store and is
+// delivered exactly once after recovery instead of failing or being sent without its file.
+// CHAOS_S3_SERVICE names the compose service of the backend the suite runs against (default rustfs).
+func TestChaos_ObjectStoreOutage(t *testing.T) {
+	svc := envOr("CHAOS_S3_SERVICE", "rustfs")
+	e := NewEnv(t)
+	e.Worker.Retry = messaging.RetrySchedule{0, time.Second, time.Second, time.Second, time.Second, time.Second, time.Second, time.Second}
+	e.StartWorkers(2)
+	e.StartOutbox()
+	inst := e.CreateInstance(e.Tenant, "media", true)
+
+	upload := func(ctx context.Context, data []byte) (string, error) {
+		sum := sha256.Sum256(data)
+		tk, err := e.App.Media.CreateUpload(ctx, e.Tenant, app.UploadRequest{ContentType: "application/pdf", Size: int64(len(data)), SHA256: hex.EncodeToString(sum[:]), Filename: "a.pdf"})
+		if err != nil {
+			return "", err
+		}
+		_, err = e.App.Media.Upload(ctx, e.Tenant, tk.MediaID, bytes.NewReader(data))
+		return tk.MediaID, err
+	}
+	sendDoc := func(mediaID string) string {
+		r, _, err := e.App.Messages.Send(bg, e.Tenant, app.SendInput{InstanceID: inst.ID, To: "5562999999999", Type: messaging.TypeDocument, Payload: app.SendPayload{MediaID: mediaID}}, "")
+		if err != nil {
+			t.Fatalf("send: %v", err)
+		}
+		return r.MessageID
+	}
+
+	before, err := upload(bg, []byte("before the outage"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	compose(t, "pause", svc)
+	resumed := false
+	resume := func() {
+		if !resumed {
+			resumed = true
+			compose(t, "unpause", svc)
+		}
+	}
+	t.Cleanup(resume)
+
+	// a media message accepted while the store is down must wait for it
+	pending := sendDoc(before)
+	// uploads during the outage fail cleanly
+	uctx, cancel := context.WithTimeout(bg, 3*time.Second)
+	if id, err := upload(uctx, []byte("during the outage")); err == nil {
+		t.Fatalf("upload %s succeeded while the object store was down", id)
+	}
+	cancel()
+	time.Sleep(2 * time.Second)
+	if m, _ := e.Repos.Messages.Get(bg, pending); m.Status == messaging.StatusFailed || m.Status == messaging.StatusAccepted {
+		t.Fatalf("with the object store down the media message must wait, is %s (%s)", m.Status, m.ErrorCode)
+	}
+	resume()
+
+	e.WaitMessage(pending, messaging.StatusAccepted)
+	docs := 0
+	for _, s := range e.Provider.Sent() {
+		if s.Message.Type == messaging.TypeDocument {
+			docs++
+		}
+	}
+	if docs != 1 {
+		t.Fatalf("the document must reach the provider exactly once, got %d", docs)
+	}
+	after, err := upload(bg, []byte("after the outage"))
+	if err != nil {
+		t.Fatalf("uploads must work again after recovery: %v", err)
+	}
+	e.WaitMessage(sendDoc(after), messaging.StatusAccepted)
 }

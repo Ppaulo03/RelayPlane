@@ -45,7 +45,8 @@ Legenda: ✅ feito e testado · ⚠️ feito com limitação registrada · ⏭�
 | Chaos testing em infra real (`make test-chaos`): wipe e partição do Redis, stall do Postgres, workers mortos no meio do tráfego | ✅ achou e corrigiu um bug (consumer group perdido após wipe do Redis) |
 | Jitter de rede e resets de conexão (proxy TCP entre a aplicação e PostgreSQL/Redis) | ✅ `TestJitter_*` |
 | Baseline de carga (`make test-load`) | ✅ ver OPERATIONS; sem provider real a latência do WhatsApp não está incluída |
-| Queda do object store, carga multi-processo e carga com provider real | ⏭️ próximo passo |
+| Queda do object store (upload falha limpo; mensagem de mídia espera e sai uma vez) | ✅ `TestChaos_ObjectStoreOutage` |
+| Carga multi-processo e carga com provider real | ⏭️ próximo passo |
 
 ## Limitações e riscos conhecidos (decisões conscientes)
 
