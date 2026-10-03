@@ -1,0 +1,40 @@
+{
+  "event": "send.message",
+  "instance": "inst_01m41bad3refzv7nc1h5p7tgf4",
+  "data": {
+    "key": {
+      "remoteJid": "5511900000014@s.whatsapp.net",
+      "fromMe": true,
+      "id": "3EB0FAKE00000000020000"
+    },
+    "pushName": "[texto 4]",
+    "status": "PENDING",
+    "message": {
+      "messageContextInfo": {
+        "messageSecret": "<redacted>"
+      },
+      "conversation": "[texto 5]"
+    },
+    "contextInfo": {
+      "mentionedJid": [],
+      "groupMentions": [],
+      "ephemeralSettingTimestamp": {
+        "low": 1790894627,
+        "high": 0,
+        "unsigned": false
+      },
+      "disappearingMode": {
+        "initiator": 0
+      }
+    },
+    "messageType": "conversation",
+    "messageTimestamp": 1791067427,
+    "instanceId": "9f28f842-afcd-4009-90b9-9ac28ccfdf58",
+    "source": "web"
+  },
+  "destination": "https://media.example.invalid/1",
+  "date_time": "2026-10-03T19:43:48.675Z",
+  "sender": "5511900000011@s.whatsapp.net",
+  "server_url": "https://media.example.invalid/2",
+  "apikey": "<redacted:apikey:36>"
+}

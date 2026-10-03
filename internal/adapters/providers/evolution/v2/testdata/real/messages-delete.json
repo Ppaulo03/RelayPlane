@@ -1,0 +1,18 @@
+{
+  "event": "messages.delete",
+  "instance": "inst_01m41bad3refzv7nc1h5p7tgf4",
+  "data": {
+    "remoteJid": "5511900000017@lid",
+    "remoteJidAlt": "5511900000014@s.whatsapp.net",
+    "fromMe": false,
+    "id": "3EB0FAKE00000000320000",
+    "participant": "",
+    "addressingMode": "lid",
+    "status": "DELETED"
+  },
+  "destination": "https://media.example.invalid/1",
+  "date_time": "2026-10-03T20:06:03.182Z",
+  "sender": "5511900000011@s.whatsapp.net",
+  "server_url": "https://media.example.invalid/2",
+  "apikey": "<redacted:apikey:36>"
+}

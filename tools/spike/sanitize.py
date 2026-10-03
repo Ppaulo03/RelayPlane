@@ -19,7 +19,9 @@ from pathlib import Path
 CAPTURES = Path(os.environ.get("CAPTURES", "captures"))
 
 ID_KEYS = {"id", "keyId", "messageId", "stanzaId", "quotedStanzaId", "remoteJid", "participant", "ownerJid", "sender", "number"}
-TEXT_KEYS = {"conversation", "text", "caption", "pushName", "fileName", "title", "description", "body", "name", "displayName", "contentText"}
+# key material and device metadata: dropped whole (they are byte arrays / objects, not strings)
+DROP_KEYS = {"messageSecret", "deviceListMetadata", "senderKeyHash", "recipientKeyHash", "senderTimestamp", "recipientTimestamp"}
+TEXT_KEYS = {"profileName", "conversation", "text", "caption", "pushName", "fileName", "title", "description", "body", "name", "displayName", "contentText"}
 SECRET_KEYS = {"mediaKey", "fileSha256", "fileEncSha256", "jpegThumbnail", "thumbnailDirectPath", "thumbnailSha256", "thumbnailEncSha256",
                "waveform", "streamingSidecar", "midQualityFileSha256", "apikey", "token", "hash"}
 URL_KEYS = {"url", "directPath", "mediaUrl", "base64", "webhook", "server_url"}
@@ -62,14 +64,16 @@ class Mapper:
 
 
 def clean(value, key: str, m: Mapper):
+    if key in DROP_KEYS or (key in SECRET_KEYS and isinstance(value, (dict, list))):
+        return "<redacted>"  # byte arrays serialised as objects/lists: keys, hashes, thumbnails, waveforms
     if isinstance(value, dict):
         return {k: clean(v, k, m) for k, v in value.items()}
     if isinstance(value, list):
         return [clean(v, key, m) for v in value]
     if not isinstance(value, str):
         return value
-    if key in KEEP_VALUES:
-        return value
+    if value == "" or key in KEEP_VALUES:
+        return value  # empty strings are structure (e.g. participant of a direct chat)
     if key in SECRET_KEYS:
         return f"<redacted:{key}:{len(value)}>"
     if key in URL_KEYS or value.startswith(("http://", "https://", "data:")):

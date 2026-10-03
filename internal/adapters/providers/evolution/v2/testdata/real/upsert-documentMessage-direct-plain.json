@@ -1,0 +1,110 @@
+{
+  "event": "messages.upsert",
+  "instance": "inst_01m41bad3refzv7nc1h5p7tgf4",
+  "data": {
+    "key": {
+      "remoteJid": "5511900000014@s.whatsapp.net",
+      "remoteJidAlt": "5511900000014@s.whatsapp.net",
+      "fromMe": false,
+      "id": "3EB0FAKE00000000100000",
+      "participant": "",
+      "addressingMode": "lid"
+    },
+    "pushName": "[texto 2]",
+    "status": "DELIVERY_ACK",
+    "message": {
+      "documentMessage": {
+        "url": "https://media.example.invalid/39",
+        "mimetype": "application/pdf",
+        "title": "[texto 12]",
+        "fileSha256": "<redacted>",
+        "fileLength": {
+          "low": 131560,
+          "high": 0,
+          "unsigned": true
+        },
+        "pageCount": 1,
+        "mediaKey": "<redacted>",
+        "fileName": "[texto 12]",
+        "fileEncSha256": "<redacted>",
+        "directPath": "<directPath:159>",
+        "mediaKeyTimestamp": {
+          "low": 1791067514,
+          "high": 0,
+          "unsigned": false
+        },
+        "contactVcard": false,
+        "thumbnailDirectPath": "<redacted:thumbnailDirectPath:161>",
+        "thumbnailSha256": "<redacted>",
+        "thumbnailEncSha256": "<redacted>",
+        "jpegThumbnail": "<redacted>",
+        "contextInfo": {
+          "mentionedJid": [],
+          "groupMentions": [],
+          "statusAttributions": [],
+          "ephemeralSettingTimestamp": {
+            "low": 1790894627,
+            "high": 0,
+            "unsigned": false
+          },
+          "disappearingMode": {
+            "initiator": 0
+          }
+        },
+        "thumbnailHeight": 30,
+        "thumbnailWidth": 21
+      },
+      "messageContextInfo": {
+        "threadId": [],
+        "deviceListMetadata": "<redacted>",
+        "deviceListMetadataVersion": 2,
+        "messageSecret": "<redacted>",
+        "botMetadata": {
+          "capabilityMetadata": {
+            "capabilities": [
+              8,
+              2,
+              21,
+              6,
+              26,
+              34,
+              24,
+              31,
+              7,
+              3,
+              37,
+              41,
+              39,
+              42,
+              43,
+              49,
+              48
+            ]
+          }
+        }
+      }
+    },
+    "contextInfo": {
+      "mentionedJid": [],
+      "groupMentions": [],
+      "statusAttributions": [],
+      "ephemeralSettingTimestamp": {
+        "low": 1790894627,
+        "high": 0,
+        "unsigned": false
+      },
+      "disappearingMode": {
+        "initiator": 0
+      }
+    },
+    "messageType": "documentMessage",
+    "messageTimestamp": 1791067516,
+    "instanceId": "9f28f842-afcd-4009-90b9-9ac28ccfdf58",
+    "source": "web"
+  },
+  "destination": "https://media.example.invalid/1",
+  "date_time": "2026-10-03T19:48:49.934Z",
+  "sender": "5511900000011@s.whatsapp.net",
+  "server_url": "https://media.example.invalid/2",
+  "apikey": "<redacted:apikey:36>"
+}

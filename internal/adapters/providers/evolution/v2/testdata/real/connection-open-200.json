@@ -1,0 +1,17 @@
+{
+  "event": "connection.update",
+  "instance": "inst_01m41bad3refzv7nc1h5p7tgf4",
+  "data": {
+    "instance": "inst_01m41bad3refzv7nc1h5p7tgf4",
+    "wuid": "5511900000011@s.whatsapp.net",
+    "profileName": "[texto 1]",
+    "profilePictureUrl": "https://media.example.invalid/36",
+    "state": "open",
+    "statusReason": 200
+  },
+  "destination": "https://media.example.invalid/1",
+  "date_time": "2026-10-03T19:42:26.020Z",
+  "sender": "5511900000011@s.whatsapp.net",
+  "server_url": "https://media.example.invalid/2",
+  "apikey": "<redacted:apikey:36>"
+}

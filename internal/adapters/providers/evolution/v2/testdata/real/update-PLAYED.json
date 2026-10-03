@@ -1,0 +1,16 @@
+{
+  "event": "messages.update",
+  "instance": "inst_01m41bad3refzv7nc1h5p7tgf4",
+  "data": {
+    "keyId": "3EB0FAKE00000000200000",
+    "remoteJid": "5511900000017:91@lid",
+    "fromMe": true,
+    "status": "PLAYED",
+    "instanceId": "9f28f842-afcd-4009-90b9-9ac28ccfdf58"
+  },
+  "destination": "https://media.example.invalid/1",
+  "date_time": "2026-10-03T20:00:56.059Z",
+  "sender": "5511900000011@s.whatsapp.net",
+  "server_url": "https://media.example.invalid/2",
+  "apikey": "<redacted:apikey:36>"
+}

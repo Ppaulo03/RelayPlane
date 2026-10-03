@@ -1,0 +1,81 @@
+{
+  "event": "messages.upsert",
+  "instance": "inst_01m41bad3refzv7nc1h5p7tgf4",
+  "data": {
+    "key": {
+      "remoteJid": "5511900000014@s.whatsapp.net",
+      "remoteJidAlt": "5511900000014@s.whatsapp.net",
+      "fromMe": false,
+      "id": "3EB0FAKE00000000080000",
+      "participant": "",
+      "addressingMode": "lid"
+    },
+    "pushName": "[texto 2]",
+    "status": "DELIVERY_ACK",
+    "message": {
+      "audioMessage": {
+        "url": "https://media.example.invalid/37",
+        "mimetype": "audio/ogg; codecs=opus",
+        "fileSha256": "<redacted>",
+        "fileLength": {
+          "low": 4719,
+          "high": 0,
+          "unsigned": true
+        },
+        "seconds": 2,
+        "ptt": true,
+        "mediaKey": "<redacted>",
+        "fileEncSha256": "<redacted>",
+        "directPath": "<directPath:160>",
+        "mediaKeyTimestamp": {
+          "low": 1791067482,
+          "high": 0,
+          "unsigned": false
+        },
+        "contextInfo": {
+          "mentionedJid": [],
+          "groupMentions": [],
+          "statusAttributions": [],
+          "ephemeralSettingTimestamp": {
+            "low": 1790894627,
+            "high": 0,
+            "unsigned": false
+          },
+          "disappearingMode": {
+            "initiator": 0
+          }
+        },
+        "waveform": "<redacted>",
+        "viewOnce": false
+      },
+      "messageContextInfo": {
+        "threadId": [],
+        "deviceListMetadata": "<redacted>",
+        "deviceListMetadataVersion": 2,
+        "messageSecret": "<redacted>"
+      }
+    },
+    "contextInfo": {
+      "mentionedJid": [],
+      "groupMentions": [],
+      "statusAttributions": [],
+      "ephemeralSettingTimestamp": {
+        "low": 1790894627,
+        "high": 0,
+        "unsigned": false
+      },
+      "disappearingMode": {
+        "initiator": 0
+      }
+    },
+    "messageType": "audioMessage",
+    "messageTimestamp": 1791067483,
+    "instanceId": "9f28f842-afcd-4009-90b9-9ac28ccfdf58",
+    "source": "web"
+  },
+  "destination": "https://media.example.invalid/1",
+  "date_time": "2026-10-03T19:47:00.822Z",
+  "sender": "5511900000011@s.whatsapp.net",
+  "server_url": "https://media.example.invalid/2",
+  "apikey": "<redacted:apikey:36>"
+}

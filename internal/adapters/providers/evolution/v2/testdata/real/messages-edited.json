@@ -1,0 +1,17 @@
+{
+  "event": "messages.edited",
+  "instance": "inst_01m41bad3refzv7nc1h5p7tgf4",
+  "data": {
+    "key": {
+      "remoteJid": "5511900000018@lid",
+      "fromMe": true,
+      "id": "3EB0FAKE00000000320000"
+    },
+    "type": "REVOKE"
+  },
+  "destination": "https://media.example.invalid/1",
+  "date_time": "2026-10-03T20:06:03.167Z",
+  "sender": "5511900000011@s.whatsapp.net",
+  "server_url": "https://media.example.invalid/2",
+  "apikey": "<redacted:apikey:36>"
+}
