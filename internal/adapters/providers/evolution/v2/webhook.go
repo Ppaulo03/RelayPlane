@@ -79,6 +79,10 @@ type upsertData struct {
 		FromMe      bool   `json:"fromMe"`
 		ID          string `json:"id"`
 		Participant string `json:"participant"`
+		// Recent WhatsApp versions address people by an opaque LID (<digits>@lid); the phone JID travels in the *Alt fields
+		// (observed against a real node, addressingMode "lid").
+		RemoteJidAlt   string `json:"remoteJidAlt"`
+		ParticipantAlt string `json:"participantAlt"`
 	} `json:"key"`
 	PushName         string         `json:"pushName"`
 	MessageType      string         `json:"messageType"`
@@ -126,14 +130,19 @@ func (w Webhook) Normalize(r ports.InboundRequest) ([]events.Inbound, error) {
 				ts = time.Unix(n, 0).UTC()
 			}
 			group := strings.HasSuffix(d.Key.RemoteJid, "@g.us")
-			from := jidToNumber(d.Key.RemoteJid)
-			if group && d.Key.Participant != "" {
-				from = jidToNumber(d.Key.Participant)
+			senderJid, senderAlt := d.Key.RemoteJid, d.Key.RemoteJidAlt
+			if group {
+				senderJid, senderAlt = d.Key.Participant, d.Key.ParticipantAlt
+			}
+			from, senderLID := senderNumber(senderJid, senderAlt)
+			chatID := ""
+			if group {
+				chatID = d.Key.RemoteJid
 			}
 			typ, text := messageContent(d)
 			out = append(out, events.Inbound{InstanceID: env.Instance, Type: events.MessageReceived, ProviderMessageID: d.Key.ID, Timestamp: ts,
 				Payload: events.MessageReceivedPayload{ProviderMessageID: d.Key.ID, ReplyToProviderMessageID: replyTo(d), From: from, PushName: d.PushName,
-					Type: typ, Text: text, Group: group}})
+					Type: typ, Text: text, Group: group, ChatID: chatID, SenderLID: senderLID}})
 		}
 		return out, nil
 
@@ -212,6 +221,20 @@ func unmarshalOneOrMany[T any](raw json.RawMessage, out *[]T) error {
 	}
 	*out = []T{one}
 	return nil
+}
+
+// senderNumber returns the sender's phone number and, when the provider addressed the sender by LID, that LID. The phone
+// number comes from the alternate JID when the primary one is a LID; if no phone is known the LID digits are returned as
+// the number (they identify the sender but are not dialable).
+func senderNumber(jid, alt string) (number, lid string) {
+	if strings.HasSuffix(jid, "@lid") {
+		lid = jidToNumber(jid)
+		if alt != "" && !strings.HasSuffix(alt, "@lid") {
+			return jidToNumber(alt), lid
+		}
+		return lid, lid
+	}
+	return jidToNumber(jid), ""
 }
 
 func jidToNumber(jid string) string {

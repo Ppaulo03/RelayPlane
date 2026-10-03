@@ -379,6 +379,36 @@ func TestWebhookNormalization(t *testing.T) {
 	}
 }
 
+// Shape observed against a real node (addressingMode "lid"): the participant is an opaque LID and the phone JID is in
+// participantAlt / remoteJidAlt.
+func TestWebhookResolvesLIDSendersToPhoneNumbers(t *testing.T) {
+	w := v2.Webhook{Secret: "s"}
+	norm := func(body string) events.MessageReceivedPayload {
+		t.Helper()
+		out, err := w.Normalize(hook("s", "node-01", 1, body))
+		if err != nil || len(out) != 1 {
+			t.Fatalf("%v %+v", err, out)
+		}
+		return out[0].Payload.(events.MessageReceivedPayload)
+	}
+	g := norm(`{"event":"messages.upsert","instance":"i","data":{"key":{"remoteJid":"120363000000000001@g.us","fromMe":false,"id":"G1",
+		"participant":"19600000000001@lid","participantAlt":"5562999999999@s.whatsapp.net","addressingMode":"lid"},
+		"messageType":"conversation","message":{"conversation":"oi"}}}`)
+	if g.From != "5562999999999" || g.SenderLID != "19600000000001" || g.ChatID != "120363000000000001@g.us" || !g.Group {
+		t.Errorf("%+v", g)
+	}
+	dm := norm(`{"event":"messages.upsert","instance":"i","data":{"key":{"remoteJid":"19600000000001@lid","remoteJidAlt":"5562999999999@s.whatsapp.net","fromMe":false,"id":"D1"},
+		"messageType":"conversation","message":{"conversation":"oi"}}}`)
+	if dm.From != "5562999999999" || dm.SenderLID != "19600000000001" || dm.ChatID != "" || dm.Group {
+		t.Errorf("%+v", dm)
+	}
+	noAlt := norm(`{"event":"messages.upsert","instance":"i","data":{"key":{"remoteJid":"19600000000001@lid","fromMe":false,"id":"D2"},
+		"messageType":"conversation","message":{"conversation":"oi"}}}`)
+	if noAlt.From != "19600000000001" || noAlt.SenderLID != "19600000000001" {
+		t.Errorf("without a phone the LID stays identifiable: %+v", noAlt)
+	}
+}
+
 func mediaMsg(url string) messaging.OutboundMessage {
 	return messaging.OutboundMessage{ID: "m", To: "5562999999999", Type: messaging.TypeDocument, Filename: "a.pdf", Caption: "c",
 		Media: &messaging.Attachment{ContentType: "application/pdf", Size: 4, URL: url}}
