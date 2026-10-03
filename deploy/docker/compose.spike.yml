@@ -1,0 +1,23 @@
+# Real-number spike overlay (see deploy/docker/spike.sh and docs/REAL-NUMBER-SPIKE.md): the REAL stack with REAL Evolution nodes,
+# plus a tap that records the raw webhooks the node sends before RelayPlane normalizes them. For development only.
+services:
+  webhooktap:
+    build: {context: ., args: {CMD: webhooktap}}
+    image: relayplane/webhooktap:dev
+    restart: unless-stopped
+    environment:
+      TARGET: http://gateway:8080
+      CAPTURE_DIR: /captures
+    volumes: ["./captures:/captures"]
+    user: "0:0"   # the bind-mounted captures directory belongs to the host user
+  gateway:
+    environment: &tap
+      WEBHOOK_BASE_URL: http://webhooktap:9000
+    depends_on: !override
+      postgres: {condition: service_healthy}
+      redis: {condition: service_healthy}
+      webhooktap: {condition: service_started}
+  worker:
+    environment: *tap
+  reconciler:
+    environment: *tap
