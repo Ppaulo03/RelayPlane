@@ -60,7 +60,14 @@ func waitMigration(t *testing.T, e *Env, opID string, want ...instance.Operation
 		_ = e.App.Migrations.Drive(bg, opID)
 		op, _ = e.Repos.Operations.Get(bg, opID)
 		for _, w := range want {
-			if op != nil && op.Status == w && (w != instance.OpRunning || op.Step == string(ownership.StepVerifyConn)) {
+			if op == nil {
+				continue
+			}
+			if op.Status == w && (w != instance.OpRunning || op.Step == string(ownership.StepVerifyConn)) {
+				return true
+			}
+			// "reached VERIFY_CONNECTION": the new owner exists, possibly already waiting for its QR scan
+			if w == instance.OpRunning && op.Status == instance.OpAwaitingPairing && op.Step == string(ownership.StepVerifyConn) {
 				return true
 			}
 		}

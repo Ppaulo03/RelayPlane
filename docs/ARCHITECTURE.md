@@ -64,6 +64,9 @@ MIGRATION_REQUESTED → FENCING_OLD_OWNER ─(falha)→ MIGRATION_BLOCKED ─(no
   `GetInstanceState`). **O banco recusa a troca de owner** se a operação não estiver em `OLD_OWNER_FENCED`
   (`InstanceRepository.Reassign` valida o `step` dentro da mesma transação) — INV-09 não depende só do código
   do serviço. Falhou a confirmação ⇒ `MIGRATION_BLOCKED` (consistência > disponibilidade).
+  Quando o novo owner já existe e só falta o usuário escanear o QR, a operação fica **`AWAITING_PAIRING`** (status ativo, `PAIRING_REQUIRED`), sem
+  timeout para `FAILED`: a infraestrutura está correta e o gargalo é o usuário. O timeout `MIGRATION_VERIFY_TIMEOUT` só vale para travas reais de
+  verificação. Deletar a instância nesse estado cancela a migração (`CANCELLED_BY_DELETE`). Operações finalizadas (`SUCCEEDED`/`FAILED`) são imutáveis.
 * **Sem failover agressivo**: node indisponível ⇒ suas instâncias ficam indisponíveis; heartbeat perdido nunca
   migra sessão. O Reconciler só marca o node `OFFLINE` (`routing.NextStatusAfterProbe`).
 
@@ -92,7 +95,7 @@ A ordem por `instance_id` é garantida em **três camadas**, não só no broker:
    republicado depois do predecessor (esperar no lugar travaria a chave se o predecessor reaparecer *atrás*). Predecessor
    **`UNKNOWN` é barreira**: não sabemos se saiu, então enviar *N* poderia inverter a conversa; as mensagens seguintes esperam
    (as de **outras** instâncias seguem) até `POST /messages/{id}/resolve` (`sent`/`not_sent`) ou até `UNKNOWN_BARRIER_TIMEOUT`
-   (padrão 15 min; `0` = indefinidamente). O timeout é a escolha explícita "disponibilidade > ordem estrita" e é medido pelo
+   (padrão `0` = indefinidamente: ordem estrita). Um timeout positivo é a escolha explícita "disponibilidade > ordem estrita" e é medido pelo
    relógio do banco. `FAILED` não bloqueia (provadamente não saiu).
 
 ## 7. Command queue (estratégia do adapter)
@@ -146,6 +149,13 @@ Defesas: a API usa JSON estrito (campos desconhecidos, p.ex. `base64`, são reje
 da fila aplicam o limite inline (`MEDIA_INLINE_MAX_BYTES`) — INV-11; objetos têm TTL (`blob_metadata.expires_at`),
 cleanup remove expirados e **órfãos**, e a lifecycle do bucket é rede de segurança; `CHECK` no banco impede chave fora
 do namespace do tenant.
+
+### Fencing de eventos, retry durável e identidade do provider
+* **Eventos carregam `source_assignment {node_id, epoch}`**, fixado depois da validação do webhook; o projector aplica `instance.status_changed` sob esse epoch
+  (`SetObserved(epoch do evento)`), logo um evento atrasado do owner anterior vira `STALE_ASSIGNMENT` e nunca altera a atribuição nova.
+* **O orçamento de retry é o `attempt_count` do PostgreSQL** (`max(entrega do broker, attempt_count)`); uma perda total do Redis não reinicia a conta.
+  Tentativas que falham antes do claim (instância não conectada) também são gravadas.
+* **Adoção usa `LookupInstance`**: o core não assume que o id do provider é o id do RelayPlane.
 
 ## 11. Invariantes e onde são testadas
 

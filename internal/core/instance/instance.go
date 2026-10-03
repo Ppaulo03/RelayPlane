@@ -170,16 +170,19 @@ const (
 type OperationStatus string
 
 const (
-	OpPending   OperationStatus = "PENDING"
-	OpRunning   OperationStatus = "RUNNING"
-	OpBlocked   OperationStatus = "BLOCKED"
-	OpSucceeded OperationStatus = "SUCCEEDED"
-	OpFailed    OperationStatus = "FAILED"
+	OpPending OperationStatus = "PENDING"
+	OpRunning OperationStatus = "RUNNING"
+	OpBlocked OperationStatus = "BLOCKED"
+	// OpAwaitingPairing: infrastructure is done (old owner fenced, new epoch assigned, new owner
+	// created); only the user has to scan the QR code. It never times out into FAILED.
+	OpAwaitingPairing OperationStatus = "AWAITING_PAIRING"
+	OpSucceeded       OperationStatus = "SUCCEEDED"
+	OpFailed          OperationStatus = "FAILED"
 )
 
 // IsActive reports whether the operation may still make progress.
 func (s OperationStatus) IsActive() bool {
-	return s == OpPending || s == OpRunning || s == OpBlocked
+	return s == OpPending || s == OpRunning || s == OpBlocked || s == OpAwaitingPairing
 }
 
 // Operation tracks an asynchronous operation. Step carries the fine-grained

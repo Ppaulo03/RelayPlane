@@ -110,7 +110,7 @@ func (f *fakeEvolution) serve(w http.ResponseWriter, r *http.Request) {
 		var out []map[string]any
 		for n, i := range f.instances {
 			if want := r.URL.Query().Get("instanceName"); want == "" || want == n {
-				out = append(out, map[string]any{"name": n, "connectionStatus": i.state, "ownerJid": i.owner})
+				out = append(out, map[string]any{"id": "uuid-" + n, "name": n, "connectionStatus": i.state, "ownerJid": i.owner})
 			}
 		}
 		writeJSON(w, 200, out)

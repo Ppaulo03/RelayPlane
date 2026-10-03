@@ -102,7 +102,7 @@ func (r opRepo) Advance(ctx context.Context, id, from, to string, st instance.Op
 func (r opRepo) Complete(ctx context.Context, id string, st instance.OperationStatus, code, msg string, at time.Time) error {
 	// compare-and-set on the status: a finished operation is immutable
 	tag, err := r.s.pool.Exec(ctx, `UPDATE operations SET status=$2,error_code=$3,error_message=$4,completed_at=$5,updated_at=$5
-		WHERE id=$1 AND status IN ('PENDING','RUNNING','BLOCKED')`, id, string(st), code, msg, at)
+		WHERE id=$1 AND status IN ('PENDING','RUNNING','BLOCKED','AWAITING_PAIRING')`, id, string(st), code, msg, at)
 	if err == nil && tag.RowsAffected() == 0 {
 		cur, gerr := r.Get(ctx, id)
 		if gerr != nil {
@@ -115,12 +115,12 @@ func (r opRepo) Complete(ctx context.Context, id string, st instance.OperationSt
 
 func (r opRepo) FindActive(ctx context.Context, instanceID string, t instance.OperationType) (*instance.Operation, error) {
 	return scanOp(r.s.pool.QueryRow(ctx, `SELECT `+opCols+` FROM operations
-		WHERE instance_id=$1 AND type=$2 AND status IN ('PENDING','RUNNING','BLOCKED') ORDER BY created_at LIMIT 1`, instanceID, string(t)))
+		WHERE instance_id=$1 AND type=$2 AND status IN ('PENDING','RUNNING','BLOCKED','AWAITING_PAIRING') ORDER BY created_at LIMIT 1`, instanceID, string(t)))
 }
 
 func (r opRepo) ListActive(ctx context.Context, t instance.OperationType, limit int) ([]instance.Operation, error) {
 	rows, err := r.s.pool.Query(ctx, `SELECT `+opCols+` FROM operations
-		WHERE type=$1 AND status IN ('PENDING','RUNNING','BLOCKED') ORDER BY created_at LIMIT $2`, string(t), limit)
+		WHERE type=$1 AND status IN ('PENDING','RUNNING','BLOCKED','AWAITING_PAIRING') ORDER BY created_at LIMIT $2`, string(t), limit)
 	if err != nil {
 		return nil, err
 	}

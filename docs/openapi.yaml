@@ -260,7 +260,7 @@ components:
       properties: {qrcode: {type: string}, pairing_code: {type: string}, expires_at: {type: string, format: date-time}}
     OperationRef:
       type: object
-      properties: {operation_id: {type: string}, status: {type: string, enum: [PENDING, RUNNING, BLOCKED, SUCCEEDED, FAILED]}, error_code: {type: string}}
+      properties: {operation_id: {type: string}, status: {type: string, enum: [PENDING, RUNNING, BLOCKED, AWAITING_PAIRING, SUCCEEDED, FAILED]}, error_code: {type: string}}
     MigrateResponse:
       type: object
       properties: {operation_id: {type: string}, status: {type: string}, step: {type: string, enum: [MIGRATION_REQUESTED, FENCING_OLD_OWNER, MIGRATION_BLOCKED, OLD_OWNER_FENCED, ASSIGN_NEW_EPOCH, START_NEW_OWNER, VERIFY_CONNECTION, CONNECTED]}}
@@ -269,7 +269,7 @@ components:
       properties:
         id: {type: string}
         type: {type: string, enum: [CREATE_INSTANCE, DELETE_INSTANCE, RECONNECT, LOGOUT, MIGRATE]}
-        status: {type: string}
+        status: {type: string, enum: [PENDING, RUNNING, BLOCKED, AWAITING_PAIRING, SUCCEEDED, FAILED], description: "AWAITING_PAIRING: a migration whose infrastructure is done and only needs a QR scan on the new owner (never times out into FAILED)"}
         step: {type: string}
         instance_id: {type: string}
         error_code: {type: string}

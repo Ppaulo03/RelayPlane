@@ -103,15 +103,25 @@ func TestLifecycle_DeleteAndMigrateNeverBothProgress(t *testing.T) {
 		inst := e.CreateInstance(e.Tenant, "a", true)
 		var wg sync.WaitGroup
 		var migErr, delErr error
+		var migRes app.MigrateResult
 		wg.Add(2)
 		go func() {
 			defer wg.Done()
-			_, _, migErr = e.App.Migrations.Start(bg, e.Tenant, inst.ID, app.MigrateInput{}, "")
+			migRes, _, migErr = e.App.Migrations.Start(bg, e.Tenant, inst.ID, app.MigrateInput{}, "")
 		}()
 		go func() { defer wg.Done(); _, _, delErr = e.App.Instances.Delete(bg, e.Tenant, inst.ID, "") }()
 		wg.Wait()
 		if migErr == nil && delErr == nil {
-			t.Fatalf("round %d: both DELETE and MIGRATE were accepted", round)
+			// Both accepted is only valid when the migration had already reached its pairing wait and the
+			// delete cancelled it: exactly one of them is still in effect (the delete).
+			op, err := e.Repos.Operations.Get(bg, migRes.OperationID)
+			cur, _ := e.Repos.Instances.Get(bg, inst.ID)
+			if err != nil || op.Status != instance.OpFailed || op.ErrorCode != "CANCELLED_BY_DELETE" || cur.ObservedState != instance.Deleted {
+				t.Fatalf("round %d: DELETE and MIGRATE were both accepted and both stay in effect: op=%+v instance=%s", round, op, cur.ObservedState)
+			}
+			e.cancel()
+			e.wg.Wait()
+			continue
 		}
 		for _, err := range []error{migErr, delErr} {
 			if err != nil && !errors.Is(err, errs.ErrConflict) && !errors.Is(err, errs.ErrNotFound) && !errors.Is(err, errs.ErrInProgress) {
@@ -177,5 +187,86 @@ func TestLifecycle_ReconnectNeverUsesAStaleAssignmentAfterFencing(t *testing.T) 
 		}
 		e.cancel()
 		e.wg.Wait()
+	}
+}
+
+// ---- migration waiting for the user (second review) ----
+
+// 15.8 The new owner needs a QR scan: the migration is AWAITING_PAIRING, not FAILED, however
+// long the user takes; the instance already belongs to the new owner.
+func TestMigration_AwaitingPairingIsNotAFailureAndNeverTimesOut(t *testing.T) {
+	e := NewEnv(t)
+	inst := e.CreateInstance(e.Tenant, "a", true)
+	res, _, err := e.App.Migrations.Start(bg, e.Tenant, inst.ID, app.MigrateInput{}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var op *instance.Operation
+	Eventually(t, 5*time.Second, "awaiting pairing", func() bool {
+		_ = e.App.Migrations.Drive(bg, res.OperationID)
+		op, _ = e.Repos.Operations.Get(bg, res.OperationID)
+		return op.Status == instance.OpAwaitingPairing
+	})
+	if op.ErrorCode != "PAIRING_REQUIRED" || op.Step != string(ownership.StepVerifyConn) {
+		t.Fatalf("%+v", op)
+	}
+	cur, _ := e.Repos.Instances.Get(bg, inst.ID)
+	if cur.AssignmentEpoch != 2 || cur.NodeID == inst.NodeID {
+		t.Fatalf("infrastructure is done: the new owner must hold the instance: %+v", cur)
+	}
+	// far longer than MigrationVerifyTimeout (300ms in the test environment)
+	time.Sleep(700 * time.Millisecond)
+	for i := 0; i < 3; i++ {
+		_ = e.App.Migrations.Drive(bg, res.OperationID)
+	}
+	op, _ = e.Repos.Operations.Get(bg, res.OperationID)
+	if op.Status != instance.OpAwaitingPairing {
+		t.Fatalf("waiting for a QR scan must not turn into %s", op.Status)
+	}
+	if again, _, err := e.App.Migrations.Start(bg, e.Tenant, inst.ID, app.MigrateInput{}, ""); err != nil || again.OperationID != res.OperationID {
+		t.Fatalf("starting again joins the waiting migration: %+v %v", again, err)
+	}
+	// the user finally scans the QR code
+	e.Provider.SetStateOn(cur.NodeID, inst.ID, instance.Connected)
+	waitMigration(t, e, res.OperationID, instance.OpSucceeded)
+	if final, _ := e.Repos.Instances.Get(bg, inst.ID); final.ObservedState != instance.Connected {
+		t.Fatalf("observed %s", final.ObservedState)
+	}
+}
+
+// A new owner that hangs for any other reason still times out: only waiting for the user is exempt.
+func TestMigration_VerificationHangStillTimesOut(t *testing.T) {
+	e := NewEnv(t)
+	inst := e.CreateInstance(e.Tenant, "a", true)
+	res, _, _ := e.App.Migrations.Start(bg, e.Tenant, inst.ID, app.MigrateInput{}, "")
+	waitMigration(t, e, res.OperationID, instance.OpSucceeded, instance.OpRunning)
+	cur, _ := e.Repos.Instances.Get(bg, inst.ID)
+	e.Provider.SetStateOn(cur.NodeID, inst.ID, instance.Connecting) // never becomes CONNECTED
+	Eventually(t, 5*time.Second, "verification timeout", func() bool {
+		_ = e.App.Migrations.Drive(bg, res.OperationID)
+		op, _ := e.Repos.Operations.Get(bg, res.OperationID)
+		return op.Status == instance.OpFailed && op.ErrorCode == "VERIFY_TIMEOUT"
+	})
+}
+
+// An instance stuck awaiting pairing can still be deleted: that cancels the migration.
+func TestMigration_DeleteWhileAwaitingPairingCancelsIt(t *testing.T) {
+	e := NewEnv(t)
+	inst := e.CreateInstance(e.Tenant, "a", true)
+	res, _, _ := e.App.Migrations.Start(bg, e.Tenant, inst.ID, app.MigrateInput{}, "")
+	Eventually(t, 5*time.Second, "awaiting pairing", func() bool {
+		_ = e.App.Migrations.Drive(bg, res.OperationID)
+		op, _ := e.Repos.Operations.Get(bg, res.OperationID)
+		return op.Status == instance.OpAwaitingPairing
+	})
+	if _, _, err := e.App.Instances.Delete(bg, e.Tenant, inst.ID, ""); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	op, _ := e.Repos.Operations.Get(bg, res.OperationID)
+	if op.Status != instance.OpFailed || op.ErrorCode != "CANCELLED_BY_DELETE" {
+		t.Fatalf("the migration must be cancelled, not left active: %+v", op)
+	}
+	if got, _ := e.Repos.Instances.Get(bg, inst.ID); got.ObservedState != instance.Deleted {
+		t.Fatalf("observed %s", got.ObservedState)
 	}
 }

@@ -28,6 +28,22 @@ Legenda: ✅ feito e testado · ⚠️ feito com limitação registrada · ⏭�
 | Testes de concorrência/falha da especificação | ✅ | [FAILURE-MODES](FAILURE-MODES.md); `-race` limpo (container) |
 | OpenAPI, runbook, docs de arquitetura/adapters | ✅ | |
 
+## Segundo review (recuperação e semântica distribuída)
+
+| Item | Estado |
+|---|---|
+| Outbox recupera `DISPATCHING`; purge preserva estado de recuperação | ✅ |
+| Epoch de origem nos eventos canônicos; projector rejeita evento stale | ✅ |
+| Estados terminais de operação imutáveis | ✅ |
+| Orçamento de retry durável (PostgreSQL) | ✅ |
+| Retenção do EventBus configurável + lag/trim/perda + alertas | ✅ (definir o SLA de retenção do seu volume; Kafka como evolução) |
+| `UNKNOWN` estrito por padrão | ✅ (`UNKNOWN_BARRIER_TIMEOUT` positivo = escolha explícita de disponibilidade) |
+| `AWAITING_PAIRING` na migração | ✅ |
+| `LookupInstance` (identidade do provider) | ✅ |
+| Upload: `MaxBytesReader`, `Put` estrito, teste MinIO real | ✅ |
+| Release da imagem Evolution (scan/push/digest) | ⚠️ alvo `make evolution-image` pronto; push e scan dependem do seu registry/scanner |
+| Chaos/load testing | ⏭️ próximo passo (kill -9 de workers, wipe/partição do Redis, queda do Postgres, jitter de rede) |
+
 ## Limitações e riscos conhecidos (decisões conscientes)
 
 0. **CVE-2026-48063 (Baileys):** mitigado com imagem derivada (Baileys `7.0.0-rc13`), validada com a stack real (create, QR, webhooks, delete). Pendente de homologação: pareamento com número real e, a médio prazo, migrar para uma release oficial da Evolution que já traga Baileys ≥ rc12 (as tags `2.4.0-rc2`/`latest` ainda não trazem; `homolog` não migra o banco).
@@ -40,7 +56,7 @@ Legenda: ✅ feito e testado · ⚠️ feito com limitação registrada · ⏭�
    partição o histórico recomeça. Limites agregados (tenant/global somados entre workers) ⏭️: exige contador distribuído (Redis) —
    a interface `ratelimit.Limiter.Reserve` já comporta a troca.
 4. **Mensagens aceitas antes de uma migração viram `STALE_COMMAND`** (conforme a especificação). Reenvio é responsabilidade do cliente.
-5. **Barreira `UNKNOWN` com timeout:** o padrão (15 min) prefere disponibilidade; `UNKNOWN_BARRIER_TIMEOUT=0` dá ordem estrita ao custo de exigir `resolve`.
+5. **Barreira `UNKNOWN` estrita por padrão:** uma mensagem ambígua para a instância até `resolve`; `UNKNOWN_BARRIER_TIMEOUT=15m` (por exemplo) troca ordem estrita por disponibilidade.
 6. **Chave de idempotência bloqueada por até `StaleAfter` (10 s)** após erro transitório não-rejeitado (ex.: falha de banco); retry
    com a mesma chave devolve `409 request_in_progress` nesse intervalo.
 7. **Locks Redis de instância única** reduzem trabalho duplicado; a corretude nunca depende deles (CAS no PostgreSQL).

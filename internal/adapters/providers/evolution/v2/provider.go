@@ -66,6 +66,7 @@ type connectResponse struct {
 }
 
 type fetchInstance struct {
+	ID               string `json:"id"`
 	Name             string `json:"name"`
 	ConnectionStatus string `json:"connectionStatus"`
 	OwnerJid         string `json:"ownerJid"`
@@ -165,6 +166,29 @@ func (p *Provider) GetInstanceState(ctx context.Context, a ownership.Assignment)
 		return st, nil
 	}
 	return nil, fmt.Errorf("%w: unknown connection state %q", errs.ErrProviderRejected, cs.Instance.State)
+}
+
+// LookupInstance returns Evolution's own instance id (not the instance name RelayPlane chose)
+// and the current state of an existing session.
+func (p *Provider) LookupInstance(ctx context.Context, a ownership.Assignment) (*ports.ProviderInstance, error) {
+	resp, err := p.c.do(ctx, a.NodeID, "GET", "/instance/fetchInstances", url.Values{"instanceName": {a.InstanceID}}, nil, opManage, true)
+	if err != nil {
+		return nil, err
+	}
+	var list []fetchInstance
+	if err := p.c.decode(resp, &list); err != nil {
+		return nil, err
+	}
+	for _, i := range list {
+		if i.Name == a.InstanceID {
+			st, err := p.GetInstanceState(ctx, a)
+			if err != nil {
+				return nil, err
+			}
+			return &ports.ProviderInstance{ProviderInstanceID: i.ID, State: st.State}, nil
+		}
+	}
+	return nil, fmt.Errorf("%w: %s", errs.ErrInstanceNotFound, a.InstanceID)
 }
 
 // paired reports whether the session ever completed pairing (has an owner JID).

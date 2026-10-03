@@ -105,6 +105,21 @@ func ProviderContractSuite(t *testing.T, newHarness func(t *testing.T) ProviderH
 		}
 	})
 
+	t.Run("LookupInstanceReturnsTheProvidersOwnIdentity", func(t *testing.T) {
+		h, a, ctx := newInst(t)
+		if _, err := h.Provider.LookupInstance(ctx, a); !errors.Is(err, errs.ErrInstanceNotFound) {
+			t.Fatalf("unknown session: %v", err)
+		}
+		created, err := h.Provider.CreateInstance(ctx, ports.CreateInstanceRequest{Assignment: a, TenantID: "t1", Name: "contract"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, err := h.Provider.LookupInstance(ctx, a)
+		if err != nil || got.ProviderInstanceID == "" || got.ProviderInstanceID != created.ProviderInstanceID || !got.State.Valid() {
+			t.Fatalf("lookup must identify the session exactly as create did: %+v vs %+v (%v)", got, created, err)
+		}
+	})
+
 	t.Run("PairingMaterial", func(t *testing.T) {
 		h, a, ctx := newInst(t)
 		create(t, h, a, ctx)

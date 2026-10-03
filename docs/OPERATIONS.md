@@ -55,8 +55,9 @@ instância** (alerta: `relayplane_outbound_barrier_deferrals_total{reason="unkno
 ```bash
 curl -X POST -H "Authorization: Bearer $KEY" :8080/api/v1/messages/<id>/resolve -d '{"outcome":"sent"}'      # ou "not_sent"
 ```
-Sem ação, a barreira cai sozinha após `UNKNOWN_BARRIER_TIMEOUT` (15 min; `0` desliga o timeout e exige `resolve`). Depois do timeout a
-mensagem segue `UNKNOWN` e a ordem relativa a ela deixa de ser garantida.
+Por padrão (`UNKNOWN_BARRIER_TIMEOUT=0`) a barreira só cai com `resolve`: ordem estrita, ao custo de a instância ficar parada até alguém
+decidir (monitore `relayplane_outbound_barrier_deferrals_total{reason="unknown"}`). Definir um timeout (ex.: `15m`) faz a barreira cair
+sozinha; a mensagem segue `UNKNOWN` e a ordem relativa a ela deixa de ser garantida.
 
 ### Outbox
 `outbox` guarda cada comando aceito até a publicação (gateway publica de imediato; o reconciler varre a cada 1 s e republica comandos

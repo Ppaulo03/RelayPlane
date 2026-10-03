@@ -337,11 +337,9 @@ func (s *MigrationService) startNewOwner(ctx context.Context, op *instance.Opera
 	a := inst.Assignment() // new node, new epoch
 	pi, err := provider.CreateInstance(ctx, ports.CreateInstanceRequest{Assignment: a, TenantID: inst.TenantID, Name: inst.Name})
 	if errors.Is(err, errs.ErrInstanceAlreadyExists) {
-		// adopt only after the provider confirms the session really exists for this assignment
-		var st *ports.InstanceState
-		if st, err = provider.GetInstanceState(ctx, a); err == nil {
-			pi = &ports.ProviderInstance{ProviderInstanceID: inst.ID, State: st.State}
-		}
+		// adopt only after the provider confirms the session really exists for this assignment,
+		// using the provider's own identifier
+		pi, err = provider.LookupInstance(ctx, a)
 	}
 	if err != nil {
 		if errs.Classify(err) == errs.NonRetryable {
@@ -377,14 +375,30 @@ func (s *MigrationService) verify(ctx context.Context, op *instance.Operation, i
 		return false, nil
 	}
 	if err == nil && st.State.Valid() {
-		_, _ = s.d.observe(ctx, *inst, st.State) // e.g. AWAITING_PAIRING: the session needs a re-pair
+		_, _ = s.d.observe(ctx, *inst, st.State)
+	}
+	// The new owner exists and is correctly assigned; it only needs the user to scan a QR code.
+	// That is not an infrastructure failure and must not time out into FAILED: the operation
+	// says so explicitly and keeps waiting (the user, not the platform, is the bottleneck).
+	if err == nil && (st.State == instance.AwaitingPairing || st.State == instance.LoggedOut) {
+		if op.Status != instance.OpAwaitingPairing {
+			s.d.Log.InfoContext(ctx, "migration waiting for the user to pair the new owner")
+			_, aerr := s.d.Repos.Operations.Advance(ctx, op.ID, op.Step, op.Step, instance.OpAwaitingPairing,
+				ports.OperationPatch{ErrorCode: "PAIRING_REQUIRED", ErrorMessage: "scan the QR code on the new owner to finish the migration"})
+			return false, aerr
+		}
+		return false, nil
+	}
+	if op.Status == instance.OpAwaitingPairing { // the session moved on (e.g. CONNECTING): back to normal verification
+		if _, aerr := s.d.Repos.Operations.Advance(ctx, op.ID, op.Step, op.Step, instance.OpRunning, ports.OperationPatch{}); aerr != nil {
+			return false, aerr
+		}
 	}
 	started := op.StepStartedAt
 	if started.IsZero() {
 		started = op.CreatedAt
 	}
-	if s.d.now().Sub(started) > s.d.Cfg.MigrationVerifyTimeout { // only the time spent verifying counts
-		// The new owner is active and owned; the reconciler keeps converging it.
+	if s.d.now().Sub(started) > s.d.Cfg.MigrationVerifyTimeout { // only genuine verification time counts
 		return s.fail(ctx, op, "VERIFY_TIMEOUT", errors.New("new owner did not reach CONNECTED in time"))
 	}
 	return false, nil

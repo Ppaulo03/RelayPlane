@@ -72,6 +72,10 @@ type MessagingProvider interface {
 	SendMessage(ctx context.Context, assignment ownership.Assignment, msg messaging.OutboundMessage) (*SendResult, error)
 	Capabilities(ctx context.Context) ProviderCapabilities
 
+	// LookupInstance returns the provider's own identifier and state of an existing session for
+	// this assignment (ErrInstanceNotFound otherwise). Adoption after a crash uses it so the
+	// core never assumes that the provider's id equals RelayPlane's instance id.
+	LookupInstance(ctx context.Context, assignment ownership.Assignment) (*ProviderInstance, error)
 	// ConnectInstance asks the owner to (re)open the session.
 	ConnectInstance(ctx context.Context, assignment ownership.Assignment) error
 	// Disconnect closes the session. It MUST NOT return nil until the socket

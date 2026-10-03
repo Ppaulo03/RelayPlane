@@ -230,6 +230,20 @@ func (f *FakeProvider) get(a ownership.Assignment) (*fakeInst, error) {
 	return i, nil
 }
 
+func (f *FakeProvider) LookupInstance(_ context.Context, a ownership.Assignment) (*ports.ProviderInstance, error) {
+	f.enter("LookupInstance", a)
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if err := f.injected(false); err != nil {
+		return nil, err
+	}
+	i, err := f.get(a)
+	if err != nil {
+		return nil, err
+	}
+	return &ports.ProviderInstance{ProviderInstanceID: "fake-" + a.InstanceID, State: i.state}, nil
+}
+
 func (f *FakeProvider) DeleteInstance(_ context.Context, a ownership.Assignment) error {
 	f.enter("DeleteInstance", a)
 	f.mu.Lock()

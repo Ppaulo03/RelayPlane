@@ -31,5 +31,8 @@ Matriz de compatibilidade
 | 0.2.x | `evolution-v2` | 2.4.x | não testado (recusado por padrão) |
 | — | `evolution-v3` | 3.x | não implementado |
 
+**Fluxo de release da imagem Evolution** (`make evolution-image`): build → confere o Baileys instalado → scan (trivy ou docker scout, se instalados; sem scanner o alvo avisa
+que **não** escaneou) → com `REGISTRY=...` faz push e imprime o digest imutável (`registry/evolution@sha256:…`) que deve ir para o compose/manifests. Não implante por tag mutável.
+
 Para atualizar um digest: `docker pull <imagem:tag>` → `docker image inspect --format '{{index .RepoDigests 0}}' <imagem:tag>` →
 atualizar **todos** os arquivos acima e esta tabela.

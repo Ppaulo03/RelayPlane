@@ -74,8 +74,9 @@ type Config struct {
 	NodeOfflineAfter   time.Duration
 
 	MigrationVerifyTimeout time.Duration
-	// UnknownBarrierTimeout: how long an UNKNOWN message holds back later messages of
-	// the same instance (0 = until it is resolved).
+	// UnknownBarrierTimeout: how long an UNKNOWN message holds back later messages of the
+	// same instance. Default 0 = until it is resolved (strict ordering); a positive value is
+	// an explicit availability-over-ordering choice.
 	UnknownBarrierTimeout time.Duration
 }
 
@@ -97,7 +98,7 @@ func Load() (Config, error) {
 		ReconcilerEnabled: getBool("RECONCILER_ENABLED", true), ReconcilerInterval: getDur("RECONCILER_INTERVAL", 10*time.Second),
 		InstanceInterval: getDur("RECONCILER_INSTANCE_INTERVAL", 30*time.Second), NodeOfflineAfter: getDur("NODE_OFFLINE_AFTER", time.Minute),
 		MigrationVerifyTimeout: getDur("MIGRATION_VERIFY_TIMEOUT", 10*time.Minute),
-		UnknownBarrierTimeout:  getDur("UNKNOWN_BARRIER_TIMEOUT", 15*time.Minute),
+		UnknownBarrierTimeout:  getDur("UNKNOWN_BARRIER_TIMEOUT", 0),
 	}
 	var lvl slog.Level
 	if err := lvl.UnmarshalText([]byte(get("LOG_LEVEL", "info"))); err != nil {

@@ -133,14 +133,8 @@ func (s *InstanceService) ProvisionLocked(ctx context.Context, inst instance.Ins
 	a := inst.Assignment()
 	pi, err := provider.CreateInstance(ctx, ports.CreateInstanceRequest{Assignment: a, TenantID: inst.TenantID, Name: inst.Name})
 	if errors.Is(err, errs.ErrInstanceAlreadyExists) {
-		var st *ports.InstanceState
-		if st, err = provider.GetInstanceState(ctx, a); err == nil {
-			pid := inst.ProviderInstanceID
-			if pid == "" {
-				pid = inst.ID // the provider-side instance name is the RelayPlane id
-			}
-			pi = &ports.ProviderInstance{ProviderInstanceID: pid, State: st.State}
-		}
+		// adopt: ask the provider who it says this session is (its id may differ from ours)
+		pi, err = provider.LookupInstance(ctx, a)
 	}
 	if err != nil {
 		return s.provisionFailed(ctx, inst, opID, err)
@@ -215,7 +209,13 @@ func (s *InstanceService) Delete(ctx context.Context, tenantID, id, idemKey stri
 					return err
 				}
 				if op, err := s.d.Repos.Operations.FindActive(ctx, inst.ID, instance.OpMigrate); err == nil {
-					return fmt.Errorf("%w: migration %s in progress", errs.ErrConflict, op.ID)
+					if op.Status != instance.OpAwaitingPairing {
+						return fmt.Errorf("%w: migration %s in progress", errs.ErrConflict, op.ID)
+					}
+					// the migration only waits for a QR scan: deleting the instance cancels it
+					if cerr := s.d.Repos.Operations.Complete(ctx, op.ID, instance.OpFailed, "CANCELLED_BY_DELETE", "instance deleted while awaiting pairing", s.d.now()); cerr != nil && !errors.Is(cerr, errs.ErrAlreadyTerminal) {
+						return cerr
+					}
 				}
 				out, err = s.requestDelete(ctx, *inst)
 				return err

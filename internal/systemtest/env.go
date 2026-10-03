@@ -145,6 +145,7 @@ func NewEnv(t *testing.T) *Env {
 
 	cfg := app.DefaultConfig()
 	cfg.MediaPolicy.InlineMaxBytes = InlineLimit
+	cfg.MigrationVerifyTimeout = 300 * time.Millisecond
 	idem := idempotency.NewService(e.Repos.Idempotency)
 	idem.StaleAfter = 50 * time.Millisecond
 	e.App = app.New(app.Deps{Repos: e.Repos, Providers: reg, Queue: e.Queue, Bus: e.Bus, Blob: e.Blob, Locker: e.Locker,
