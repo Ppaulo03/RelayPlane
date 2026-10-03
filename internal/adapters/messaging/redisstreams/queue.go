@@ -352,6 +352,11 @@ func (q *Queue) servePartition(ctx context.Context, p int, consumer, token strin
 					push(s.Messages)
 				}
 			case errors.Is(err, redis.Nil), errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
+			case isNoGroup(err):
+				// Redis lost its data (restart without persistence, failover to an empty replica, FLUSHALL):
+				// the group is gone and would never come back by itself. Recreate it; entries published since
+				// the wipe are still in the (re-created) stream and are read from the start.
+				_ = q.rdb.XGroupCreateMkStream(lctx, stream, group, "0").Err()
 			default:
 				sleepCtx(lctx, 200*time.Millisecond)
 			}
@@ -370,6 +375,9 @@ func (q *Queue) servePartition(ctx context.Context, p int, consumer, token strin
 		buf = q.apply(lctx, p, buf, e, res)
 	}
 }
+
+// isNoGroup reports the error Redis returns when the stream or its consumer group does not exist.
+func isNoGroup(err error) bool { return err != nil && strings.Contains(err.Error(), "NOGROUP") }
 
 func idLess(a, b string) bool {
 	am, as := splitID(a)

@@ -105,6 +105,9 @@ func (b *Bus) Subscribe(ctx context.Context, group string, h ports.EventHandler)
 		res, err := b.rdb.XReadGroup(ctx, &redis.XReadGroupArgs{Group: group, Consumer: consumer,
 			Streams: []string{b.stream(), ">"}, Count: 20, Block: b.cfg.Block}).Result()
 		if err != nil && !errors.Is(err, redis.Nil) && ctx.Err() == nil {
+			if isNoGroup(err) { // Redis lost its data: recreate the group (see Queue.servePartition)
+				_ = b.rdb.XGroupCreateMkStream(ctx, b.stream(), group, "0").Err()
+			}
 			sleepCtx(ctx, 200*time.Millisecond)
 		}
 		for _, s := range res {

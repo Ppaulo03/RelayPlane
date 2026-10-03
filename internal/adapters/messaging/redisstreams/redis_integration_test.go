@@ -137,3 +137,89 @@ func TestEventBusStatsDetectTrimmingBeyondAConsumer(t *testing.T) {
 		t.Fatalf("a consumer that was overtaken has trim risk >= 1: %v", st.TrimRisk())
 	}
 }
+
+// wipe deletes every key of a prefix: what a Redis restart without persistence (or a failover to an empty
+// replica) does to the broker's streams, consumer groups, leases and retry counters.
+func wipe(t *testing.T, c *redis.Client, pfx string) {
+	t.Helper()
+	ctx := context.Background()
+	keys, err := c.Keys(ctx, pfx+"*").Result()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(keys) > 0 {
+		if err := c.Del(ctx, keys...).Err(); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// Redis losing its data must not leave consumers spinning on NOGROUP forever.
+func TestQueue_ConsumersRecoverAfterRedisLosesItsData(t *testing.T) {
+	c := client(t)
+	pfx := prefix()
+	q, err := redisstreams.NewQueue(context.Background(), c, redisstreams.QueueConfig{Prefix: pfx, Partitions: 4, InlineMaxBytes: contracttest.QueueInlineLimit,
+		LeaseTTL: 900 * time.Millisecond, Block: 30 * time.Millisecond, DefaultRetryDelay: 20 * time.Millisecond})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var got atomic.Int64
+	go func() {
+		_ = q.Consume(ctx, func(context.Context, ports.Command) (ports.Result, error) {
+			got.Add(1)
+			return ports.Result{Disposition: ports.Ack}, nil
+		})
+	}()
+	pub := func(id string) {
+		if err := q.Publish(ctx, ports.Command{ID: id, PartitionKey: "inst_a", Payload: map[string]string{"x": id}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	pub("before")
+	waitFor(t, "first command", func() bool { return got.Load() == 1 })
+	wipe(t, c, pfx)
+	pub("after") // XADD recreates the stream, but not the consumer group
+	waitFor(t, "command published after the wipe", func() bool { return got.Load() == 2 })
+}
+
+func TestBus_SubscribersRecoverAfterRedisLosesItsData(t *testing.T) {
+	c := client(t)
+	pfx := prefix()
+	b := redisstreams.NewBus(c, redisstreams.BusConfig{Prefix: pfx, Block: 30 * time.Millisecond, ReclaimIdle: 100 * time.Millisecond})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var got atomic.Int64
+	go func() {
+		_ = b.Subscribe(ctx, "g", func(context.Context, events.Event) error { got.Add(1); return nil })
+	}()
+	time.Sleep(200 * time.Millisecond)
+	if err := b.Publish(ctx, testEvent(1)); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "first event", func() bool { return got.Load() == 1 })
+	wipe(t, c, pfx)
+	if err := b.Publish(ctx, testEvent(2)); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "event published after the wipe", func() bool { return got.Load() == 2 })
+}
+
+func waitFor(t *testing.T, what string, cond func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		if cond() {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for: %s", what)
+}
+
+func testEvent(i int) events.Event {
+	return events.Event{EventID: fmt.Sprintf("evt_%d", i), EventType: events.MessageReceived, Provider: "evolution-v2",
+		TenantID: "t1", InstanceID: "inst_1", Timestamp: time.Now().UTC(),
+		Payload: events.MessageReceivedPayload{ProviderMessageID: fmt.Sprintf("m%d", i), From: "5562", Type: "text", Text: "hi"}}
+}
