@@ -5,10 +5,12 @@ package systemtest
 
 import (
 	"context"
+	"errors"
 	"io"
 	"log/slog"
 	"os"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -37,6 +39,7 @@ type Env struct {
 	Store      *memory.Store // nil with real infrastructure
 	Repos      ports.Repositories
 	Queue      ports.CommandQueue
+	QueueFault *FaultyQueue // wraps the queue: tests can make publishes fail or vanish
 	Bus        *RecBus
 	Blob       ports.BlobStore
 	Locker     ports.Locker
@@ -100,6 +103,24 @@ func (b *RecBus) Published() []events.Event {
 	return append([]events.Event(nil), b.log...)
 }
 
+// FaultyQueue decorates a CommandQueue with broker faults.
+type FaultyQueue struct {
+	ports.CommandQueue
+	Down atomic.Bool // Publish fails (broker unreachable)
+	Drop atomic.Bool // Publish "succeeds" but the broker loses the command
+}
+
+// Publish implements ports.CommandQueue.
+func (q *FaultyQueue) Publish(ctx context.Context, cmd ports.Command) error {
+	if q.Down.Load() {
+		return errors.New("broker unreachable")
+	}
+	if q.Drop.Load() {
+		return nil
+	}
+	return q.CommandQueue.Publish(ctx, cmd)
+}
+
 // NewEnv builds an environment with nodes node-01 and node-02 (capacity 10,
 // READY) and two tenants.
 func NewEnv(t *testing.T) *Env {
@@ -112,6 +133,8 @@ func NewEnv(t *testing.T) *Env {
 		be = memoryBackend()
 	}
 	e.Store, e.Repos, e.Queue, e.Blob, e.Locker = be.Store, be.Repos, be.Queue, be.Blob, be.Locker
+	e.QueueFault = &FaultyQueue{CommandQueue: be.Queue}
+	e.Queue = e.QueueFault
 	e.Bus = &RecBus{EventBus: be.Bus}
 	e.Provider = memory.NewFakeProvider()
 	e.Metrics = observability.NewMetrics()
@@ -130,6 +153,7 @@ func NewEnv(t *testing.T) *Env {
 	e.Worker = worker.NewOutbound(e.Repos, reg, e.Blob, e.Metrics, log)
 	e.Worker.GlobalPolicy = messaging.RatePolicy{} // unlimited unless a test sets one
 	e.Worker.Retry = messaging.RetrySchedule{0, 5 * time.Millisecond, 10 * time.Millisecond, 15 * time.Millisecond}
+	e.Worker.BarrierRecheck = 10 * time.Millisecond
 	e.Projector = worker.NewProjector(e.Repos, log)
 
 	rc := reconciler.DefaultConfig()
@@ -178,6 +202,24 @@ func (e *Env) StartWorkers(n int) {
 		e.wg.Add(1)
 		go func() { defer e.wg.Done(); _ = e.Queue.Consume(e.ctx, e.Worker.Handle) }()
 	}
+}
+
+// StartOutbox runs the outbox dispatcher loop (what the reconciler binary does every second).
+func (e *Env) StartOutbox() {
+	e.wg.Add(1)
+	go func() {
+		defer e.wg.Done()
+		t := time.NewTicker(20 * time.Millisecond)
+		defer t.Stop()
+		for {
+			_, _ = e.App.Outbox.DispatchPending(e.ctx, 100)
+			select {
+			case <-e.ctx.Done():
+				return
+			case <-t.C:
+			}
+		}
+	}()
 }
 
 // StartProjector launches the event projector consumer.

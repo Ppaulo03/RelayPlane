@@ -77,11 +77,13 @@ class Message:
     type: str = ""
     attempts: int = 0
     error_code: str = ""
+    sequence_no: int = 0
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> "Message":
         return cls(id=d["id"], status=d.get("status", ""), to=d.get("to", ""), type=d.get("type", ""),
-                   attempts=int(d.get("attempts", 0)), error_code=d.get("error_code", ""))
+                   attempts=int(d.get("attempts", 0)), error_code=d.get("error_code", ""),
+                   sequence_no=int(d.get("sequence_no", 0)))
 
 
 @dataclass(frozen=True)

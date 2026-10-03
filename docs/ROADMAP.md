@@ -18,7 +18,9 @@ Legenda: ✅ feito e testado · ⚠️ feito com limitação registrada · ⏭�
 | Idempotência (create/send/delete/migrate) | ✅ | |
 | Rate limit configurável com hierarquia | ⚠️ | estado por worker (ver abaixo) |
 | Webhook inbound (auth por node, ownership, normalização, dedupe 2 fases) | ✅ | |
-| Reconciler (drift, adoção, retomada, probe de nodes, outbox sweeper, janitor) | ✅ | |
+| Reconciler (drift, adoção, retomada, probe de nodes, dispatcher do outbox, janitor) | ✅ | |
+| Outbox transacional + `sequence_no` + barreira `UNKNOWN` (INV-07 de ponta a ponta) | ✅ | ver ARCHITECTURE §6 |
+| Serialização de lifecycle (`instance-control`) | ✅ | `TestLifecycle_*` |
 | BlobStore S3/MinIO, Claim-Check, validações, TTL, cleanup de órfãos | ✅ | MinIO real nos testes |
 | Observabilidade: métricas, logs estruturados, tracing OTel | ✅ | |
 | SDK Python (instances, messages, operations, media) | ✅ | 14 testes + smoke contra a stack |
@@ -37,7 +39,7 @@ Legenda: ✅ feito e testado · ⚠️ feito com limitação registrada · ⏭�
    partição o histórico recomeça. Limites agregados (tenant/global somados entre workers) ⏭️: exige contador distribuído (Redis) —
    a interface `ratelimit.Limiter.Reserve` já comporta a troca.
 4. **Mensagens aceitas antes de uma migração viram `STALE_COMMAND`** (conforme a especificação). Reenvio é responsabilidade do cliente.
-5. **Outbox:** em crash entre `INSERT` e publish, a ordem relativa a mensagens mais novas é *best effort* (o sweeper republica).
+5. **Barreira `UNKNOWN` com timeout:** o padrão (15 min) prefere disponibilidade; `UNKNOWN_BARRIER_TIMEOUT=0` dá ordem estrita ao custo de exigir `resolve`.
 6. **Chave de idempotência bloqueada por até `StaleAfter` (10 s)** após erro transitório não-rejeitado (ex.: falha de banco); retry
    com a mesma chave devolve `409 request_in_progress` nesse intervalo.
 7. **Locks Redis de instância única** reduzem trabalho duplicado; a corretude nunca depende deles (CAS no PostgreSQL).

@@ -69,7 +69,7 @@ func TestRetrySchedule(t *testing.T) {
 
 func validEnvelope() Envelope {
 	return Envelope{
-		MessageID: "msg_1", TenantID: "t1", InstanceID: "inst_1", PartitionKey: "inst_1",
+		MessageID: "msg_1", TenantID: "t1", InstanceID: "inst_1", PartitionKey: "inst_1", Sequence: 1,
 		Assignment: ownership.Assignment{InstanceID: "inst_1", NodeID: "node-01", Epoch: 1},
 		Type:       TypeText, To: "5562999999999", Payload: Payload{Text: "hi"},
 	}
@@ -86,6 +86,7 @@ func TestEnvelopeValidate(t *testing.T) {
 		"media on text":         func(e *Envelope) { e.Payload.Media = &media.Ref{} },
 		"document w/o media":    func(e *Envelope) { e.Type = TypeDocument },
 		"no recipient":          func(e *Envelope) { e.To = "" },
+		"no sequence":           func(e *Envelope) { e.Sequence = 0 },
 		"bad type":              func(e *Envelope) { e.Type = "sticker" },
 	}
 	for name, mut := range cases {

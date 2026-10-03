@@ -13,15 +13,9 @@ import (
 	"github.com/relayplane/relayplane/internal/core/errs"
 	"github.com/relayplane/relayplane/internal/core/ids"
 	"github.com/relayplane/relayplane/internal/core/media"
-	"github.com/relayplane/relayplane/internal/core/messaging"
-	"github.com/relayplane/relayplane/internal/core/ownership"
 	"github.com/relayplane/relayplane/internal/observability"
 	"github.com/relayplane/relayplane/internal/ports"
 )
-
-func ownershipOf(m messaging.Message) ownership.Assignment {
-	return ownership.Assignment{InstanceID: m.InstanceID, NodeID: m.NodeID, Epoch: m.AssignmentEpoch}
-}
 
 // MediaService implements the claim-check upload flow and blob lifecycle.
 type MediaService struct{ d Deps }

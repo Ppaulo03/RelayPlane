@@ -122,7 +122,13 @@ type MessagePatch struct {
 
 // MessageRepository persists outbound messages.
 type MessageRepository interface {
+	// Create stores a message and allocates its per-instance SequenceNo (gapless,
+	// ordered by commit) in the same transaction.
 	Create(ctx context.Context, m messaging.Message) error
+	// CreateWithOutbox is Create plus the outbox row, atomically. buildCommand
+	// receives the allocated sequence and returns the serialized command. An
+	// existing message id yields ErrAlreadyExists (nothing written).
+	CreateWithOutbox(ctx context.Context, m messaging.Message, buildCommand func(seq int64) ([]byte, error)) (seq int64, err error)
 	Get(ctx context.Context, id string) (*messaging.Message, error)
 	// Transition is a compare-and-set on the status (ErrConflict if the
 	// current status is not in `from`). It returns the updated message.
@@ -130,9 +136,28 @@ type MessageRepository interface {
 	// ApplyProviderStatus applies a delivery receipt monotonically
 	// (ACCEPTED < DELIVERED < READ; regressions are ignored).
 	ApplyProviderStatus(ctx context.Context, instanceID, providerMessageID string, to messaging.Status) (applied bool, err error)
-	// ListStaleQueued returns messages still QUEUED since before `before`
-	// (accepted but possibly never published: outbox recovery).
-	ListStaleQueued(ctx context.Context, before time.Time, limit int) ([]messaging.Message, error)
+
+	// ListOutbox returns the undispatched outbox entries of one instance in sequence order.
+	ListOutbox(ctx context.Context, instanceID string, limit int) ([]messaging.OutboxEntry, error)
+	// ListInstancesWithPendingOutbox returns instances that have undispatched entries.
+	ListInstancesWithPendingOutbox(ctx context.Context, limit int) ([]string, error)
+	// MarkOutboxDispatched records (or refreshes) the publication of an entry.
+	MarkOutboxDispatched(ctx context.Context, instanceID string, seq int64, at time.Time) error
+	// ListStuckOutbox returns entries published before `before` whose message is
+	// still QUEUED (the broker lost the command): they are published again; the
+	// sequence barrier keeps later messages behind them.
+	ListStuckOutbox(ctx context.Context, before time.Time, limit int) ([]messaging.OutboxEntry, error)
+	// PurgeOutbox deletes entries dispatched before `before`.
+	PurgeOutbox(ctx context.Context, before time.Time) (int64, error)
+	// ResetOutbox marks an entry as not yet dispatched so the dispatcher publishes
+	// it again (used when a command reached a worker before its predecessors).
+	ResetOutbox(ctx context.Context, instanceID string, seq int64) error
+	// FirstUnresolvedBefore returns the lowest-sequence message of the instance with
+	// sequence < seq that has not been resolved: QUEUED, DISPATCHING, or UNKNOWN.
+	// An UNKNOWN that has been UNKNOWN for longer than unknownTimeout no longer
+	// blocks (0: it blocks until resolved). The age is measured by the store's own
+	// clock, never compared with the caller's. ErrNotFound when nothing blocks.
+	FirstUnresolvedBefore(ctx context.Context, instanceID string, seq int64, unknownTimeout time.Duration) (*messaging.Message, error)
 }
 
 // DedupOutcome is the result of claiming an inbound event key.

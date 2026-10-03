@@ -122,6 +122,15 @@ paths:
       responses:
         '200': {description: OK, content: {application/json: {schema: {$ref: '#/components/schemas/Message'}}}}
         '404': {$ref: '#/components/responses/Error'}
+  /api/v1/messages/{id}/resolve:
+    parameters: [{$ref: '#/components/parameters/Id'}]
+    post:
+      tags: [messages]
+      summary: Settle an UNKNOWN message (ambiguous dispatch). Until resolved it holds back later messages of the same instance.
+      requestBody: {required: true, content: {application/json: {schema: {type: object, required: [outcome], properties: {outcome: {type: string, enum: [sent, not_sent]}}, additionalProperties: false}}}}
+      responses:
+        '200': {description: OK, content: {application/json: {schema: {$ref: '#/components/schemas/Message'}}}}
+        '409': {$ref: '#/components/responses/Error'}
   /api/v1/operations/{id}:
     parameters: [{$ref: '#/components/parameters/Id'}]
     get:
@@ -292,6 +301,7 @@ components:
         to: {type: string}
         type: {type: string}
         attempts: {type: integer}
+        sequence_no: {type: integer, format: int64, description: per-instance dispatch order}
         error_code: {type: string}
         created_at: {type: string, format: date-time}
         updated_at: {type: string, format: date-time}

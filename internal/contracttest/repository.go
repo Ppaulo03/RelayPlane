@@ -83,6 +83,7 @@ func RepositoryContract(t *testing.T, factory RepoFactory) {
 	t.Run("InstanceStateGuards", func(t *testing.T) { stateGuardContract(t, factory) })
 	t.Run("Operations", func(t *testing.T) { operationsContract(t, factory) })
 	t.Run("Messages", func(t *testing.T) { messagesContract(t, factory) })
+	t.Run("OutboxAndSequence", func(t *testing.T) { outboxContract(t, factory) })
 	t.Run("Idempotency", func(t *testing.T) { idempotencyContract(t, factory) })
 	t.Run("Dedup", func(t *testing.T) { dedupContract(t, factory) })
 	t.Run("BlobMetadata", func(t *testing.T) { blobMetaContract(t, factory) })

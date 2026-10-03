@@ -23,13 +23,18 @@ pacote `internal/systemtest` salvo indicação).
 | Falha de fencing na migração | `MIGRATION_BLOCKED`; owner/epoch antigos mantidos; o repositório recusa `Reassign` fora de `OLD_OWNER_FENCED`; retomável. | `TestINV09_FencingFailureBlocksMigration` |
 | Migração sem capacidade no alvo (owner antigo já fenced) | Operação fica em `OLD_OWNER_FENCED` (`TARGET_UNAVAILABLE`), re-tentando com novo alvo; a instância está *down* até haver capacidade (consequência inevitável de ter fenced). | `app/migration.go` (`assign`) |
 | Reconciler reinicia / roda duas vezes | Ações idempotentes; leases + CAS; sem eventos duplicados. | `TestFailure_ReconcilerRestartIsIdempotent` |
-| Crash entre gravar `QUEUED` e publicar | *Outbox sweeper* republica `QUEUED` antigas; comandos duplicados são inofensivos. Ordem *best effort* só nesse caso. | `app.MessageService.RepublishStale` |
+| Crash/broker fora entre aceitar e publicar | Aceitar grava mensagem + `sequence_no` + comando no outbox **na mesma transação**; o dispatcher publica em ordem de sequência assim que o broker volta. Ordem preservada (A antes de B). | `TestOutbox_AcceptedButUnpublishedMessageIsNeverOvertaken`, `…DispatcherDrainsBacklogInOrder` |
+| Broker perde um comando já publicado | O sucessor é devolvido ao outbox pela barreira de sequência (não ultrapassa); o dispatcher republica o perdido (despachado há > 2 min e ainda `QUEUED`) e depois o sucessor. | `TestOutbox_LostCommandIsRepublishedAndLaterMessagesWait` |
+| Mensagem `UNKNOWN` (envio ambíguo) | **Barreira de ordem**: as seguintes da mesma instância esperam; outras instâncias seguem. Libera por `POST /messages/{id}/resolve` ou por `UNKNOWN_BARRIER_TIMEOUT` (padrão 15 min; `0` = só resolvendo). | `TestBarrier_*` |
+| Banco indisponível ao gravar `UNKNOWN`/`FAILED`/`ACCEPTED` | O comando **não é ACKado** (fica pendente, sem consumir tentativas); ao voltar, `DISPATCHING` vira `UNKNOWN` sem reenviar, ou o veredito `FAILED` pendente é gravado. | `TestDurability_*` |
+| Operações de lifecycle concorrentes (delete × migrate, reconnect × migrate, reconciler × migrate) | Lock `instance-control:<id>` serializa; o reconciler pula instância ocupada, nunca age durante migração ativa e relê o assignment antes de cada efeito colateral. | `TestLifecycle_*` |
 | Perda de lease de partição no meio do handler | Pode haver entrega duplicada; os handlers são idempotentes por CAS (nunca envio duplo). | contrato da fila |
 
 ## O que *não* é garantido (por design ou limite conhecido)
 
 * Mensagens aceitas sob um assignment são **descartadas como `STALE_COMMAND`** se a instância migrar antes do envio.
   O cliente deve reenviar (o `message_id` mostra o estado).
-* `UNKNOWN` exige decisão humana/da aplicação.
+* `UNKNOWN` exige decisão humana/da aplicação (`resolve`) — ou o timeout da barreira, que troca ordem estrita por disponibilidade.
+* O broker entrega *at-least-once* (comandos podem duplicar); o CAS no estado da mensagem garante um único envio.
 * Rate limit global/tenant é aplicado por worker (ver ROADMAP).
 * Migração entre nodes Evolution exige novo pareamento (sessão é local ao node).

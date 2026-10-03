@@ -169,6 +169,7 @@ type App struct {
 	Instances  *InstanceService
 	Migrations *MigrationService
 	Messages   *MessageService
+	Outbox     *OutboxService
 	Media      *MediaService
 	Inbound    *InboundService
 	Nodes      *NodeService
@@ -186,7 +187,8 @@ func New(d Deps) *App {
 	a := &App{Deps: d}
 	a.Instances = &InstanceService{d: d}
 	a.Migrations = &MigrationService{d: d, inst: a.Instances}
-	a.Messages = &MessageService{d: d}
+	a.Outbox = &OutboxService{d: d}
+	a.Messages = &MessageService{d: d, outbox: a.Outbox}
 	a.Media = &MediaService{d: d}
 	a.Inbound = &InboundService{d: d}
 	a.Nodes = &NodeService{d: d}

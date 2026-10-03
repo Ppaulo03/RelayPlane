@@ -78,16 +78,19 @@ func (s Status) IsTerminal() bool {
 
 // Message is the persisted outbound message record.
 type Message struct {
-	ID                string
-	TenantID          string
-	InstanceID        string
-	IdempotencyKey    string
-	NodeID            string
-	AssignmentEpoch   int64
-	PartitionKey      string
-	Recipient         string
-	Type              Type
-	Payload           json.RawMessage
+	ID              string
+	TenantID        string
+	InstanceID      string
+	IdempotencyKey  string
+	NodeID          string
+	AssignmentEpoch int64
+	PartitionKey    string
+	Recipient       string
+	Type            Type
+	Payload         json.RawMessage
+	// SequenceNo is the per-instance, gapless, commit-ordered sequence that defines
+	// the dispatch order (INV-07). It is allocated in the same transaction as the row.
+	SequenceNo        int64
 	Status            Status
 	ProviderMessageID string
 	AttemptCount      int
@@ -113,6 +116,7 @@ type Envelope struct {
 	InstanceID     string               `json:"instance_id"`
 	Assignment     ownership.Assignment `json:"assignment"`
 	PartitionKey   string               `json:"partition_key"`
+	Sequence       int64                `json:"sequence_no"`
 	Type           Type                 `json:"type"`
 	To             string               `json:"to"`
 	Payload        Payload              `json:"payload"`
@@ -131,6 +135,8 @@ func (e Envelope) Validate() error {
 		return fmt.Errorf("%w: partition_key must equal instance_id to preserve ordering", errs.ErrInvalidArgument)
 	case e.Assignment.InstanceID != e.InstanceID || e.Assignment.NodeID == "" || e.Assignment.Epoch <= 0:
 		return fmt.Errorf("%w: assignment snapshot is required", errs.ErrInvalidArgument)
+	case e.Sequence <= 0:
+		return fmt.Errorf("%w: sequence_no is required (ordering barrier)", errs.ErrInvalidArgument)
 	case e.To == "":
 		return fmt.Errorf("%w: recipient is required", errs.ErrInvalidArgument)
 	case !e.Type.Valid():
@@ -144,6 +150,18 @@ func (e Envelope) Validate() error {
 		return fmt.Errorf("%w: %s message requires payload.media (claim check)", errs.ErrInvalidArgument, e.Type)
 	}
 	return nil
+}
+
+// OutboxEntry is a command waiting in the transactional outbox. It is written
+// in the same transaction as the message, so "accepted" always implies
+// "will be published", and publication happens strictly in Sequence order.
+type OutboxEntry struct {
+	InstanceID   string
+	MessageID    string
+	Sequence     int64
+	Command      json.RawMessage // the serialized Envelope
+	CreatedAt    time.Time
+	DispatchedAt time.Time // zero until published
 }
 
 // Attachment is the resolved media handed to a provider by the worker.

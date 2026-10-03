@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"strings"
-	"time"
 
 	"github.com/relayplane/relayplane/internal/core/errs"
 	"github.com/relayplane/relayplane/internal/core/ids"
@@ -19,7 +18,10 @@ import (
 )
 
 // MessageService accepts outbound messages and enqueues them.
-type MessageService struct{ d Deps }
+type MessageService struct {
+	d      Deps
+	outbox *OutboxService
+}
 
 // SendInput is the public send request. Binary content is never inline: media
 // messages reference an uploaded blob (claim check) by MediaID.
@@ -118,36 +120,44 @@ func (s *MessageService) send(ctx context.Context, tenantID, msgID string, in Se
 
 	env := messaging.Envelope{
 		MessageID: msgID, IdempotencyKey: idemKey, TenantID: tenantID, InstanceID: inst.ID,
-		Assignment: inst.Assignment(), PartitionKey: inst.ID, Type: in.Type, To: in.To, Payload: payload,
+		Assignment: inst.Assignment(), PartitionKey: inst.ID, Sequence: 1, // real sequence is allocated by the repository
+		Type: in.Type, To: in.To, Payload: payload,
 		TraceID: observability.TraceID(ctx), TraceParent: observability.TraceParent(ctx), CreatedAt: s.d.now(),
 	}
 	if err := env.Validate(); err != nil {
 		return SendResult{}, err
 	}
-	raw, err := json.Marshal(env)
-	if err != nil {
-		return SendResult{}, err
-	}
-	// INV-11: nothing bigger than the inline limit may reach the broker.
-	if err := media.EnforceInlineLimit(raw, s.d.Cfg.MediaPolicy.InlineMaxBytes); err != nil {
-		return SendResult{}, err
+	// build serialises the command once the per-instance sequence is known; it runs
+	// inside the transaction that stores the message and its outbox entry.
+	build := func(seq int64) ([]byte, error) {
+		env.Sequence = seq
+		raw, err := json.Marshal(env)
+		if err != nil {
+			return nil, err
+		}
+		// INV-11: nothing bigger than the inline limit may reach the broker.
+		if err := media.EnforceInlineLimit(raw, s.d.Cfg.MediaPolicy.InlineMaxBytes); err != nil {
+			return nil, err
+		}
+		return raw, nil
 	}
 
 	pj, _ := json.Marshal(payload)
-	err = s.d.Repos.Messages.Create(ctx, messaging.Message{
+	seq, err := s.d.Repos.Messages.CreateWithOutbox(ctx, messaging.Message{
 		ID: msgID, TenantID: tenantID, InstanceID: inst.ID, IdempotencyKey: idemKey, NodeID: inst.NodeID,
 		AssignmentEpoch: inst.AssignmentEpoch, PartitionKey: inst.ID, Recipient: in.To, Type: in.Type,
 		Payload: pj, Status: messaging.StatusQueued,
-	})
-	if err != nil && !errors.Is(err, errs.ErrAlreadyExists) { // AlreadyExists: resumed after a crash
+	}, build)
+	if err != nil && !errors.Is(err, errs.ErrAlreadyExists) { // AlreadyExists: resumed after a crash; it is already in the outbox
 		return SendResult{}, err
 	}
-	if err := s.d.Queue.Publish(ctx, ports.Command{ID: msgID, PartitionKey: inst.ID, IdempotencyKey: idemKey, Payload: env, TraceParent: env.TraceParent}); err != nil {
-		// The message stays QUEUED; a retry with the same key re-publishes and
-		// the outbox sweeper recovers the rest.
-		return SendResult{}, fmt.Errorf("enqueue: %w", err)
+	// The message is durable and will be published: from here on the accept can
+	// no longer fail. Publish eagerly for latency; the outbox dispatcher in the
+	// reconciler covers every failure (broker down, crash) in sequence order.
+	if _, derr := s.outbox.DispatchInstance(ctx, inst.ID); derr != nil {
+		s.d.Log.WarnContext(ctx, "eager outbox dispatch failed; the dispatcher will retry", "error", derr)
 	}
-	s.d.Log.InfoContext(ctx, "message queued", "assignment_epoch", inst.AssignmentEpoch, "type", in.Type)
+	s.d.Log.InfoContext(ctx, "message queued", "assignment_epoch", inst.AssignmentEpoch, "sequence_no", seq, "type", in.Type)
 	return SendResult{MessageID: msgID, Status: messaging.StatusQueued}, nil
 }
 
@@ -163,28 +173,31 @@ func (s *MessageService) Get(ctx context.Context, tenantID, id string) (*messagi
 	return m, nil
 }
 
-// RepublishStale re-enqueues messages that were accepted (persisted QUEUED)
-// but whose command may never have reached the broker (crash between the
-// database write and the publish). Re-publication is safe: the worker's
-// compare-and-set on the message status makes duplicate commands no-ops.
-// Ordering relative to newer messages is only best-effort in this crash case.
-func (s *MessageService) RepublishStale(ctx context.Context, olderThan time.Duration, limit int) (int, error) {
-	stale, err := s.d.Repos.Messages.ListStaleQueued(ctx, s.d.now().Add(-olderThan), limit)
+// ResolveOutcome is an operator/application decision about an UNKNOWN message.
+type ResolveOutcome string
+
+const (
+	OutcomeSent    ResolveOutcome = "sent"     // the recipient did receive it
+	OutcomeNotSent ResolveOutcome = "not_sent" // it was verified as not sent
+)
+
+// Resolve settles a message whose dispatch outcome was ambiguous (UNKNOWN). Until
+// it is resolved, later messages of the same instance are held back by the
+// sequence barrier (or until UNKNOWN_BARRIER_TIMEOUT elapses).
+func (s *MessageService) Resolve(ctx context.Context, tenantID, id string, outcome ResolveOutcome) (*messaging.Message, error) {
+	m, err := s.Get(ctx, tenantID, id)
 	if err != nil {
-		return 0, err
+		return nil, err
 	}
-	n := 0
-	for _, m := range stale {
-		var p messaging.Payload
-		if err := json.Unmarshal(m.Payload, &p); err != nil {
-			continue
-		}
-		env := messaging.Envelope{MessageID: m.ID, IdempotencyKey: m.IdempotencyKey, TenantID: m.TenantID, InstanceID: m.InstanceID,
-			Assignment: ownershipOf(m), PartitionKey: m.InstanceID, Type: m.Type, To: m.Recipient, Payload: p, CreatedAt: m.CreatedAt}
-		if err := s.d.Queue.Publish(ctx, ports.Command{ID: m.ID, PartitionKey: m.InstanceID, IdempotencyKey: m.IdempotencyKey, Payload: env}); err != nil {
-			return n, err
-		}
-		n++
+	if m.Status != messaging.StatusUnknown {
+		return nil, fmt.Errorf("%w: message is %s, only UNKNOWN messages can be resolved", errs.ErrConflict, m.Status)
 	}
-	return n, nil
+	switch outcome {
+	case OutcomeSent:
+		return s.d.Repos.Messages.Transition(ctx, id, []messaging.Status{messaging.StatusUnknown}, messaging.StatusAccepted, ports.MessagePatch{})
+	case OutcomeNotSent:
+		return s.d.Repos.Messages.Transition(ctx, id, []messaging.Status{messaging.StatusUnknown}, messaging.StatusFailed,
+			ports.MessagePatch{ErrorCode: "NOT_SENT_CONFIRMED", ErrorMessage: "confirmed as not sent by the caller"})
+	}
+	return nil, fmt.Errorf("%w: outcome must be %q or %q", errs.ErrInvalidArgument, OutcomeSent, OutcomeNotSent)
 }

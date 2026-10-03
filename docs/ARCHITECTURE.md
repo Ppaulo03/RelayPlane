@@ -75,7 +75,27 @@ MIGRATION_REQUESTED → FENCING_OLD_OWNER ─(falha)→ MIGRATION_BLOCKED ─(no
 `CHECK (active_instances <= capacity)` na mesma transação que cria a instância e o assignment epoch 1.
 Dois requests disputando o último slot: exatamente um vence (teste de contrato com 30 goroutines).
 
-## 6. Command queue e ordering (INV-07)
+## 6. Ordering de ponta a ponta (INV-07)
+
+A ordem por `instance_id` é garantida em **três camadas**, não só no broker:
+
+1. **Transactional outbox + `sequence_no`.** Aceitar uma mensagem grava, na *mesma transação*, a linha em `outbound_messages`,
+   o próximo `sequence_no` da instância (`instances.next_sequence`; o `UPDATE` segura o lock da linha até o commit, logo a ordem de
+   sequência é a ordem de commit e não há buracos) e a linha do `outbox` com o comando já serializado. "Aceita" implica
+   "será publicada": acabou a janela *INSERT → crash → PUBLISH*. O accept não depende do broker.
+2. **Dispatcher do outbox** (`app.OutboxService`): publica as entradas pendentes de cada instância **estritamente em ordem de
+   sequência**, sob um lock por instância (envio eager pelo gateway + loop de 1 s no reconciler). Crash entre publicar e marcar
+   só duplica o comando (inofensivo: o worker faz CAS). Comandos que o broker perdeu (despachados há > 2 min e a mensagem segue
+   `QUEUED`) são republicados.
+3. **Barreira de sequência no worker**: a sequência *N* só é despachada quando toda sequência anterior da instância está
+   resolvida (`ACCEPTED/DELIVERED/READ/FAILED`). Predecessor `QUEUED/DISPATCHING` ⇒ o comando volta ao outbox (ack + reset) e é
+   republicado depois do predecessor (esperar no lugar travaria a chave se o predecessor reaparecer *atrás*). Predecessor
+   **`UNKNOWN` é barreira**: não sabemos se saiu, então enviar *N* poderia inverter a conversa; as mensagens seguintes esperam
+   (as de **outras** instâncias seguem) até `POST /messages/{id}/resolve` (`sent`/`not_sent`) ou até `UNKNOWN_BARRIER_TIMEOUT`
+   (padrão 15 min; `0` = indefinidamente). O timeout é a escolha explícita "disponibilidade > ordem estrita" e é medido pelo
+   relógio do banco. `FAILED` não bloqueia (provadamente não saiu).
+
+## 7. Command queue (estratégia do adapter)
 
 O **contrato** (`ports.CommandQueue`) exige: comandos com a mesma `PartitionKey` são entregues em ordem, um por vez;
 chaves diferentes rodam em paralelo. A **estratégia** é do adapter:
@@ -90,7 +110,7 @@ consumidores se registram num ZSET e liberam partições ociosas acima da sua co
 `Disposition`: `Ack`, `Retry` (conta tentativa), `Defer` (não conta; usado pelo rate limit), `DeadLetter`.
 Retry: `0, +5s, +30s, +2m, → DLQ` (`messaging.DefaultRetrySchedule`); nunca infinito.
 
-## 7. Worker outbound
+## 8. Worker outbound
 
 ```
 validar mensagem/estado → fencing lógico → (instância CONNECTED?) → rate limiter → claim QUEUED→DISPATCHING (CAS)
@@ -102,7 +122,7 @@ Estados: `QUEUED, DISPATCHING, ACCEPTED, DELIVERED, READ, FAILED, UNKNOWN`. Clas
 automático**), `NON_RETRYABLE`. Um comando re-entregue que encontra a mensagem em `DISPATCHING` (worker morreu
 após o claim) vira `UNKNOWN` — nunca reenvia às cegas.
 
-## 8. Idempotência, dedupe, rate limit
+## 9. Idempotência, dedupe, rate limit
 
 * `Idempotency-Key` (por tenant): mesma chave+payload ⇒ mesmo resultado (replay, header `Idempotent-Replayed`);
   payload/operação diferente ⇒ `422 idempotency_key_reuse`; em andamento ⇒ `409`. Cada operação recebe o *resource id* já na
@@ -116,7 +136,7 @@ após o claim) vira `UNKNOWN` — nunca reenvia às cegas.
   instâncias" exigiria limiters global/tenant em backend distribuído (ROADMAP). Nenhum valor fixo no código; o worker devolve
   `Defer(wait)` em vez de dormir. Estado local ao worker.
 
-## 9. Mídia (Claim-Check) e blobs
+## 10. Mídia (Claim-Check) e blobs
 
 Cliente → `POST /media/uploads` (reserva `<tenant>/media/<id>/<arquivo>`, valida tipo/tamanho/sha256; a reserva `PENDING` expira em
 `MEDIA_PENDING_TTL`, 30 min) → `PUT …/content` (stream através do gateway, sem bufferizar; o tamanho **declarado é imposto durante o
@@ -127,7 +147,7 @@ da fila aplicam o limite inline (`MEDIA_INLINE_MAX_BYTES`) — INV-11; objetos t
 cleanup remove expirados e **órfãos**, e a lifecycle do bucket é rede de segurança; `CHECK` no banco impede chave fora
 do namespace do tenant.
 
-## 10. Invariantes e onde são testadas
+## 11. Invariantes e onde são testadas
 
 | Invariante | Testes principais |
 |---|---|
@@ -137,7 +157,7 @@ do namespace do tenant.
 | INV-04 DRAINING não recebe | `routing.TestPlace_IneligibleNodesNeverChosen`; contrato `Placement/draining…`; `systemtest.TestINV04_*` |
 | INV-05 eventos duplicados | contrato `Dedup`; `systemtest.TestINV05_*` (inclui 16 duplicatas concorrentes) |
 | INV-06 core não importa adapters | `archtest.TestINV06_*` (+ ports, camadas, vazamento Evolution) |
-| INV-07 ordem por instance_id | `contracttest.CommandQueueContract/OrderingPerKeyUnderConcurrencyINV07` (memória e Redis); `systemtest.TestINV07_*` |
+| INV-07 ordem por instance_id | `CommandQueueContract/OrderingPerKeyUnderConcurrencyINV07` (memória e Redis); `RepositoryContract/OutboxAndSequence` (sequência sem buracos sob concorrência); `systemtest.TestINV07_*`, `TestOutbox_*`, `TestBarrier_*` |
 | INV-09 fencing antes do novo owner | `ownership.TestCanActivateNewOwner_*`; contrato `ReassignRequiresFencing`; `systemtest.TestINV09_*` |
 | INV-10 saúde node ≠ instância | `systemtest.TestINV10_*`; `ProviderContractSuite/SendWhileSocketDeadIsRetryable…` |
 | INV-11 binário não passa pelo broker | `media.TestEnforceInlineLimit`; contrato da fila; `systemtest.TestINV11_*` |
@@ -146,14 +166,14 @@ do namespace do tenant.
 A suíte de sistema roda em memória (rápida) **e** contra PostgreSQL+Redis+MinIO reais
 (`RELAYPLANE_SYSTEMTEST_BACKEND=real go test -tags integration ./internal/systemtest`).
 
-## 11. API pública
+## 12. API pública
 
 `/api/v1/instances[...]`, `/messages`, `/operations`, `/media`, `/nodes` (admin), `/tenants` (admin), `/health/{live,ready}`,
 `/metrics`, `/webhooks/{provider}`. A API **não menciona provider, node, epoch nem Baileys** (testado em
 `api_test.TestPublicAPIDoesNotLeakProviderDetails`); erros são canônicos (`code` estável). Capability ausente ⇒
 `501 capability_not_supported`. RBAC: `Principal{Role, TenantID}` — hoje `tenant` e `admin`.
 
-## 12. Observabilidade
+## 13. Observabilidade
 
 Métricas `relayplane_*` (lista completa da especificação + `outbound_messages_total`, `provider_request_seconds`,
 `http_*`, `migration_blocked_total`); logs JSON com `trace_id, tenant_id, instance_id, message_id, node_id, provider,

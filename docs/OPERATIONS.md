@@ -49,6 +49,19 @@ no novo, exigindo **novo pareamento (QR)**. A operação fica em `VERIFY_CONNECT
 capability ausente). Nada foi trocado; a instância continua com o owner e o epoch antigos. Corrija o node e repita
 `POST …/migrate` (retoma a mesma operação). Métrica/alerta: `relayplane_migration_blocked_total`.
 
+### Mensagens `UNKNOWN` (barreira de ordem)
+Um envio ambíguo (timeout/5xx após possível envio, worker morto no meio) vira `UNKNOWN` e **bloqueia as mensagens seguintes daquela
+instância** (alerta: `relayplane_outbound_barrier_deferrals_total{reason="unknown"}` crescendo). Confirme no aparelho e resolva:
+```bash
+curl -X POST -H "Authorization: Bearer $KEY" :8080/api/v1/messages/<id>/resolve -d '{"outcome":"sent"}'      # ou "not_sent"
+```
+Sem ação, a barreira cai sozinha após `UNKNOWN_BARRIER_TIMEOUT` (15 min; `0` desliga o timeout e exige `resolve`). Depois do timeout a
+mensagem segue `UNKNOWN` e a ordem relativa a ela deixa de ser garantida.
+
+### Outbox
+`outbox` guarda cada comando aceito até a publicação (gateway publica de imediato; o reconciler varre a cada 1 s e republica comandos
+perdidos pelo broker). Entradas despachadas são purgadas após 24 h. Backlog crescente ⇒ broker indisponível: o accept continua funcionando.
+
 ### DLQ de comandos
 Mensagens que esgotaram os retries ficam `FAILED/RETRIES_EXHAUSTED` no catálogo e o comando em `relayplane:dlq`:
 ```bash
@@ -70,8 +83,8 @@ reenviado automaticamente: confirme no WhatsApp e, se necessário, reenvie com n
 ## Backup e recuperação
 
 * PostgreSQL: backup regular (catálogo, assignments, operações, mensagens). É a única fonte de verdade do ownership.
-* Redis: AOF habilitado no compose; perder o Redis perde comandos *em trânsito*: o *outbox sweeper* do Reconciler
-  republica mensagens `QUEUED` há mais de 2 min (ordem relativa a mensagens novas fica *best effort* nesse caso).
+* Redis: AOF habilitado no compose; perder o Redis perde comandos *em trânsito*, mas nunca mensagens aceitas: o outbox
+  (PostgreSQL) republica, em ordem, os comandos despachados há mais de 2 min cujas mensagens seguem `QUEUED`.
 * Volumes dos nodes Evolution (`evolution_node_XX`): contêm as credenciais das sessões; faça backup do banco do node.
 
 ## Restart/atualização

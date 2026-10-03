@@ -22,6 +22,8 @@ x-relayplane-env: &relayplane-env
   LOG_LEVEL: ${LOG_LEVEL:-info}
   RATE_MIN_INTERVAL: ${RATE_MIN_INTERVAL:-1s}
   RATE_MAX_PER_MINUTE: ${RATE_MAX_PER_MINUTE:-30}
+  UNKNOWN_BARRIER_TIMEOUT: ${UNKNOWN_BARRIER_TIMEOUT:-15m}
+  MEDIA_PENDING_TTL: ${MEDIA_PENDING_TTL:-30m}
   PROVIDER_NODES: >-
     [{"id":"node-01","provider":"evolution-v2","endpoint":"http://evolution-node-01:8080","api_key":"${EVOLUTION_NODE_01_API_KEY:?set EVOLUTION_NODE_01_API_KEY}","capacity":${NODE_CAPACITY:-50}},
      {"id":"node-02","provider":"evolution-v2","endpoint":"http://evolution-node-02:8080","api_key":"${EVOLUTION_NODE_02_API_KEY:?set EVOLUTION_NODE_02_API_KEY}","capacity":${NODE_CAPACITY:-50}}]

@@ -35,6 +35,8 @@ type Metrics struct {
 	HTTPRequests          *prometheus.CounterVec
 	HTTPLatency           *prometheus.HistogramVec
 	MigrationBlockedTotal prometheus.Counter
+	BarrierDeferrals      *prometheus.CounterVec // by reason (unknown|unresolved)
+	OutboxPublished       prometheus.Counter
 }
 
 // NewMetrics registers all collectors on a fresh registry.
@@ -67,12 +69,14 @@ func NewMetrics() *Metrics {
 	m.HTTPLatency = prometheus.NewHistogramVec(prometheus.HistogramOpts{Name: "relayplane_http_request_seconds", Help: "HTTP latency.", Buckets: prometheus.DefBuckets}, []string{"route"})
 	m.MigrationBlockedTotal = prometheus.NewCounter(prometheus.CounterOpts{Name: "relayplane_migration_blocked_total", Help: "Migrations blocked because fencing could not be confirmed."})
 
+	m.BarrierDeferrals = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "relayplane_outbound_barrier_deferrals_total", Help: "Dispatches deferred by the per-instance ordering barrier."}, []string{"reason"})
+	m.OutboxPublished = prometheus.NewCounter(prometheus.CounterOpts{Name: "relayplane_outbox_published_total", Help: "Commands published from the transactional outbox."})
 	for _, c := range []prometheus.Collector{
 		m.InstancesTotal, m.InstancesConnected, m.ProviderNodesTotal, m.ProviderNodeHealth, m.OutboundQueueDepth,
 		m.OutboundRetryTotal, m.OutboundDLQTotal, m.OutboundMessages, m.InboundEventsTotal, m.InboundDuplicates,
 		m.OwnershipViolation, m.StaleCommandTotal, m.EpochMismatchTotal, m.ReconciliationTotal, m.ReconciliationFail,
 		m.ReconciliationDrift, m.RateLimitWait, m.BlobBytes, m.BlobCleanupTotal, m.ProviderLatency, m.HTTPRequests,
-		m.HTTPLatency, m.MigrationBlockedTotal,
+		m.HTTPLatency, m.MigrationBlockedTotal, m.BarrierDeferrals, m.OutboxPublished,
 	} {
 		f(c)
 	}

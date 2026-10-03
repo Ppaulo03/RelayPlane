@@ -1,0 +1,201 @@
+package systemtest
+
+import (
+	"errors"
+	"fmt"
+	"testing"
+	"time"
+
+	"github.com/relayplane/relayplane/internal/adapters/memory"
+	"github.com/relayplane/relayplane/internal/app"
+	"github.com/relayplane/relayplane/internal/core/errs"
+	"github.com/relayplane/relayplane/internal/core/messaging"
+)
+
+func sentTexts(e *Env) []string {
+	var out []string
+	for _, s := range e.Provider.Sent() {
+		out = append(out, s.Message.Text)
+	}
+	return out
+}
+
+// 9.7 The review's scenario: A is accepted but never published (crash/broker down),
+// B is accepted afterwards. Recovery must deliver A then B, never B then A.
+func TestOutbox_AcceptedButUnpublishedMessageIsNeverOvertaken(t *testing.T) {
+	e := NewEnv(t)
+	inst := e.CreateInstance(e.Tenant, "a", true)
+	e.QueueFault.Down.Store(true)
+	a, _, err := e.SendText(e.Tenant, inst.ID, "A", "")
+	if err != nil {
+		t.Fatalf("accepting must not depend on the broker: %v", err)
+	}
+	if d, _ := e.Queue.Depth(bg); d != 0 {
+		t.Fatalf("nothing could be published yet, depth %d", d)
+	}
+	e.QueueFault.Down.Store(false) // broker is back; B is accepted and eagerly dispatched
+	b, _, err := e.SendText(e.Tenant, inst.ID, "B", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.StartWorkers(3)
+	e.WaitMessage(a.MessageID, messaging.StatusAccepted)
+	e.WaitMessage(b.MessageID, messaging.StatusAccepted)
+	if got := fmt.Sprint(sentTexts(e)); got != "[A B]" {
+		t.Fatalf("INV-07: delivery order %s, want [A B]", got)
+	}
+	ma, _ := e.Repos.Messages.Get(bg, a.MessageID)
+	mb, _ := e.Repos.Messages.Get(bg, b.MessageID)
+	if ma.SequenceNo != 1 || mb.SequenceNo != 2 {
+		t.Fatalf("sequences %d %d", ma.SequenceNo, mb.SequenceNo)
+	}
+}
+
+// The outbox dispatcher (reconciler loop) publishes a backlog in order after an outage.
+func TestOutbox_DispatcherDrainsBacklogInOrder(t *testing.T) {
+	e := NewEnv(t)
+	inst := e.CreateInstance(e.Tenant, "a", true)
+	e.QueueFault.Down.Store(true)
+	var ids []string
+	for i := 0; i < 10; i++ {
+		r, _, err := e.SendText(e.Tenant, inst.ID, fmt.Sprintf("m%02d", i), "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		ids = append(ids, r.MessageID)
+	}
+	e.QueueFault.Down.Store(false)
+	if n, err := e.App.Outbox.DispatchPending(bg, 100); err != nil || n != 10 {
+		t.Fatalf("dispatch: %d %v", n, err)
+	}
+	if n, _ := e.App.Outbox.DispatchPending(bg, 100); n != 0 {
+		t.Fatalf("published entries must not be published again: %d", n)
+	}
+	e.StartWorkers(2)
+	for _, id := range ids {
+		e.WaitMessage(id, messaging.StatusAccepted)
+	}
+	for i, s := range sentTexts(e) {
+		if s != fmt.Sprintf("m%02d", i) {
+			t.Fatalf("order: %v", sentTexts(e))
+		}
+	}
+}
+
+// The broker loses a command that the outbox already marked as published: the later
+// message must wait for it (barrier), and the dispatcher re-publishes the lost one.
+func TestOutbox_LostCommandIsRepublishedAndLaterMessagesWait(t *testing.T) {
+	e := NewEnv(t)
+	inst := e.CreateInstance(e.Tenant, "a", true)
+	e.QueueFault.Drop.Store(true)
+	a, _, _ := e.SendText(e.Tenant, inst.ID, "A", "") // "published" into the void
+	e.QueueFault.Drop.Store(false)
+	b, _, _ := e.SendText(e.Tenant, inst.ID, "B", "")
+	e.StartOutbox() // the reconciler's outbox loop re-publishes whatever the barrier hands back
+	e.StartWorkers(2)
+	time.Sleep(200 * time.Millisecond)
+	if len(e.Provider.Sent()) != 0 {
+		t.Fatalf("B must not overtake the lost A: %v", sentTexts(e))
+	}
+	if testutilCounter(e, "relayplane_outbound_barrier_deferrals_total") < 1 {
+		t.Error("the barrier deferral must be visible in metrics")
+	}
+	// (with after=0 B counts as "stuck" too: its duplicate is parked behind the barrier, harmlessly)
+	if n, err := e.App.Outbox.Redispatch(bg, 0, 100); err != nil || n < 1 {
+		t.Fatalf("redispatch: %d %v", n, err)
+	}
+	e.WaitMessage(a.MessageID, messaging.StatusAccepted)
+	e.WaitMessage(b.MessageID, messaging.StatusAccepted)
+	if got := fmt.Sprint(sentTexts(e)); got != "[A B]" {
+		t.Fatalf("order %s", got)
+	}
+}
+
+// 9.8 UNKNOWN is an ordering barrier.
+func TestBarrier_UnknownBlocksLaterMessagesUntilResolved(t *testing.T) {
+	e := NewEnv(t)
+	e.Worker.UnknownBarrierTimeout = 0 // strict: hold until resolved
+	inst := e.CreateInstance(e.Tenant, "a", true)
+	other := e.CreateInstance(e.Tenant, "other", true)
+	e.Provider.FailNext(memory.FailAmbiguous) // consumed by A's send: it is the only one in flight
+	a, _, _ := e.SendText(e.Tenant, inst.ID, "A", "")
+	e.StartWorkers(2)
+	e.WaitMessage(a.MessageID, messaging.StatusUnknown)
+	b, _, _ := e.SendText(e.Tenant, inst.ID, "B", "")
+	o, _, _ := e.SendText(e.Tenant, other.ID, "OTHER", "")
+	e.WaitMessage(o.MessageID, messaging.StatusAccepted) // other instances are unaffected
+	time.Sleep(300 * time.Millisecond)
+	if m, _ := e.Repos.Messages.Get(bg, b.MessageID); m.Status != messaging.StatusQueued {
+		t.Fatalf("B must wait behind the UNKNOWN A, is %s", m.Status)
+	}
+	for _, s := range sentTexts(e) {
+		if s == "B" {
+			t.Fatal("B was sent while A's outcome is unknown")
+		}
+	}
+
+	// tenants cannot settle each other's messages, and only UNKNOWN can be settled
+	if _, err := e.App.Messages.Resolve(bg, e.Tenant2, a.MessageID, app.OutcomeNotSent); !errors.Is(err, errs.ErrNotFound) {
+		t.Fatalf("cross-tenant resolve: %v", err)
+	}
+	if _, err := e.App.Messages.Resolve(bg, e.Tenant, o.MessageID, app.OutcomeSent); !errors.Is(err, errs.ErrConflict) {
+		t.Fatalf("resolving a non-UNKNOWN message: %v", err)
+	}
+	if _, err := e.App.Messages.Resolve(bg, e.Tenant, a.MessageID, "maybe"); !errors.Is(err, errs.ErrInvalidArgument) {
+		t.Fatalf("bad outcome: %v", err)
+	}
+
+	got, err := e.App.Messages.Resolve(bg, e.Tenant, a.MessageID, app.OutcomeNotSent)
+	if err != nil || got.Status != messaging.StatusFailed {
+		t.Fatalf("resolve: %+v %v", got, err)
+	}
+	e.WaitMessage(b.MessageID, messaging.StatusAccepted)
+}
+
+func TestBarrier_ResolvedAsSentAlsoReleasesTheQueue(t *testing.T) {
+	e := NewEnv(t)
+	e.Worker.UnknownBarrierTimeout = 0
+	inst := e.CreateInstance(e.Tenant, "a", true)
+	e.Provider.FailNext(memory.FailAmbiguous)
+	a, _, _ := e.SendText(e.Tenant, inst.ID, "A", "")
+	b, _, _ := e.SendText(e.Tenant, inst.ID, "B", "")
+	e.StartWorkers(1)
+	e.WaitMessage(a.MessageID, messaging.StatusUnknown)
+	if m, err := e.App.Messages.Resolve(bg, e.Tenant, a.MessageID, app.OutcomeSent); err != nil || m.Status != messaging.StatusAccepted {
+		t.Fatalf("%+v %v", m, err)
+	}
+	e.WaitMessage(b.MessageID, messaging.StatusAccepted)
+}
+
+// With a configured timeout an unresolved UNKNOWN stops blocking after a while
+// (availability over strict ordering, an explicit and observable choice).
+func TestBarrier_UnknownTimeoutReleasesTheQueue(t *testing.T) {
+	e := NewEnv(t)
+	e.Worker.UnknownBarrierTimeout = 250 * time.Millisecond
+	inst := e.CreateInstance(e.Tenant, "a", true)
+	e.Provider.FailNext(memory.FailAmbiguous)
+	a, _, _ := e.SendText(e.Tenant, inst.ID, "A", "")
+	b, _, _ := e.SendText(e.Tenant, inst.ID, "B", "")
+	e.StartWorkers(1)
+	e.WaitMessage(a.MessageID, messaging.StatusUnknown)
+	start := time.Now()
+	e.WaitMessage(b.MessageID, messaging.StatusAccepted)
+	if time.Since(start) < 150*time.Millisecond {
+		t.Errorf("B was released after only %v, before the barrier timeout", time.Since(start))
+	}
+	if m, _ := e.Repos.Messages.Get(bg, a.MessageID); m.Status != messaging.StatusUnknown {
+		t.Errorf("the timeout must not rewrite A's status: %s", m.Status)
+	}
+}
+
+// A message that definitively failed does not block its successors.
+func TestBarrier_FailedPredecessorDoesNotBlock(t *testing.T) {
+	e := NewEnv(t)
+	inst := e.CreateInstance(e.Tenant, "a", true)
+	e.Provider.FailNext(memory.FailAuth)
+	a, _, _ := e.SendText(e.Tenant, inst.ID, "A", "")
+	b, _, _ := e.SendText(e.Tenant, inst.ID, "B", "")
+	e.StartWorkers(1)
+	e.WaitMessage(a.MessageID, messaging.StatusFailed)
+	e.WaitMessage(b.MessageID, messaging.StatusAccepted)
+}

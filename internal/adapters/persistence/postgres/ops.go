@@ -133,14 +133,14 @@ func (r opRepo) ListActive(ctx context.Context, t instance.OperationType, limit 
 type msgRepo struct{ s *Store }
 
 const msgCols = `id,tenant_id,instance_id,idempotency_key,node_id,assignment_epoch,partition_key,recipient,type,payload,status,
-	provider_message_id,attempt_count,error_code,error_message,created_at,updated_at`
+	provider_message_id,attempt_count,error_code,error_message,created_at,updated_at,sequence_no`
 
 func scanMsg(row pgx.Row) (*messaging.Message, error) {
 	var m messaging.Message
 	var t, st string
 	var payload []byte
 	if err := row.Scan(&m.ID, &m.TenantID, &m.InstanceID, &m.IdempotencyKey, &m.NodeID, &m.AssignmentEpoch, &m.PartitionKey,
-		&m.Recipient, &t, &payload, &st, &m.ProviderMessageID, &m.AttemptCount, &m.ErrorCode, &m.ErrorMessage, &m.CreatedAt, &m.UpdatedAt); err != nil {
+		&m.Recipient, &t, &payload, &st, &m.ProviderMessageID, &m.AttemptCount, &m.ErrorCode, &m.ErrorMessage, &m.CreatedAt, &m.UpdatedAt, &m.SequenceNo); err != nil {
 		return nil, notFound(err)
 	}
 	m.Type, m.Status, m.Payload = messaging.Type(t), messaging.Status(st), json.RawMessage(payload)
@@ -148,6 +148,15 @@ func scanMsg(row pgx.Row) (*messaging.Message, error) {
 }
 
 func (r msgRepo) Create(ctx context.Context, m messaging.Message) error {
+	_, err := r.create(ctx, m, nil)
+	return err
+}
+
+func (r msgRepo) CreateWithOutbox(ctx context.Context, m messaging.Message, build func(seq int64) ([]byte, error)) (int64, error) {
+	return r.create(ctx, m, build)
+}
+
+func (r msgRepo) create(ctx context.Context, m messaging.Message, build func(seq int64) ([]byte, error)) (int64, error) {
 	if m.Status == "" {
 		m.Status = messaging.StatusQueued
 	}
@@ -155,14 +164,42 @@ func (r msgRepo) Create(ctx context.Context, m messaging.Message) error {
 	if len(payload) == 0 {
 		payload = []byte("{}")
 	}
-	_, err := r.s.pool.Exec(ctx, `INSERT INTO outbound_messages(id,tenant_id,instance_id,idempotency_key,node_id,assignment_epoch,
-		partition_key,recipient,type,payload,status) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
-		m.ID, m.TenantID, m.InstanceID, m.IdempotencyKey, m.NodeID, m.AssignmentEpoch, m.PartitionKey, m.Recipient,
-		string(m.Type), payload, string(m.Status))
-	if _, code := constraint(err); code == "23505" {
-		return errs.ErrAlreadyExists
+	var seq int64
+	err := r.s.withTx(ctx, func(tx pgx.Tx) error {
+		// The UPDATE takes the instance row lock until commit: concurrent senders
+		// to the same instance serialise here, so sequence order == commit order.
+		var next int64
+		if err := tx.QueryRow(ctx, `UPDATE instances SET next_sequence = next_sequence + 1 WHERE id=$1 RETURNING next_sequence - 1`, m.InstanceID).Scan(&next); err != nil {
+			return notFound(err)
+		}
+		seq = next
+		var cmd []byte
+		if build != nil {
+			var err error
+			if cmd, err = build(seq); err != nil {
+				return err
+			}
+		}
+		if _, err := tx.Exec(ctx, `INSERT INTO outbound_messages(id,tenant_id,instance_id,idempotency_key,node_id,assignment_epoch,
+			partition_key,recipient,type,payload,status,sequence_no) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
+			m.ID, m.TenantID, m.InstanceID, m.IdempotencyKey, m.NodeID, m.AssignmentEpoch, m.PartitionKey, m.Recipient,
+			string(m.Type), payload, string(m.Status), seq); err != nil {
+			if _, code := constraint(err); code == "23505" {
+				return errs.ErrAlreadyExists
+			}
+			return err
+		}
+		if build != nil {
+			if _, err := tx.Exec(ctx, `INSERT INTO outbox(instance_id,sequence_no,message_id,command) VALUES($1,$2,$3,$4)`, m.InstanceID, seq, m.ID, cmd); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return 0, err
 	}
-	return err
+	return seq, nil
 }
 
 func (r msgRepo) Get(ctx context.Context, id string) (*messaging.Message, error) {
@@ -243,22 +280,89 @@ func (r msgRepo) ApplyProviderStatus(ctx context.Context, instanceID, pmid strin
 	return applied, err
 }
 
-func (r msgRepo) ListStaleQueued(ctx context.Context, before time.Time, limit int) ([]messaging.Message, error) {
-	rows, err := r.s.pool.Query(ctx, `SELECT `+msgCols+` FROM outbound_messages WHERE status='QUEUED' AND updated_at < $1
-		ORDER BY created_at LIMIT $2`, before, limit)
+func scanOutbox(rows pgx.Rows) ([]messaging.OutboxEntry, error) {
+	defer rows.Close()
+	var out []messaging.OutboxEntry
+	for rows.Next() {
+		var e messaging.OutboxEntry
+		var cmd []byte
+		var disp *time.Time
+		if err := rows.Scan(&e.InstanceID, &e.Sequence, &e.MessageID, &cmd, &e.CreatedAt, &disp); err != nil {
+			return nil, err
+		}
+		e.Command, e.DispatchedAt = json.RawMessage(cmd), zeroIfNil(disp)
+		out = append(out, e)
+	}
+	return out, rows.Err()
+}
+
+const outboxCols = `instance_id,sequence_no,message_id,command,created_at,dispatched_at`
+
+func (r msgRepo) ListOutbox(ctx context.Context, instanceID string, limit int) ([]messaging.OutboxEntry, error) {
+	rows, err := r.s.pool.Query(ctx, `SELECT `+outboxCols+` FROM outbox WHERE instance_id=$1 AND dispatched_at IS NULL ORDER BY sequence_no LIMIT $2`, instanceID, limit)
+	if err != nil {
+		return nil, err
+	}
+	return scanOutbox(rows)
+}
+
+func (r msgRepo) ListInstancesWithPendingOutbox(ctx context.Context, limit int) ([]string, error) {
+	rows, err := r.s.pool.Query(ctx, `SELECT DISTINCT instance_id FROM outbox WHERE dispatched_at IS NULL ORDER BY instance_id LIMIT $1`, limit)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var out []messaging.Message
+	var out []string
 	for rows.Next() {
-		m, err := scanMsg(rows)
-		if err != nil {
+		var id string
+		if err := rows.Scan(&id); err != nil {
 			return nil, err
 		}
-		out = append(out, *m)
+		out = append(out, id)
 	}
 	return out, rows.Err()
+}
+
+func (r msgRepo) MarkOutboxDispatched(ctx context.Context, instanceID string, seq int64, at time.Time) error {
+	tag, err := r.s.pool.Exec(ctx, `UPDATE outbox SET dispatched_at=$3 WHERE instance_id=$1 AND sequence_no=$2`, instanceID, seq, at)
+	if err == nil && tag.RowsAffected() == 0 {
+		return errs.ErrNotFound
+	}
+	return err
+}
+
+func (r msgRepo) ListStuckOutbox(ctx context.Context, before time.Time, limit int) ([]messaging.OutboxEntry, error) {
+	rows, err := r.s.pool.Query(ctx, `SELECT o.instance_id,o.sequence_no,o.message_id,o.command,o.created_at,o.dispatched_at
+		FROM outbox o JOIN outbound_messages m ON m.id=o.message_id
+		WHERE o.dispatched_at IS NOT NULL AND o.dispatched_at < $1 AND m.status='QUEUED'
+		ORDER BY o.instance_id, o.sequence_no LIMIT $2`, before, limit)
+	if err != nil {
+		return nil, err
+	}
+	return scanOutbox(rows)
+}
+
+func (r msgRepo) PurgeOutbox(ctx context.Context, before time.Time) (int64, error) {
+	tag, err := r.s.pool.Exec(ctx, `DELETE FROM outbox WHERE dispatched_at IS NOT NULL AND dispatched_at < $1`, before)
+	return tag.RowsAffected(), err
+}
+
+func (r msgRepo) ResetOutbox(ctx context.Context, instanceID string, seq int64) error {
+	tag, err := r.s.pool.Exec(ctx, `UPDATE outbox SET dispatched_at=NULL WHERE instance_id=$1 AND sequence_no=$2`, instanceID, seq)
+	if err == nil && tag.RowsAffected() == 0 {
+		return errs.ErrNotFound
+	}
+	return err
+}
+
+func (r msgRepo) FirstUnresolvedBefore(ctx context.Context, instanceID string, seq int64, unknownTimeout time.Duration) (*messaging.Message, error) {
+	// the UNKNOWN age is computed with the database clock (now()), so clock skew
+	// between application hosts and the database cannot shorten or extend the barrier
+	return scanMsg(r.s.pool.QueryRow(ctx, `SELECT `+msgCols+` FROM outbound_messages
+		WHERE instance_id=$1 AND sequence_no > 0 AND sequence_no < $2
+		  AND (status IN ('QUEUED','DISPATCHING')
+		       OR (status='UNKNOWN' AND ($3::bigint <= 0 OR updated_at > now() - ($3::bigint * interval '1 microsecond'))))
+		ORDER BY sequence_no LIMIT 1`, instanceID, seq, unknownTimeout.Microseconds()))
 }
 
 // ---------------- blob metadata ----------------

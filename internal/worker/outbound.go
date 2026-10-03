@@ -42,6 +42,11 @@ type Outbound struct {
 	MediaPolicy   media.Policy
 	SignedURLTTL  time.Duration
 	VerifyBlobSum bool // stream-verify the checksum before sending media
+	// UnknownBarrierTimeout is how long an UNKNOWN message blocks later messages of
+	// its instance. 0 holds them until the message is resolved (strict ordering).
+	UnknownBarrierTimeout time.Duration
+	// BarrierRecheck is how often a held command re-checks its predecessors (default 1s).
+	BarrierRecheck time.Duration
 
 	pendingMu      sync.Mutex
 	pendingFailure map[string]pendingFailure // verdicts that could not be persisted yet (process-local)
@@ -163,6 +168,40 @@ func (w *Outbound) handle(ctx context.Context, cmd ports.Command, env messaging.
 		return w.retryQueued(ctx, cmd, msg, fmt.Errorf("%w: instance is %s", errs.ErrProviderUnavailable, inst.ObservedState)), nil
 	}
 
+	// Ordering barrier: sequence N is dispatched only after every earlier sequence of
+	// the instance is resolved. A QUEUED/DISPATCHING predecessor is still in flight; an
+	// UNKNOWN one may or may not have reached the recipient, so sending N now could
+	// reorder the conversation. (A FAILED predecessor definitively did not go out.)
+	if env.Sequence > 0 {
+		blocker, berr := w.Repos.Messages.FirstUnresolvedBefore(ctx, inst.ID, env.Sequence, w.UnknownBarrierTimeout)
+		switch {
+		case berr == nil:
+			reason := "unresolved"
+			if blocker.Status == messaging.StatusUnknown {
+				reason = "unknown"
+			}
+			w.Metrics.BarrierDeferrals.WithLabelValues(reason).Inc()
+			w.Log.WarnContext(ctx, "dispatch held by the ordering barrier", "sequence_no", env.Sequence,
+				"blocking_message", blocker.ID, "blocking_sequence", blocker.SequenceNo, "blocking_status", blocker.Status)
+			if blocker.Status != messaging.StatusUnknown {
+				// The predecessor is still in flight, or its command was lost and will be
+				// re-published BEHIND this one in the same ordered key: waiting here would
+				// block it forever. Hand this command back to the outbox instead; the
+				// dispatcher publishes it again after the predecessor's.
+				switch rerr := w.Repos.Messages.ResetOutbox(ctx, inst.ID, env.Sequence); {
+				case rerr == nil:
+					return ack(), nil
+				case !errors.Is(rerr, errs.ErrNotFound):
+					return w.persistFailed(ctx, rerr), nil
+				}
+			}
+			// UNKNOWN is resolved by a human/receipt, never by queue position: hold in place.
+			return ports.Result{Disposition: ports.Defer, After: w.barrierRecheck(), Reason: "ordering barrier: " + blocker.ID}, nil
+		case !errors.Is(berr, errs.ErrNotFound):
+			return w.persistFailed(ctx, berr), nil
+		}
+	}
+
 	// Rate limiting (hierarchy global < tenant < instance). Never sleeps: a
 	// positive wait defers only this key, other instances keep flowing.
 	var tenantPolicy *messaging.RatePolicy
@@ -257,6 +296,13 @@ func (w *Outbound) persistFailed(ctx context.Context, err error) ports.Result {
 }
 
 const persistRetryDelay = 2 * time.Second
+
+func (w *Outbound) barrierRecheck() time.Duration {
+	if w.BarrierRecheck > 0 {
+		return w.BarrierRecheck
+	}
+	return time.Second
+}
 
 // retryQueued schedules a retry for a message that is still QUEUED.
 func (w *Outbound) retryQueued(ctx context.Context, cmd ports.Command, msg *messaging.Message, cause error) ports.Result {

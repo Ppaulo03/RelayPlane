@@ -141,3 +141,15 @@ def test_sdk_does_not_know_infrastructure():
     src = "".join(p.read_text(encoding="utf-8") for p in pathlib.Path(__file__).parents[1].joinpath("relayplane").glob("*.py")).lower()
     for forbidden in ("evolution", "redis", "minio", "baileys", "node_id", "provider node"):
         assert forbidden not in src, forbidden
+
+
+@pytest.mark.parametrize("sent,outcome", [(True, "sent"), (False, "not_sent")])
+async def test_resolve_unknown_message(sent, outcome):
+    def handler(req: httpx.Request) -> httpx.Response:
+        assert req.url.path == "/api/v1/messages/msg_1/resolve"
+        assert json.loads(req.content) == {"outcome": outcome}
+        return httpx.Response(200, json={"id": "msg_1", "status": "ACCEPTED" if sent else "FAILED", "sequence_no": 7})
+
+    async with client(handler) as rp:
+        msg = await rp.messages.resolve("msg_1", sent=sent)
+    assert msg.sequence_no == 7 and msg.status == ("ACCEPTED" if sent else "FAILED")

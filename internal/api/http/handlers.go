@@ -58,13 +58,14 @@ type messageView struct {
 	To        string    `json:"to"`
 	Type      string    `json:"type"`
 	Attempts  int       `json:"attempts"`
+	Sequence  int64     `json:"sequence_no"`
 	ErrorCode string    `json:"error_code,omitempty"`
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
 }
 
 func viewMessage(m messaging.Message) messageView {
-	return messageView{ID: m.ID, Status: string(m.Status), To: m.Recipient, Type: string(m.Type), Attempts: m.AttemptCount,
+	return messageView{ID: m.ID, Status: string(m.Status), To: m.Recipient, Type: string(m.Type), Attempts: m.AttemptCount, Sequence: m.SequenceNo,
 		ErrorCode: m.ErrorCode, CreatedAt: m.CreatedAt, UpdatedAt: m.UpdatedAt}
 }
 
@@ -256,6 +257,22 @@ func (s *Server) sendMessage(w nethttp.ResponseWriter, r *nethttp.Request, p Pri
 
 func (s *Server) getMessage(w nethttp.ResponseWriter, r *nethttp.Request, p Principal) {
 	m, err := s.App.Messages.Get(r.Context(), p.TenantID, r.PathValue("id"))
+	if err != nil {
+		writeError(w, r, s.Log, err)
+		return
+	}
+	writeJSON(w, 200, viewMessage(*m))
+}
+
+func (s *Server) resolveMessage(w nethttp.ResponseWriter, r *nethttp.Request, p Principal) {
+	var in struct {
+		Outcome string `json:"outcome"`
+	}
+	if err := decode(r, &in); err != nil {
+		writeError(w, r, s.Log, err)
+		return
+	}
+	m, err := s.App.Messages.Resolve(r.Context(), p.TenantID, r.PathValue("id"), app.ResolveOutcome(in.Outcome))
 	if err != nil {
 		writeError(w, r, s.Log, err)
 		return

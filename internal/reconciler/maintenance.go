@@ -10,10 +10,13 @@ import (
 // gauge refresh.
 func (r *Reconciler) Maintenance(ctx context.Context) {
 	d := r.deps()
-	if n, err := r.App.Messages.RepublishStale(ctx, r.Cfg.StuckQueuedAfter, r.Cfg.BatchSize); err != nil {
-		r.Log.WarnContext(ctx, "outbox republish failed", "error", err)
+	if n, err := r.App.Outbox.Redispatch(ctx, r.Cfg.StuckQueuedAfter, r.Cfg.BatchSize); err != nil {
+		r.Log.WarnContext(ctx, "outbox redispatch failed", "error", err)
 	} else if n > 0 {
-		r.Log.InfoContext(ctx, "republished stale queued messages", "count", n)
+		r.Log.WarnContext(ctx, "re-published commands the broker had lost", "count", n)
+	}
+	if _, err := r.App.Outbox.Purge(ctx, 24*time.Hour); err != nil {
+		r.Log.WarnContext(ctx, "outbox purge failed", "error", err)
 	}
 	if exp, orph, err := r.App.Media.Cleanup(ctx, r.Cfg.OrphanGrace, r.Cfg.BatchSize); err != nil {
 		r.Log.WarnContext(ctx, "blob cleanup failed", "error", err)

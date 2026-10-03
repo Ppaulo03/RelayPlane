@@ -48,6 +48,7 @@ func run() error {
 	out.GlobalPolicy = messaging.RatePolicy{MinInterval: cfg.RateMinInterval, Burst: cfg.RateBurst, MaxPerMinute: cfg.RateMaxPerMinute,
 		MaxConcurrent: cfg.RateMaxConcurrent, Cooldown: cfg.RateCooldown}
 	out.MediaPolicy = d.Cfg.MediaPolicy
+	out.UnknownBarrierTimeout = cfg.UnknownBarrierTimeout
 	proj := worker.NewProjector(d.Repos, rt.Log)
 
 	rt.Log.Info("worker started", "version", version, "partitions", cfg.CommandPartitions)

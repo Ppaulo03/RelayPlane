@@ -105,6 +105,7 @@ func (s *Server) Handler() nethttp.Handler {
 
 	mux.HandleFunc("POST /api/v1/messages/send", tenant(s.sendMessage))
 	mux.HandleFunc("GET /api/v1/messages/{id}", tenant(s.getMessage))
+	mux.HandleFunc("POST /api/v1/messages/{id}/resolve", tenant(s.resolveMessage))
 	mux.HandleFunc("GET /api/v1/operations/{id}", tenant(s.getOperation))
 
 	mux.HandleFunc("POST /api/v1/media/uploads", tenant(s.createUpload))

@@ -28,7 +28,8 @@ type Config struct {
 	BatchSize        int
 	CallTimeout      time.Duration // per provider call
 	NodeOfflineAfter time.Duration
-	StuckQueuedAfter time.Duration // outbox recovery threshold
+	StuckQueuedAfter time.Duration // a dispatched command whose message is still QUEUED after this is re-published
+	OutboxInterval   time.Duration // outbox dispatch loop period
 	OrphanGrace      time.Duration
 	Policy           reconciliation.Policy
 }
@@ -38,7 +39,7 @@ func DefaultConfig() Config {
 	return Config{
 		Interval: 10 * time.Second, InstanceInterval: 30 * time.Second, BatchSize: 100,
 		CallTimeout: 15 * time.Second, NodeOfflineAfter: time.Minute,
-		StuckQueuedAfter: 2 * time.Minute, OrphanGrace: time.Hour, Policy: reconciliation.DefaultPolicy(),
+		StuckQueuedAfter: 2 * time.Minute, OutboxInterval: time.Second, OrphanGrace: time.Hour, Policy: reconciliation.DefaultPolicy(),
 	}
 }
 
@@ -64,6 +65,7 @@ type Stats struct {
 // per-instance work is guarded by leases and every state change is a
 // compare-and-set in the catalog.
 func (r *Reconciler) Run(ctx context.Context) error {
+	go r.runOutbox(ctx)
 	t := time.NewTicker(r.Cfg.Interval)
 	defer t.Stop()
 	for {
@@ -71,6 +73,27 @@ func (r *Reconciler) Run(ctx context.Context) error {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
+		case <-t.C:
+		}
+	}
+}
+
+// runOutbox publishes the transactional outbox continuously (default every
+// second): the safety net behind the gateway's eager dispatch.
+func (r *Reconciler) runOutbox(ctx context.Context) {
+	interval := r.Cfg.OutboxInterval
+	if interval <= 0 {
+		interval = time.Second
+	}
+	t := time.NewTicker(interval)
+	defer t.Stop()
+	for {
+		if _, err := r.App.Outbox.DispatchPending(ctx, r.Cfg.BatchSize); err != nil {
+			r.Log.WarnContext(ctx, "outbox pass failed", "error", err)
+		}
+		select {
+		case <-ctx.Done():
+			return
 		case <-t.C:
 		}
 	}

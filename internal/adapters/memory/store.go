@@ -35,6 +35,8 @@ type Store struct {
 	blobs       map[string]*media.Blob
 	idem        map[string]ports.IdempotencyRecord
 	dedup       map[string]dedupRow
+	nextSeq     map[string]int64
+	outbox      []*messaging.OutboxEntry
 
 	// BeforeCommit lets failure tests inject a fault into multi-step writes
 	// (simulating a transaction rollback). Return an error to abort.
@@ -61,6 +63,7 @@ func NewStore() *Store {
 		blobs:       map[string]*media.Blob{},
 		idem:        map[string]ports.IdempotencyRecord{},
 		dedup:       map[string]dedupRow{},
+		nextSeq:     map[string]int64{},
 	}
 }
 
@@ -598,16 +601,43 @@ type msgRepo struct{ s *Store }
 func (r msgRepo) Create(_ context.Context, m messaging.Message) error {
 	r.s.mu.Lock()
 	defer r.s.mu.Unlock()
-	if _, ok := r.s.messages[m.ID]; ok {
-		return errs.ErrAlreadyExists
+	_, err := r.s.createMessage(m, nil)
+	return err
+}
+
+func (r msgRepo) CreateWithOutbox(_ context.Context, m messaging.Message, build func(seq int64) ([]byte, error)) (int64, error) {
+	r.s.mu.Lock()
+	defer r.s.mu.Unlock()
+	return r.s.createMessage(m, build)
+}
+
+// createMessage allocates the sequence and (optionally) the outbox row. Caller holds the lock.
+func (s *Store) createMessage(m messaging.Message, build func(seq int64) ([]byte, error)) (int64, error) {
+	if _, ok := s.messages[m.ID]; ok {
+		return 0, errs.ErrAlreadyExists
 	}
-	now := r.s.Now()
-	m.CreatedAt, m.UpdatedAt = now, now
+	seq := s.nextSeq[m.InstanceID] + 1
+	var cmd []byte
+	if build != nil {
+		var err error
+		if cmd, err = build(seq); err != nil {
+			return 0, err
+		}
+	}
+	if err := s.fault("create_message"); err != nil {
+		return 0, err
+	}
+	s.nextSeq[m.InstanceID] = seq
+	now := s.Now()
+	m.CreatedAt, m.UpdatedAt, m.SequenceNo = now, now, seq
 	if m.Status == "" {
 		m.Status = messaging.StatusQueued
 	}
-	r.s.messages[m.ID] = &m
-	return nil
+	s.messages[m.ID] = &m
+	if build != nil {
+		s.outbox = append(s.outbox, &messaging.OutboxEntry{InstanceID: m.InstanceID, MessageID: m.ID, Sequence: seq, Command: cmd, CreatedAt: now})
+	}
+	return seq, nil
 }
 
 func (r msgRepo) Get(_ context.Context, id string) (*messaging.Message, error) {
@@ -687,20 +717,124 @@ func (r msgRepo) ApplyProviderStatus(_ context.Context, instanceID, pmid string,
 	return false, errs.ErrNotFound
 }
 
-func (r msgRepo) ListStaleQueued(_ context.Context, before time.Time, limit int) ([]messaging.Message, error) {
+func (r msgRepo) ListOutbox(_ context.Context, instanceID string, limit int) ([]messaging.OutboxEntry, error) {
 	r.s.mu.Lock()
 	defer r.s.mu.Unlock()
-	var out []messaging.Message
-	for _, m := range r.s.messages {
-		if m.Status == messaging.StatusQueued && m.UpdatedAt.Before(before) {
-			out = append(out, *m)
+	var out []messaging.OutboxEntry
+	for _, e := range r.s.outbox {
+		if e.InstanceID == instanceID && e.DispatchedAt.IsZero() {
+			out = append(out, *e)
 		}
 	}
-	sort.Slice(out, func(a, b int) bool { return out[a].CreatedAt.Before(out[b].CreatedAt) })
+	sort.Slice(out, func(a, b int) bool { return out[a].Sequence < out[b].Sequence })
 	if limit > 0 && len(out) > limit {
 		out = out[:limit]
 	}
 	return out, nil
+}
+
+func (r msgRepo) ListInstancesWithPendingOutbox(_ context.Context, limit int) ([]string, error) {
+	r.s.mu.Lock()
+	defer r.s.mu.Unlock()
+	seen := map[string]bool{}
+	var out []string
+	for _, e := range r.s.outbox {
+		if e.DispatchedAt.IsZero() && !seen[e.InstanceID] {
+			seen[e.InstanceID] = true
+			out = append(out, e.InstanceID)
+		}
+	}
+	sort.Strings(out)
+	if limit > 0 && len(out) > limit {
+		out = out[:limit]
+	}
+	return out, nil
+}
+
+func (r msgRepo) MarkOutboxDispatched(_ context.Context, instanceID string, seq int64, at time.Time) error {
+	r.s.mu.Lock()
+	defer r.s.mu.Unlock()
+	for _, e := range r.s.outbox {
+		if e.InstanceID == instanceID && e.Sequence == seq {
+			e.DispatchedAt = at
+			return nil
+		}
+	}
+	return errs.ErrNotFound
+}
+
+func (r msgRepo) ListStuckOutbox(_ context.Context, before time.Time, limit int) ([]messaging.OutboxEntry, error) {
+	r.s.mu.Lock()
+	defer r.s.mu.Unlock()
+	var out []messaging.OutboxEntry
+	for _, e := range r.s.outbox {
+		if e.DispatchedAt.IsZero() || !e.DispatchedAt.Before(before) {
+			continue
+		}
+		if m := r.s.messages[e.MessageID]; m != nil && m.Status == messaging.StatusQueued {
+			out = append(out, *e)
+		}
+	}
+	sort.Slice(out, func(a, b int) bool {
+		if out[a].InstanceID != out[b].InstanceID {
+			return out[a].InstanceID < out[b].InstanceID
+		}
+		return out[a].Sequence < out[b].Sequence
+	})
+	if limit > 0 && len(out) > limit {
+		out = out[:limit]
+	}
+	return out, nil
+}
+
+func (r msgRepo) PurgeOutbox(_ context.Context, before time.Time) (int64, error) {
+	r.s.mu.Lock()
+	defer r.s.mu.Unlock()
+	var n int64
+	kept := r.s.outbox[:0]
+	for _, e := range r.s.outbox {
+		if !e.DispatchedAt.IsZero() && e.DispatchedAt.Before(before) {
+			n++
+			continue
+		}
+		kept = append(kept, e)
+	}
+	r.s.outbox = kept
+	return n, nil
+}
+
+func (r msgRepo) ResetOutbox(_ context.Context, instanceID string, seq int64) error {
+	r.s.mu.Lock()
+	defer r.s.mu.Unlock()
+	for _, e := range r.s.outbox {
+		if e.InstanceID == instanceID && e.Sequence == seq {
+			e.DispatchedAt = time.Time{}
+			return nil
+		}
+	}
+	return errs.ErrNotFound
+}
+
+func (r msgRepo) FirstUnresolvedBefore(_ context.Context, instanceID string, seq int64, unknownTimeout time.Duration) (*messaging.Message, error) {
+	r.s.mu.Lock()
+	defer r.s.mu.Unlock()
+	cutoff := r.s.Now().Add(-unknownTimeout)
+	var first *messaging.Message
+	for _, m := range r.s.messages {
+		if m.InstanceID != instanceID || m.SequenceNo >= seq || m.SequenceNo == 0 {
+			continue
+		}
+		blocking := m.Status == messaging.StatusQueued || m.Status == messaging.StatusDispatching ||
+			(m.Status == messaging.StatusUnknown && (unknownTimeout <= 0 || m.UpdatedAt.After(cutoff)))
+		if blocking && (first == nil || m.SequenceNo < first.SequenceNo) {
+			first = m
+		}
+	}
+	if first == nil {
+		return nil, errs.ErrNotFound
+	}
+	c := *first
+	return &c, nil
 }
 
 // ---- blob metadata ----

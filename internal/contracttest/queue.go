@@ -228,7 +228,7 @@ func CommandQueueContract(t *testing.T, factory QueueFactory) {
 		stop := startConsumers(t, q, 2, func(_ context.Context, c ports.Command) (ports.Result, error) {
 			if c.PartitionKey == "slow" {
 				if attempts.Add(1) == 1 {
-					return ports.Result{Disposition: ports.Retry, After: 1500 * time.Millisecond, MaxAttempts: 5}, nil
+					return ports.Result{Disposition: ports.Retry, After: 3 * time.Second, MaxAttempts: 5}, nil
 				}
 				retriedAt.Store(time.Now().UnixNano())
 				return ports.Result{Disposition: ports.Ack}, nil

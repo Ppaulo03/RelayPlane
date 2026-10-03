@@ -122,6 +122,14 @@ class MessagesAPI:
         body, _ = await self._h.request("GET", f"/api/v1/messages/{message_id}")
         return Message.from_dict(body)
 
+    async def resolve(self, message_id: str, *, sent: bool) -> Message:
+        """Settle an UNKNOWN message (ambiguous dispatch): `sent=True` if the recipient got it, `False` if it was verified as not sent.
+
+        Until an UNKNOWN message is resolved, later messages of the same instance are held back to preserve ordering."""
+        body, _ = await self._h.request("POST", f"/api/v1/messages/{message_id}/resolve",
+                                        json={"outcome": "sent" if sent else "not_sent"})
+        return Message.from_dict(body)
+
     async def wait(self, message_id: str, *, until: tuple[str, ...] = ("ACCEPTED", "DELIVERED", "READ", "FAILED", "UNKNOWN"),
                    timeout: float = 60.0, interval: float = 0.5) -> Message:
         deadline = time.monotonic() + timeout
