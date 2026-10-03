@@ -15,6 +15,7 @@ import (
 	"github.com/relayplane/relayplane/internal/adapters/lock/redislock"
 	"github.com/relayplane/relayplane/internal/adapters/messaging/redisstreams"
 	"github.com/relayplane/relayplane/internal/contracttest"
+	"github.com/relayplane/relayplane/internal/core/events"
 	"github.com/relayplane/relayplane/internal/ports"
 )
 
@@ -96,5 +97,43 @@ func TestPartitionsAreSharedBetweenWorkers(t *testing.T) {
 	}
 	if n1.Load() == 0 || n2.Load() == 0 {
 		t.Errorf("work not shared between workers: %d / %d", n1.Load(), n2.Load())
+	}
+}
+
+// 15.6 A consumer group that is offline while more events than the retention are published
+// is overtaken by trimming: Stats must say so (that is what the alerts are built on).
+func TestEventBusStatsDetectTrimmingBeyondAConsumer(t *testing.T) {
+	c := client(t)
+	ctx := context.Background()
+	bus := redisstreams.NewBus(c, redisstreams.BusConfig{Prefix: prefix(), MaxLen: 100, Block: 30 * time.Millisecond})
+	// the group exists (created at the start of the stream) but its consumer is offline
+	subCtx, stop := context.WithCancel(ctx)
+	go bus.Subscribe(subCtx, "offline-soon", func(context.Context, events.Event) error { return nil })
+	time.Sleep(300 * time.Millisecond)
+	stop()
+	time.Sleep(100 * time.Millisecond)
+	for i := 0; i < 3000; i++ {
+		if err := bus.Publish(ctx, events.Event{EventID: fmt.Sprintf("e%d", i), EventType: events.MessageReceived, InstanceID: "i", Payload: map[string]int{"i": i}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	st, err := bus.Stats(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.Length >= 3000 || st.Retention != 100 {
+		t.Fatalf("the stream must be trimmed to roughly the retention: %+v", st)
+	}
+	var g ports.EventBusGroupStats
+	for _, x := range st.Groups {
+		if x.Name == "offline-soon" {
+			g = x
+		}
+	}
+	if g.Lost < 2800 {
+		t.Fatalf("events trimmed before the group read them must be reported as lost: %+v", g)
+	}
+	if st.TrimRisk() < 1 {
+		t.Fatalf("a consumer that was overtaken has trim risk >= 1: %v", st.TrimRisk())
 	}
 }

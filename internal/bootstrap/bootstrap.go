@@ -72,7 +72,7 @@ func New(ctx context.Context, cfg config.Config, service string) (*Runtime, erro
 		Partitions: cfg.CommandPartitions, InlineMaxBytes: cfg.MediaInlineMaxBytes, LeaseTTL: cfg.CommandLeaseTTL}); err != nil {
 		return nil, fmt.Errorf("command queue: %w", err)
 	}
-	rt.Bus = redisstreams.NewBus(rt.Redis, redisstreams.BusConfig{})
+	rt.Bus = redisstreams.NewBus(rt.Redis, redisstreams.BusConfig{MaxLen: int64(cfg.EventBusRetention)})
 	if rt.Blob, err = s3.New(ctx, s3.Config{Endpoint: cfg.BlobEndpoint, PublicEndpoint: cfg.BlobPublicEndpoint, AccessKey: cfg.BlobAccessKey,
 		SecretKey: cfg.BlobSecretKey, Bucket: cfg.BlobBucket, UseSSL: cfg.BlobUseSSL, PublicUseSSL: cfg.BlobPublicUseSSL, LifecycleDays: cfg.BlobLifecycleDays}); err != nil {
 		return nil, fmt.Errorf("blob store: %w", err)

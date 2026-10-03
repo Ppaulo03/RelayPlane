@@ -79,6 +79,60 @@ func EventBusContract(t *testing.T, factory BusFactory) {
 		}
 	})
 
+	t.Run("StatsReportLagPendingAndRetention", func(t *testing.T) {
+		bus := factory(t)
+		insp, ok := bus.(ports.EventBusInspector)
+		if !ok {
+			t.Skip("bus does not expose retention stats")
+		}
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		gate := make(chan struct{})
+		var delivered atomic.Int32
+		go func() {
+			_ = bus.Subscribe(ctx, "slow", func(_ context.Context, e events.Event) error {
+				delivered.Add(1)
+				<-gate // the consumer is stuck on the first event
+				return nil
+			})
+		}()
+		time.Sleep(100 * time.Millisecond)
+		for i := 0; i < 6; i++ {
+			_ = bus.Publish(ctx, ev(i))
+		}
+		eventually(t, 10*time.Second, "first event delivered", func() bool { return delivered.Load() == 1 })
+		time.Sleep(100 * time.Millisecond)
+		st, err := insp.Stats(ctx)
+		if err != nil || st.Length < 6 || st.Retention < 6 {
+			t.Fatalf("stats: %+v %v", st, err)
+		}
+		var g *ports.EventBusGroupStats
+		for i := range st.Groups {
+			if st.Groups[i].Name == "slow" {
+				g = &st.Groups[i]
+			}
+		}
+		if g == nil || g.Lag < 4 {
+			t.Fatalf("a stuck consumer must show its backlog: %+v", st.Groups)
+		}
+		if g.Lost != 0 {
+			t.Fatalf("nothing was trimmed: %+v", g)
+		}
+		if st.TrimRisk() <= 0 {
+			t.Error("trim risk must reflect the lag")
+		}
+		close(gate)
+		eventually(t, 10*time.Second, "drained", func() bool {
+			s, _ := insp.Stats(ctx)
+			for _, x := range s.Groups {
+				if x.Name == "slow" {
+					return x.Lag == 0 && x.Pending == 0
+				}
+			}
+			return false
+		})
+	})
+
 	t.Run("FailedHandlerIsRedelivered", func(t *testing.T) {
 		bus := factory(t)
 		ctx, cancel := context.WithCancel(context.Background())

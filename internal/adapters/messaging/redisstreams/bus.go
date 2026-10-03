@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -22,7 +23,7 @@ import (
 // BusConfig configures the event bus.
 type BusConfig struct {
 	Prefix        string        // default "relayplane"
-	MaxLen        int64         // approximate stream cap, default 100000
+	MaxLen        int64         // retention: approximate stream cap in events, default 100000. A consumer group that falls further behind loses events (see Stats / the trim-risk alert)
 	Block         time.Duration // default 500ms
 	ReclaimIdle   time.Duration // pending entries idle this long are redelivered, default 5s
 	MaxDeliveries int64         // after this many deliveries an event is parked in the dead-event stream, default 10
@@ -135,6 +136,51 @@ func (b *Bus) Subscribe(ctx context.Context, group string, h ports.EventHandler)
 		}
 	}
 	return ctx.Err()
+}
+
+// Stats implements ports.EventBusInspector: stream length, per-group lag/pending and
+// how many events were trimmed away before a group could read them.
+func (b *Bus) Stats(ctx context.Context) (ports.EventBusStats, error) {
+	out := ports.EventBusStats{Retention: b.cfg.MaxLen}
+	n, err := b.rdb.XLen(ctx, b.stream()).Result()
+	if err != nil {
+		return out, err
+	}
+	out.Length = n
+	info, ierr := b.rdb.XInfoStream(ctx, b.stream()).Result()
+	if ierr != nil {
+		if strings.Contains(ierr.Error(), "no such key") {
+			return out, nil
+		}
+		return out, ierr
+	}
+	groups, err := b.rdb.XInfoGroups(ctx, b.stream()).Result()
+	if err != nil {
+		return out, err
+	}
+	// Redis reports a group's lag only over the entries it still retains, so a group that
+	// was overtaken by trimming looks healthy there. Entries that were trimmed away before
+	// the group read them are derived from the stream totals instead.
+	trimmed := info.EntriesAdded - n
+	now, terr := b.rdb.Time(ctx).Result()
+	for _, g := range groups {
+		gs := ports.EventBusGroupStats{Name: g.Name, Lag: g.Lag, Pending: g.Pending}
+		if trimmed > 0 && info.FirstEntry.ID != "" && idLess(g.LastDeliveredID, info.FirstEntry.ID) {
+			if lost := trimmed - g.EntriesRead; lost > 0 {
+				gs.Lost = lost
+			}
+		}
+		if g.Pending > 0 && terr == nil {
+			if p, perr := b.rdb.XPending(ctx, b.stream(), g.Name).Result(); perr == nil && p.Lower != "" {
+				ms, _, _ := strings.Cut(p.Lower, "-")
+				if t, cerr := strconv.ParseInt(ms, 10, 64); cerr == nil {
+					gs.OldestPending = now.Sub(time.UnixMilli(t))
+				}
+			}
+		}
+		out.Groups = append(out.Groups, gs)
+	}
+	return out, nil
 }
 
 func (b *Bus) deliveries(ctx context.Context, group, id string) int64 {

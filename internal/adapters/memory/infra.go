@@ -60,6 +60,18 @@ func (b *Bus) DeadEvents() []events.Event {
 	return append([]events.Event(nil), b.dead...)
 }
 
+// Stats implements ports.EventBusInspector. The in-memory bus never trims.
+func (b *Bus) Stats(_ context.Context) (ports.EventBusStats, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	st := ports.EventBusStats{Length: int64(len(b.log)), Retention: int64(len(b.log)) + 1}
+	for name, g := range b.groups {
+		st.Groups = append(st.Groups, ports.EventBusGroupStats{Name: name, Lag: int64(len(b.log) - g.offset)})
+	}
+	sort.Slice(st.Groups, func(i, j int) bool { return st.Groups[i].Name < st.Groups[j].Name })
+	return st, nil
+}
+
 func (b *Bus) Subscribe(ctx context.Context, group string, h ports.EventHandler) error {
 	b.mu.Lock()
 	g := b.groups[group]
@@ -98,7 +110,9 @@ func (b *Bus) Subscribe(ctx context.Context, group string, h ports.EventHandler)
 			b.dead = append(b.dead, *ev)
 			b.mu.Unlock()
 		}
+		b.mu.Lock()
 		g.offset++
+		b.mu.Unlock()
 		g.mu.Unlock()
 	}
 	return ctx.Err()

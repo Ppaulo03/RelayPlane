@@ -62,6 +62,15 @@ mensagem segue `UNKNOWN` e a ordem relativa a ela deixa de ser garantida.
 `outbox` guarda cada comando aceito até a publicação (gateway publica de imediato; o reconciler varre a cada 1 s e republica comandos
 perdidos pelo broker). Entradas despachadas são purgadas após 24 h. Backlog crescente ⇒ broker indisponível: o accept continua funcionando.
 
+### Retenção do EventBus (SLA)
+O stream de eventos é cortado por tamanho (`EVENT_BUS_RETENTION`, padrão 100 000 eventos, corte aproximado). **Contrato:** um consumer group só
+não perde eventos enquanto seu *lag* ficar abaixo da retenção. Dimensione assim: `retenção ≥ taxa_pico_de_eventos/s × pior_indisponibilidade_tolerada_s × 2`
+(ex.: 50 ev/s e 30 min de indisponibilidade tolerada ⇒ 180 000). Métricas: `relayplane_eventbus_stream_length`, `…_retention_entries`,
+`…_consumer_lag{group}`, `…_oldest_pending_seconds{group}`, `…_events_lost{group}` e `…_trim_risk` (pior lag ÷ retenção; ≥ 1 = perda).
+Alertas (`deploy/prometheus/alerts.yml`): aviso em 50 %, página em 90 %, página imediata se `events_lost > 0`. Se um group perdeu eventos,
+reconstrua o estado a partir do catálogo (o Reconciler já corrige `observed_state`; mensagens recebidas perdidas não são recuperáveis do
+bus: tratar como incidente). Para um log de eventos durável de verdade, o caminho é trocar o adapter do EventBus (Kafka) sem mudar o core.
+
 ### DLQ de comandos
 Mensagens que esgotaram os retries ficam `FAILED/RETRIES_EXHAUSTED` no catálogo e o comando em `relayplane:dlq`:
 ```bash

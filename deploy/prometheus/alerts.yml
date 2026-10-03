@@ -35,6 +35,24 @@ groups:
         expr: increase(relayplane_outbound_dlq_total[15m]) > 0
         labels: {severity: warn}
         annotations: {summary: "Outbound commands are being dead-lettered"}
+      - alert: RelayPlaneEventBusTrimRisk
+        expr: relayplane_eventbus_trim_risk > 0.5
+        for: 5m
+        labels: {severity: warn}
+        annotations: {summary: "A consumer group is {{ $value | humanizePercentage }} of the way to being overtaken by event-bus trimming"}
+      - alert: RelayPlaneEventBusTrimRiskCritical
+        expr: relayplane_eventbus_trim_risk > 0.9
+        labels: {severity: page}
+        annotations: {summary: "Event bus consumers are about to lose events (lag > 90% of EVENT_BUS_RETENTION): restore the consumer or raise the retention now"}
+      - alert: RelayPlaneEventBusEventsLost
+        expr: relayplane_eventbus_events_lost > 0
+        labels: {severity: page}
+        annotations: {summary: "Consumer group {{ $labels.group }} lost events to trimming; reconcile its state from the catalog"}
+      - alert: RelayPlaneEventBusStuckEvents
+        expr: relayplane_eventbus_oldest_pending_seconds > 300
+        for: 5m
+        labels: {severity: warn}
+        annotations: {summary: "Group {{ $labels.group }} has an event unacknowledged for over 5 minutes"}
       - alert: RelayPlaneNoWorkers
         expr: absent(up{job="relayplane-worker"} == 1)
         for: 2m
