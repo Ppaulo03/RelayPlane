@@ -1,0 +1,30 @@
+# Sandbox overlay (see deploy/docker/sandbox.sh): the real gateway, workers and reconciler on real PostgreSQL / Redis / object
+# store, with the provider nodes replaced by cmd/simulator so a developer (or CI) can play the WhatsApp user through
+# /_sim/... without a phone number. NEVER used in production.
+services:
+  evolution-node-01: &sim
+    build: !override {context: ., args: {CMD: simulator}}
+    image: relayplane/simulator:dev
+    depends_on: !reset {}
+    healthcheck: {disable: true}
+    environment: !override
+      AUTHENTICATION_API_KEY: ${EVOLUTION_NODE_01_API_KEY:?set EVOLUTION_NODE_01_API_KEY}
+      SIM_AUTO_RECEIPTS: "true"      # every accepted message is reported as delivered shortly after
+      SIM_RECEIPT_DELAY: 300ms
+    ports: ["127.0.0.1:18081:8080"]  # control API of node-01: /_sim/...
+  evolution-node-02:
+    <<: *sim
+    environment: !override
+      AUTHENTICATION_API_KEY: ${EVOLUTION_NODE_02_API_KEY:?set EVOLUTION_NODE_02_API_KEY}
+      SIM_AUTO_RECEIPTS: "true"
+      SIM_RECEIPT_DELAY: 300ms
+    ports: ["127.0.0.1:18082:8080"]
+  worker:
+    # the webhook dispatcher runs in the worker: let it reach a consumer running on the host
+    extra_hosts: ["host.docker.internal:host-gateway"]
+  gateway:
+    depends_on: !override
+      postgres: {condition: service_healthy}
+      redis: {condition: service_healthy}
+      evolution-node-01: {condition: service_started}
+      evolution-node-02: {condition: service_started}

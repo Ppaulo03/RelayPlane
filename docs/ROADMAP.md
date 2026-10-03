@@ -65,6 +65,7 @@ Legenda: ✅ feito e testado · ⚠️ feito com limitação registrada · ⏭�
 | `traceparent` nos webhooks; eventos de status carregam o trace do envio (R05) | ✅ |
 | `GET /api/v1/limits` (janela de idempotência, tamanhos, ritmo, retries de webhook) (R13) | ✅ |
 | `exclude_groups` na subscription (R14) | ✅ |
+| Simulador/sandbox drivável do provedor, com exemplo e job de CI (R03) | ✅ [`SANDBOX.md`](SANDBOX.md) |
 | Sequência inbound confiável (`source_sequence`) | ⏭️ o provedor não expõe; o consumidor ordena pelo `timestamp` do evento |
 | Entrega estritamente ordenada por instância | ⏭️ melhor esforço (um em voo por assinatura+instância); estrita exigiria bloquear a fila atrás de uma entrega em retry |
 
