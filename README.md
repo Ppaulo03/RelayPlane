@@ -71,6 +71,7 @@ make test-integration# adapters reais + suíte de sistema contra PostgreSQL+Redi
 make test-integration-s3 # o mesmo contra TODOS os object stores suportados (RustFS e SeaweedFS)
 make test-race       # race detector (em container Docker golang: o Windows local não tem gcc)
 make sdk-test        # SDK Python
+make sandbox-up      # stack real com um simulador de provedor drivável (sem número de WhatsApp): docs/SANDBOX.md
 ```
 
 | Camada | Pacote |
@@ -91,6 +92,7 @@ make sdk-test        # SDK Python
 | [OPERATIONS](docs/OPERATIONS.md) | runbook: deploy, escalar workers/nodes, drain, migração, DLQ, métricas e alertas |
 | [FAILURE-MODES](docs/FAILURE-MODES.md) | o que acontece (e o que *não* acontece) em cada falha |
 | [PROVIDER-ADAPTERS](docs/PROVIDER-ADAPTERS.md) | como escrever/versionar um provider; contrato e limitações da Evolution |
+| [SANDBOX](docs/SANDBOX.md) | rodar o RelayPlane inteiro sem WhatsApp, com um simulador que faz o papel do usuário |
 | [VERSIONS](docs/VERSIONS.md) | versões e digests pinados (Gateway, Evolution, Baileys, imagens) |
 | [ROADMAP](docs/ROADMAP.md) | o que está feito, adiado e por quê |
 | [openapi.yaml](docs/openapi.yaml) | especificação da API pública |

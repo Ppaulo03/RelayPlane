@@ -1,0 +1,48 @@
+# Sandbox: o RelayPlane inteiro sem número de WhatsApp
+
+Para desenvolver e testar um consumidor (como o `conversation_agent`) contra os binários **reais** do RelayPlane (gateway, workers, reconciler, PostgreSQL, Redis,
+object store) sem WhatsApp: o nó do provedor é trocado por um **simulador** que se comporta como a Evolution API para o RelayPlane e, do outro lado, deixa você
+fazer o papel do usuário.
+
+```bash
+make sandbox-up        # sobe a stack (segredos gerados em .env.sandbox, ignorado pelo git)
+make sandbox-example   # roda examples/sandbox/quickstart.py (precisa do SDK: pip install -e sdk/python)
+make sandbox-down
+make test-sandbox      # up + exemplo + down (é o que o CI roda)
+```
+
+Gateway `http://127.0.0.1:18080` · simulador do node-01 `http://127.0.0.1:18081` · node-02 `18082` (header `apikey` = `EVOLUTION_NODE_0X_API_KEY` de `.env.sandbox`).
+
+## O que o simulador faz
+
+* **Para o RelayPlane** ele é um node: cria instâncias, devolve QR, aceita envios (devolve um id de provedor), responde `connectionState`, `logout`, `delete`.
+  O adapter real da Evolution passa **a mesma suíte de contrato** de provedores contra ele (`TestSimulatorPassesProviderContractSuite`).
+* **Para você** ele expõe `/_sim/...`, e tudo que você aciona chega ao RelayPlane como um **webhook no formato real da Evolution**, passando pelo normalizador de produção:
+
+| Chamada | Efeito |
+|---|---|
+| `POST /_sim/instances/{id}/scan` | o usuário lê o QR: a instância fica `CONNECTED` |
+| `POST /_sim/instances/{id}/inbound` `{from, text, type, reply_to, group, push_name, timestamp}` | o usuário escreve; `reply_to` é o id de provedor da mensagem citada, ou `"last_sent"` para citar a última mensagem que o RelayPlane enviou. `type`: `text`, `image`, `audio`, `video`, `document` |
+| `POST /_sim/instances/{id}/receipt` `{message_id, status}` | `delivered`, `read` ou `failed` (`message_id` aceita `"last_sent"`); com `SIM_AUTO_RECEIPTS=true` (padrão do sandbox) toda mensagem aceita vira `delivered` sozinha |
+| `POST /_sim/instances/{id}/disconnect` `{logged_out}` | o socket cai (ou o usuário desloga o aparelho) |
+| `GET /_sim/instances/{id}/sent` | tudo que o RelayPlane enviou ao node |
+| `POST /_sim/faults` `{next: [...]}` | falhas nas próximas chamadas à API do node: `unavailable`, `auth`, `not_found`, `server_error`, `ambiguous` |
+| `GET /_sim/instances`, `POST /_sim/reset` | inspeção e limpeza |
+
+Cada chamada de controle só responde depois que o gateway respondeu ao webhook (`gateway_status` na resposta): é determinístico, sem `sleep`.
+
+## Exemplo mínimo (o que `quickstart.py` faz)
+
+1. cria um tenant e uma subscription apontando para um receptor local (verifica a assinatura com `relayplane.verify_request`);
+2. cria uma instância e "lê o QR";
+3. envia uma mensagem e espera o webhook `message.outbound_status` (`ACCEPTED`);
+4. responde **citando** essa mensagem e confere que o webhook `message.received` traz `reply_to_provider_message_id` igual ao id da mensagem enviada.
+
+## Limites (o que o simulador NÃO prova)
+
+* Ele reproduz o **formato de payload que o adapter espera**. Se a Evolution real emitir algo diferente (por exemplo, onde fica o `contextInfo.stanzaId` de uma resposta),
+  o simulador não percebe: isso só se valida com um número real (**R20** do [`AGENT-READINESS`](./AGENT-READINESS.md)). Quando houver payloads reais, eles viram fixtures
+  e o simulador passa a gerá-los.
+* Não há latência, limites de taxa nem bloqueios do WhatsApp. Nunca use o simulador fora de desenvolvimento e CI.
+
+`cmd/loadstub` (testes de carga) é o mesmo simulador com pareamento instantâneo e latência de envio configurável.
