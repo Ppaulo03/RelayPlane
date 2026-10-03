@@ -4,6 +4,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/relayplane/relayplane/internal/app"
 	"github.com/relayplane/relayplane/internal/ports"
 )
 
@@ -31,6 +32,13 @@ func (r *Reconciler) Maintenance(ctx context.Context) {
 	} else if exp+orph > 0 {
 		r.Log.InfoContext(ctx, "blob cleanup", "expired", exp, "orphans", orph)
 	}
+	if _, err := r.App.EventOutbox.Purge(ctx, 24*time.Hour); err != nil {
+		r.Log.WarnContext(ctx, "event outbox purge failed", "error", err)
+	}
+	if _, err := d.Repos.Deliveries.PurgeDelivered(ctx, time.Now().Add(-r.Cfg.DeliveredRetention)); err != nil {
+		r.Log.WarnContext(ctx, "delivered webhook purge failed", "error", err)
+	}
+	app.RecordDeliveryGauges(ctx, d)
 	now := time.Now()
 	if _, err := d.Repos.Idempotency.DeleteExpired(ctx, now); err != nil {
 		r.Log.WarnContext(ctx, "idempotency expiry failed", "error", err)

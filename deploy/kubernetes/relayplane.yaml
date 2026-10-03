@@ -20,10 +20,13 @@ data:
   MEDIA_INLINE_MAX_BYTES: "262144"
   DEFAULT_PROVIDER: evolution-v2
   WEBHOOK_BASE_URL: http://gateway.relayplane.svc:8080
+  IDEMPOTENCY_TTL: 24h
+  # tenant webhooks: https + public destinations only in production (APP_ENV=production)
+  WEBHOOKS_MAX_PER_TENANT: "10"
   # id/endpoint/capacity per node; api_key values come from the Secret (PROVIDER_NODES is assembled by your secret tooling)
 ---
 # Expected Secret `relayplane-secrets` keys: DATABASE_URL, BLOB_STORE_ACCESS_KEY, BLOB_STORE_SECRET_KEY,
-# WEBHOOK_SECRET, ADMIN_API_KEY, PROVIDER_NODES, EVOLUTION_API_KEY
+# WEBHOOK_SECRET, SUBSCRIPTION_SECRET (optional), ADMIN_API_KEY, PROVIDER_NODES, EVOLUTION_API_KEY
 apiVersion: apps/v1
 kind: Deployment
 metadata: {name: gateway, namespace: relayplane}

@@ -33,6 +33,8 @@ type Config struct {
 
 	MigrationVerifyTimeout time.Duration
 	MaxTextLength          int
+
+	Subscriptions SubscriptionConfig
 }
 
 // DefaultConfig returns production-leaning defaults.
@@ -174,6 +176,9 @@ type App struct {
 	Inbound    *InboundService
 	Nodes      *NodeService
 	Tenants    *TenantService
+	// EventOutbox moves tenant-facing events from the database outbox to the event bus.
+	EventOutbox   *EventOutboxService
+	Subscriptions *SubscriptionService
 }
 
 // New wires the services.
@@ -193,5 +198,7 @@ func New(d Deps) *App {
 	a.Inbound = &InboundService{d: d}
 	a.Nodes = &NodeService{d: d}
 	a.Tenants = &TenantService{d: d}
+	a.EventOutbox = &EventOutboxService{d: d}
+	a.Subscriptions = &SubscriptionService{d: d}
 	return a
 }

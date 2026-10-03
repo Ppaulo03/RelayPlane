@@ -78,6 +78,20 @@ type Config struct {
 	// same instance. Default 0 = until it is resolved (strict ordering); a positive value is
 	// an explicit availability-over-ordering choice.
 	UnknownBarrierTimeout time.Duration
+
+	// IdempotencyTTL is how long Idempotency-Keys are remembered. A client may safely retry a send with
+	// the same key only inside this window.
+	IdempotencyTTL time.Duration
+
+	// Tenant webhook subscriptions. SubscriptionSecret derives the per-subscription signing secrets; when
+	// empty it is derived from WEBHOOK_SECRET (with domain separation).
+	SubscriptionSecret        string
+	WebhooksMaxPerTenant      int
+	WebhooksAllowInsecure     bool // http:// destinations (default: development only)
+	WebhooksAllowPrivate      bool // loopback/private destinations (default: development only)
+	WebhookDeliveryTimeout    time.Duration
+	WebhookDeliveryWorkers    int
+	WebhookDeliveredRetention time.Duration
 }
 
 // Load reads the environment. Secrets have no defaults: a missing required
@@ -99,7 +113,17 @@ func Load() (Config, error) {
 		InstanceInterval: getDur("RECONCILER_INSTANCE_INTERVAL", 30*time.Second), NodeOfflineAfter: getDur("NODE_OFFLINE_AFTER", time.Minute),
 		MigrationVerifyTimeout: getDur("MIGRATION_VERIFY_TIMEOUT", 10*time.Minute),
 		UnknownBarrierTimeout:  getDur("UNKNOWN_BARRIER_TIMEOUT", 0),
+		IdempotencyTTL:         getDur("IDEMPOTENCY_TTL", 24*time.Hour),
+		SubscriptionSecret:     os.Getenv("SUBSCRIPTION_SECRET"),
+		WebhooksMaxPerTenant:   getInt("WEBHOOKS_MAX_PER_TENANT", 10),
+		WebhookDeliveryTimeout: getDur("WEBHOOK_DELIVERY_TIMEOUT", 5*time.Second),
+		WebhookDeliveryWorkers: getInt("WEBHOOK_DELIVERY_WORKERS", 8),
+
+		WebhookDeliveredRetention: getDur("WEBHOOK_DELIVERED_RETENTION", 7*24*time.Hour),
 	}
+	dev := c.Env != "production"
+	c.WebhooksAllowInsecure = getBool("WEBHOOKS_ALLOW_INSECURE", dev)
+	c.WebhooksAllowPrivate = getBool("WEBHOOKS_ALLOW_PRIVATE_DESTINATIONS", dev)
 	var lvl slog.Level
 	if err := lvl.UnmarshalText([]byte(get("LOG_LEVEL", "info"))); err != nil {
 		return c, fmt.Errorf("LOG_LEVEL: %w", err)
@@ -138,6 +162,12 @@ func (c Config) Validate() error {
 	need("WEBHOOK_SECRET", c.WebhookSecret)
 	if len(missing) > 0 {
 		return fmt.Errorf("missing required configuration: %s", strings.Join(missing, ", "))
+	}
+	if c.Env == "production" && c.SubscriptionSecret != "" && len(c.SubscriptionSecret) < 16 {
+		return fmt.Errorf("SUBSCRIPTION_SECRET must have at least 16 characters in production")
+	}
+	if c.IdempotencyTTL != 0 && c.IdempotencyTTL < time.Minute {
+		return fmt.Errorf("IDEMPOTENCY_TTL must be at least 1m")
 	}
 	if c.Env == "production" && len(c.WebhookSecret) < 16 {
 		return fmt.Errorf("WEBHOOK_SECRET must have at least 16 characters in production")

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/relayplane/relayplane/internal/core/errs"
+	"github.com/relayplane/relayplane/internal/core/events"
 	"github.com/relayplane/relayplane/internal/core/media"
 	"github.com/relayplane/relayplane/internal/core/ownership"
 )
@@ -98,6 +99,8 @@ type Message struct {
 	ErrorMessage      string
 	CreatedAt         time.Time
 	UpdatedAt         time.Time
+	// AcceptedAt is when the provider accepted the send (zero until the message reaches ACCEPTED).
+	AcceptedAt time.Time
 }
 
 // Payload is the claim-check message body carried in the command.
@@ -248,4 +251,37 @@ func (r RetrySchedule) Next(attempt int) (time.Duration, bool) {
 		return 0, false
 	}
 	return r[attempt-1], true
+}
+
+// NotifiesTenant reports which statuses are surfaced to the tenant as message.outbound_status events.
+func (s Status) NotifiesTenant() bool {
+	switch s {
+	case StatusAccepted, StatusDelivered, StatusRead, StatusFailed, StatusUnknown:
+		return true
+	}
+	return false
+}
+
+// OutboundStatusEvent builds the tenant-facing event for a message that just entered m.Status. The event id is
+// deterministic (message id + status), so re-publishing the same fact keeps the same id and consumers can dedupe.
+func OutboundStatusEvent(m Message, provider string) events.Event {
+	pl := events.MessageOutboundStatusPayload{MessageID: m.ID, Status: string(m.Status), ProviderMessageID: m.ProviderMessageID,
+		SequenceNo: m.SequenceNo, ErrorCode: m.ErrorCode}
+	if !m.AcceptedAt.IsZero() {
+		at := m.AcceptedAt.UTC()
+		pl.AcceptedAt = &at
+	}
+	ev := events.Event{
+		EventID:    events.EventIDFor(events.DedupeKey(m.InstanceID, events.MessageOutboundStatus, m.ID, string(m.Status))),
+		EventType:  events.MessageOutboundStatus,
+		Provider:   provider,
+		TenantID:   m.TenantID,
+		InstanceID: m.InstanceID,
+		Timestamp:  m.UpdatedAt.UTC(),
+		Payload:    pl,
+	}
+	if m.NodeID != "" {
+		ev.SourceAssignment = &events.SourceAssignment{NodeID: m.NodeID, Epoch: m.AssignmentEpoch}
+	}
+	return ev
 }

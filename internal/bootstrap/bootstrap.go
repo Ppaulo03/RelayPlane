@@ -4,6 +4,8 @@ package bootstrap
 
 import (
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -17,11 +19,13 @@ import (
 	"github.com/relayplane/relayplane/internal/adapters/messaging/redisstreams"
 	"github.com/relayplane/relayplane/internal/adapters/persistence/postgres"
 	evolution "github.com/relayplane/relayplane/internal/adapters/providers/evolution/v2"
+	"github.com/relayplane/relayplane/internal/adapters/webhookout"
 	apihttp "github.com/relayplane/relayplane/internal/api/http"
 	"github.com/relayplane/relayplane/internal/app"
 	"github.com/relayplane/relayplane/internal/config"
 	"github.com/relayplane/relayplane/internal/core/media"
 	"github.com/relayplane/relayplane/internal/core/routing"
+	"github.com/relayplane/relayplane/internal/delivery"
 	"github.com/relayplane/relayplane/internal/idempotency"
 	"github.com/relayplane/relayplane/internal/observability"
 )
@@ -37,6 +41,10 @@ type Runtime struct {
 	Queue   *redisstreams.Queue
 	Bus     *redisstreams.Bus
 	Blob    *s3.Store
+
+	// FanOut and Dispatcher deliver tenant-facing events to webhook subscriptions (run by the worker).
+	FanOut     *delivery.FanOut
+	Dispatcher *delivery.Dispatcher
 
 	shutdownTrace func(context.Context) error
 }
@@ -98,11 +106,34 @@ func New(ctx context.Context, cfg config.Config, service string) (*Runtime, erro
 	acfg.MediaTTL = cfg.MediaTTL
 	acfg.PendingTTL = cfg.MediaPendingTTL
 	acfg.MigrationVerifyTimeout = cfg.MigrationVerifyTimeout
+	subKey := subscriptionKey(cfg)
+	acfg.Subscriptions = app.SubscriptionConfig{ServerKey: subKey, MaxPerTenant: cfg.WebhooksMaxPerTenant,
+		AllowInsecureURLs: cfg.WebhooksAllowInsecure, AllowPrivateDestinations: cfg.WebhooksAllowPrivate}
 
 	repos := rt.Store.Repositories()
+	idem := idempotency.NewService(repos.Idempotency)
+	if cfg.IdempotencyTTL > 0 {
+		idem.TTL = cfg.IdempotencyTTL
+	}
 	rt.App = app.New(app.Deps{Repos: repos, Providers: reg, Queue: rt.Queue, Bus: rt.Bus, Blob: rt.Blob,
-		Locker: redislock.New(rt.Redis, ""), Idem: idempotency.NewService(repos.Idempotency), Metrics: rt.Metrics, Log: log, Cfg: acfg})
+		Locker: redislock.New(rt.Redis, ""), Idem: idem, Metrics: rt.Metrics, Log: log, Cfg: acfg})
+
+	rt.FanOut = &delivery.FanOut{Repos: repos, Log: log, Metrics: rt.Metrics}
+	rt.Dispatcher = &delivery.Dispatcher{Repos: repos, ServerKey: subKey, Metrics: rt.Metrics, Log: log,
+		Sender:         webhookout.New(webhookout.Config{AllowPrivate: cfg.WebhooksAllowPrivate, AllowInsecure: cfg.WebhooksAllowInsecure}),
+		RequestTimeout: cfg.WebhookDeliveryTimeout, Concurrency: cfg.WebhookDeliveryWorkers}
 	return rt, nil
+}
+
+// subscriptionKey is the server key that derives webhook signing secrets: SUBSCRIPTION_SECRET when set,
+// otherwise derived from WEBHOOK_SECRET with domain separation (so the two uses never share key material).
+func subscriptionKey(cfg config.Config) []byte {
+	if cfg.SubscriptionSecret != "" {
+		return []byte(cfg.SubscriptionSecret)
+	}
+	m := hmac.New(sha256.New, []byte(cfg.WebhookSecret))
+	m.Write([]byte("relayplane/subscription-server-key/v1"))
+	return m.Sum(nil)
 }
 
 // SeedNodes registers the configured nodes in the catalog (idempotent; keeps

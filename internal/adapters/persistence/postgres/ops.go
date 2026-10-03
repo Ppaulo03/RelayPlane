@@ -141,16 +141,18 @@ func (r opRepo) ListActive(ctx context.Context, t instance.OperationType, limit 
 type msgRepo struct{ s *Store }
 
 const msgCols = `id,tenant_id,instance_id,idempotency_key,node_id,assignment_epoch,partition_key,recipient,type,payload,status,
-	provider_message_id,attempt_count,error_code,error_message,created_at,updated_at,sequence_no`
+	provider_message_id,attempt_count,error_code,error_message,created_at,updated_at,sequence_no,accepted_at`
 
 func scanMsg(row pgx.Row) (*messaging.Message, error) {
 	var m messaging.Message
 	var t, st string
 	var payload []byte
+	var accepted *time.Time
 	if err := row.Scan(&m.ID, &m.TenantID, &m.InstanceID, &m.IdempotencyKey, &m.NodeID, &m.AssignmentEpoch, &m.PartitionKey,
-		&m.Recipient, &t, &payload, &st, &m.ProviderMessageID, &m.AttemptCount, &m.ErrorCode, &m.ErrorMessage, &m.CreatedAt, &m.UpdatedAt, &m.SequenceNo); err != nil {
+		&m.Recipient, &t, &payload, &st, &m.ProviderMessageID, &m.AttemptCount, &m.ErrorCode, &m.ErrorMessage, &m.CreatedAt, &m.UpdatedAt, &m.SequenceNo, &accepted); err != nil {
 		return nil, notFound(err)
 	}
+	m.AcceptedAt = zeroIfNil(accepted)
 	m.Type, m.Status, m.Payload = messaging.Type(t), messaging.Status(st), json.RawMessage(payload)
 	return &m, nil
 }
@@ -245,9 +247,13 @@ func (r msgRepo) Transition(ctx context.Context, id string, from []messaging.Sta
 		if p.BumpAttempt {
 			attempts++
 		}
-		out, err = scanMsg(tx.QueryRow(ctx, `UPDATE outbound_messages SET status=$2,provider_message_id=$3,error_code=$4,error_message=$5,
-			attempt_count=$6,updated_at=now() WHERE id=$1 RETURNING `+msgCols, id, string(to), pm, code, msg, attempts))
-		return err
+		out, err = scanMsg(tx.QueryRow(ctx, `UPDATE outbound_messages SET status=$2::text,provider_message_id=$3,error_code=$4,error_message=$5,
+			attempt_count=$6,accepted_at=CASE WHEN $2::text='ACCEPTED' THEN now() ELSE accepted_at END,updated_at=now() WHERE id=$1 RETURNING `+msgCols,
+			id, string(to), pm, code, msg, attempts))
+		if err != nil {
+			return err
+		}
+		return emitOutbound(ctx, tx, out)
 	})
 	return out, err
 }
@@ -259,21 +265,24 @@ var receiptRank = map[messaging.Status]int{
 func (r msgRepo) ApplyProviderStatus(ctx context.Context, instanceID, pmid string, to messaging.Status) (bool, error) {
 	applied := false
 	err := r.s.withTx(ctx, func(tx pgx.Tx) error {
-		var id, cur string
-		err := tx.QueryRow(ctx, `SELECT id,status FROM outbound_messages WHERE instance_id=$1 AND provider_message_id=$2 FOR UPDATE`,
-			instanceID, pmid).Scan(&id, &cur)
+		cur0, err := scanMsg(tx.QueryRow(ctx, `SELECT `+msgCols+` FROM outbound_messages WHERE instance_id=$1 AND provider_message_id=$2 FOR UPDATE`,
+			instanceID, pmid))
 		if err != nil {
-			return notFound(err)
+			return err
 		}
+		id, cur := cur0.ID, string(cur0.Status)
 		if to == messaging.StatusFailed {
 			if cur != string(messaging.StatusAccepted) && cur != string(messaging.StatusUnknown) {
 				applied = false
 				return nil
 			}
 			applied = true
-			_, err = tx.Exec(ctx, `UPDATE outbound_messages SET status='FAILED',error_code='PROVIDER_FAILED',
-				error_message='provider reported the message as failed',updated_at=now() WHERE id=$1`, id)
-			return err
+			upd, err := scanMsg(tx.QueryRow(ctx, `UPDATE outbound_messages SET status='FAILED',error_code='PROVIDER_FAILED',
+				error_message='provider reported the message as failed',updated_at=now() WHERE id=$1 RETURNING `+msgCols, id))
+			if err != nil {
+				return err
+			}
+			return emitOutbound(ctx, tx, upd)
 		}
 		c, okc := receiptRank[messaging.Status(cur)]
 		n, okn := receiptRank[to]
@@ -282,8 +291,11 @@ func (r msgRepo) ApplyProviderStatus(ctx context.Context, instanceID, pmid strin
 			return nil
 		}
 		applied = true
-		_, err = tx.Exec(ctx, `UPDATE outbound_messages SET status=$2,updated_at=now() WHERE id=$1`, id, string(to))
-		return err
+		upd, err := scanMsg(tx.QueryRow(ctx, `UPDATE outbound_messages SET status=$2,updated_at=now() WHERE id=$1 RETURNING `+msgCols, id, string(to)))
+		if err != nil {
+			return err
+		}
+		return emitOutbound(ctx, tx, upd)
 	})
 	return applied, err
 }

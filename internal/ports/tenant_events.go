@@ -1,0 +1,83 @@
+package ports
+
+import (
+	"context"
+	"time"
+
+	"github.com/relayplane/relayplane/internal/core/events"
+	"github.com/relayplane/relayplane/internal/core/subscription"
+)
+
+// EventOutboxRepository is the transactional outbox of events derived from database state (today: outbound
+// message status changes). Rows are written by the repository in the SAME transaction as the state change, so a
+// status change can never be lost between the database and the event bus.
+type EventOutboxRepository interface {
+	// ListUnpublished returns events not yet published, oldest first.
+	ListUnpublished(ctx context.Context, limit int) ([]events.Event, error)
+	// MarkPublished records the publication of the given event ids.
+	MarkPublished(ctx context.Context, eventIDs []string, at time.Time) error
+	// Purge deletes events published before `before`.
+	Purge(ctx context.Context, before time.Time) (int64, error)
+}
+
+// SubscriptionRepository persists tenant webhook subscriptions. Every method that takes a tenant id is scoped by
+// it: a subscription of another tenant is indistinguishable from a missing one (ErrNotFound).
+type SubscriptionRepository interface {
+	Create(ctx context.Context, s subscription.Subscription) error
+	Get(ctx context.Context, tenantID, id string) (*subscription.Subscription, error)
+	// GetByID is for the delivery pipeline, which already holds a trusted subscription id.
+	GetByID(ctx context.Context, id string) (*subscription.Subscription, error)
+	ListByTenant(ctx context.Context, tenantID string) ([]subscription.Subscription, error)
+	// ListActive returns the active subscriptions of a tenant (fan-out).
+	ListActive(ctx context.Context, tenantID string) ([]subscription.Subscription, error)
+	// RotateSecret increments the secret version and returns the new one.
+	RotateSecret(ctx context.Context, tenantID, id string, at time.Time) (version int, err error)
+	// Delete removes the subscription and its deliveries.
+	Delete(ctx context.Context, tenantID, id string) error
+	CountByTenant(ctx context.Context, tenantID string) (int, error)
+}
+
+// DeliveryRepository persists webhook deliveries. Enqueue is idempotent per (subscription, event): re-consuming an
+// event from the bus never produces a second delivery.
+type DeliveryRepository interface {
+	// Enqueue inserts deliveries, ignoring those that already exist; it returns how many were new.
+	Enqueue(ctx context.Context, ds []subscription.Delivery) (int, error)
+	// ClaimDue leases up to `limit` PENDING deliveries whose next_attempt_at has passed, oldest first, excluding any
+	// delivery whose (subscription, instance) already has another delivery in flight (best-effort ordering).
+	ClaimDue(ctx context.Context, now time.Time, lease time.Duration, limit int) ([]subscription.Delivery, error)
+	MarkDelivered(ctx context.Context, id string, at time.Time) error
+	// MarkRetry records a failed attempt (attempts+1) and schedules the next one.
+	MarkRetry(ctx context.Context, id string, next time.Time, lastErr string) error
+	// MarkDead records a failed attempt and moves the delivery to the DLQ.
+	MarkDead(ctx context.Context, id string, lastErr string) error
+	// Postpone releases the lease and delays the delivery WITHOUT counting an attempt (circuit open).
+	Postpone(ctx context.Context, id string, until time.Time) error
+	// List returns deliveries of one subscription of a tenant, newest first ("" status: all).
+	List(ctx context.Context, tenantID, subscriptionID string, status subscription.DeliveryStatus, limit int) ([]subscription.Delivery, error)
+	// Requeue moves a DEAD delivery of the tenant back to PENDING with a fresh budget.
+	Requeue(ctx context.Context, tenantID, id string, now time.Time) error
+	PurgeDelivered(ctx context.Context, before time.Time) (int64, error)
+	// Counts feeds the gauges: deliveries per status, and the age of the oldest PENDING one.
+	Counts(ctx context.Context, now time.Time) (DeliveryCounts, error)
+}
+
+// DeliveryCounts is a snapshot for metrics/alerts.
+type DeliveryCounts struct {
+	Pending, Delivered, Dead int64
+	OldestPending            time.Duration
+}
+
+// WebhookRequest is one signed POST.
+type WebhookRequest struct {
+	URL     string
+	Headers map[string]string
+	Body    []byte
+	Timeout time.Duration
+}
+
+// WebhookSender performs the POST. Implementations MUST refuse non-public destinations at dial time
+// (errs.ErrDestinationBlocked), never follow redirects and bound the response read.
+type WebhookSender interface {
+	// Send returns the HTTP status code. A transport error means "no response".
+	Send(ctx context.Context, req WebhookRequest) (status int, err error)
+}

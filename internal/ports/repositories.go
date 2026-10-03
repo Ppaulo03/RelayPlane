@@ -10,4 +10,8 @@ type Repositories struct {
 	Blobs       BlobMetadataRepository
 	Idempotency IdempotencyStore
 	Dedup       Deduplicator
+	// Events is the durable outbox of tenant-facing events produced by message status changes.
+	Events        EventOutboxRepository
+	Subscriptions SubscriptionRepository
+	Deliveries    DeliveryRepository
 }

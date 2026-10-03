@@ -87,6 +87,10 @@ func RepositoryContract(t *testing.T, factory RepoFactory) {
 	t.Run("Idempotency", func(t *testing.T) { idempotencyContract(t, factory) })
 	t.Run("Dedup", func(t *testing.T) { dedupContract(t, factory) })
 	t.Run("BlobMetadata", func(t *testing.T) { blobMetaContract(t, factory) })
+	t.Run("EventOutbox", func(t *testing.T) { eventOutboxContract(t, factory) })
+	t.Run("EventOutboxFailureStates", func(t *testing.T) { eventOutboxFailureStatesContract(t, factory) })
+	t.Run("Subscriptions", func(t *testing.T) { subscriptionsContract(t, factory) })
+	t.Run("Deliveries", func(t *testing.T) { deliveriesContract(t, factory) })
 }
 
 func tenantsContract(t *testing.T, f RepoFactory) {

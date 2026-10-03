@@ -108,6 +108,14 @@ func (s *Server) Handler() nethttp.Handler {
 	mux.HandleFunc("POST /api/v1/messages/{id}/resolve", tenant(s.resolveMessage))
 	mux.HandleFunc("GET /api/v1/operations/{id}", tenant(s.getOperation))
 
+	mux.HandleFunc("POST /api/v1/subscriptions", tenant(s.createSubscription))
+	mux.HandleFunc("GET /api/v1/subscriptions", tenant(s.listSubscriptions))
+	mux.HandleFunc("GET /api/v1/subscriptions/{id}", tenant(s.getSubscription))
+	mux.HandleFunc("DELETE /api/v1/subscriptions/{id}", tenant(s.deleteSubscription))
+	mux.HandleFunc("POST /api/v1/subscriptions/{id}/rotate-secret", tenant(s.rotateSubscriptionSecret))
+	mux.HandleFunc("GET /api/v1/subscriptions/{id}/deliveries", tenant(s.listDeliveries))
+	mux.HandleFunc("POST /api/v1/deliveries/{id}/redeliver", tenant(s.redeliver))
+
 	mux.HandleFunc("POST /api/v1/media/uploads", tenant(s.createUpload))
 	mux.HandleFunc("PUT /api/v1/media/{id}/content", tenant(s.uploadContent))
 	mux.HandleFunc("GET /api/v1/media/{id}", tenant(s.getMedia))

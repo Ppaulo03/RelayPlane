@@ -31,7 +31,9 @@ type Config struct {
 	StuckQueuedAfter time.Duration // a dispatched command whose message is still QUEUED after this is re-published
 	OutboxInterval   time.Duration // outbox dispatch loop period
 	OrphanGrace      time.Duration
-	Policy           reconciliation.Policy
+	// DeliveredRetention is how long delivered webhook records are kept (the DLQ is never purged automatically).
+	DeliveredRetention time.Duration
+	Policy             reconciliation.Policy
 }
 
 // DefaultConfig returns production defaults.
@@ -39,7 +41,7 @@ func DefaultConfig() Config {
 	return Config{
 		Interval: 10 * time.Second, InstanceInterval: 30 * time.Second, BatchSize: 100,
 		CallTimeout: 15 * time.Second, NodeOfflineAfter: time.Minute,
-		StuckQueuedAfter: 2 * time.Minute, OutboxInterval: time.Second, OrphanGrace: time.Hour, Policy: reconciliation.DefaultPolicy(),
+		StuckQueuedAfter: 2 * time.Minute, OutboxInterval: time.Second, OrphanGrace: time.Hour, DeliveredRetention: 7 * 24 * time.Hour, Policy: reconciliation.DefaultPolicy(),
 	}
 }
 
@@ -90,6 +92,10 @@ func (r *Reconciler) runOutbox(ctx context.Context) {
 	for {
 		if _, err := r.App.Outbox.DispatchPending(ctx, r.Cfg.BatchSize); err != nil {
 			r.Log.WarnContext(ctx, "outbox pass failed", "error", err)
+		}
+		// tenant-facing events written together with message status changes
+		if _, err := r.App.EventOutbox.PublishPending(ctx, r.Cfg.BatchSize); err != nil {
+			r.Log.WarnContext(ctx, "event outbox pass failed", "error", err)
 		}
 		select {
 		case <-ctx.Done():

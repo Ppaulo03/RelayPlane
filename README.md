@@ -40,6 +40,14 @@ curl -s -X POST localhost:8080/api/v1/messages/send -H "Authorization: Bearer $K
      -d '{"instance_id":"<id>","to":"5562999999999","type":"text","payload":{"text":"Olá!"}}'
 ```
 
+Receber eventos no seu sistema (webhooks assinados, at-least-once, com retry e DLQ; ver [OPERATIONS](docs/OPERATIONS.md#eventos-para-o-tenant-webhooks-de-saída)):
+
+```bash
+curl -s -X POST localhost:8080/api/v1/subscriptions -H "Authorization: Bearer $KEY" \
+     -d '{"url":"https://agent.example.com/hooks/relayplane","event_types":["message.received","message.outbound_status"]}'
+# o segredo "whsec_..." aparece só nesta resposta; cada entrega traz X-RelayPlane-Signature (HMAC-SHA256) e X-RelayPlane-Event-Id
+```
+
 SDK Python ([`sdk/python`](sdk/python)):
 
 ```python
@@ -49,6 +57,9 @@ async with RelayPlaneClient("http://localhost:8080", api_key) as rp:
     sent = await rp.messages.send_text(inst.id, "5562999999999", "Olá!", idempotency_key="order-1")
     media = await rp.media.upload("contrato.pdf")                       # Claim-Check: só a referência trafega
     await rp.messages.send_media(inst.id, "5562999999999", media.id, caption="Contrato")
+
+    sub = await rp.subscriptions.create("https://agent.example.com/hooks/relayplane", event_types=["message.received"])
+    # no seu endpoint: event = relayplane.verify_request(sub.secret, request.headers, raw_body)  # lança WebhookSignatureError se inválido
 ```
 
 ## Desenvolvimento

@@ -59,6 +59,7 @@ func (s *Store) Repositories() ports.Repositories {
 		Tenants: tenantRepo{s}, Instances: instanceRepo{s}, Nodes: nodeRepo{s},
 		Operations: opRepo{s}, Messages: msgRepo{s}, Blobs: blobRepo{s},
 		Idempotency: idemRepo{s}, Dedup: dedupRepo{s},
+		Events: eventsRepo{s}, Subscriptions: subsRepo{s}, Deliveries: deliveriesRepo{s},
 	}
 }
 
@@ -125,7 +126,7 @@ func (s *Store) Migrate(ctx context.Context) error {
 // Reset truncates every table (tests only).
 func (s *Store) Reset(ctx context.Context) error {
 	_, err := s.pool.Exec(ctx, `TRUNCATE outbound_messages, operations, instance_assignments, instances,
-		provider_nodes, idempotency_keys, event_deduplication, blob_metadata, tenants CASCADE`)
+		provider_nodes, idempotency_keys, event_deduplication, blob_metadata, event_outbox, webhook_deliveries, subscriptions, tenants CASCADE`)
 	return err
 }
 

@@ -53,6 +53,26 @@ groups:
         for: 5m
         labels: {severity: warn}
         annotations: {summary: "Group {{ $labels.group }} has an event unacknowledged for over 5 minutes"}
+      - alert: RelayPlaneWebhookDeadLetters
+        expr: relayplane_webhook_dead > 0
+        for: 10m
+        labels: {severity: warn}
+        annotations: {summary: "{{ $value }} webhook deliveries are in the dead-letter queue: a tenant endpoint is failing (GET /subscriptions/{id}/deliveries?status=DEAD)"}
+      - alert: RelayPlaneWebhookBacklog
+        expr: relayplane_webhook_oldest_pending_seconds > 900
+        for: 5m
+        labels: {severity: warn}
+        annotations: {summary: "Webhook deliveries have been waiting for over 15 minutes (endpoint down, circuit open, or workers behind)"}
+      - alert: RelayPlaneWebhookCircuitOpen
+        expr: relayplane_webhook_circuit_open > 0
+        for: 10m
+        labels: {severity: info}
+        annotations: {summary: "A worker has an open circuit towards a tenant webhook endpoint for over 10 minutes"}
+      - alert: RelayPlaneEventOutboxStalled
+        expr: rate(relayplane_event_outbox_published_total[10m]) == 0 and on() increase(relayplane_outbound_messages_total{status="ACCEPTED"}[10m]) > 0
+        for: 10m
+        labels: {severity: page}
+        annotations: {summary: "Outbound messages are being accepted but no tenant-facing events are published: the reconciler's event outbox is stuck"}
       - alert: RelayPlaneNoWorkers
         expr: absent(up{job="relayplane-worker"} == 1)
         for: 2m
