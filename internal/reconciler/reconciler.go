@@ -362,7 +362,8 @@ func (r *Reconciler) record(ctx context.Context, inst *instance.Instance, to ins
 	if changed {
 		ev := events.Event{EventID: ids.New("evt"), EventType: events.InstanceStatusChanged, Provider: inst.Provider,
 			TenantID: inst.TenantID, InstanceID: inst.ID, Timestamp: r.Now().UTC(),
-			Payload: events.InstanceStatusChangedPayload{State: string(to), Reason: "reconciled: " + reason}}
+			SourceAssignment: &events.SourceAssignment{NodeID: inst.NodeID, Epoch: inst.AssignmentEpoch},
+			Payload:          events.InstanceStatusChangedPayload{State: string(to), Reason: "reconciled: " + reason}}
 		if perr := d.Bus.Publish(ctx, ev); perr != nil {
 			r.Log.WarnContext(ctx, "could not publish status change", "error", perr)
 		}

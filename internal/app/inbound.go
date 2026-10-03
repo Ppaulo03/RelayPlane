@@ -93,7 +93,9 @@ func (s *InboundService) Handle(ctx context.Context, providerKey string, req por
 			ts = s.d.now()
 		}
 		ev := events.Event{EventID: events.EventIDFor(key), EventType: in.Type, Provider: inst.Provider,
-			TenantID: inst.TenantID, InstanceID: inst.ID, Timestamp: ts.UTC(), Payload: in.Payload}
+			TenantID: inst.TenantID, InstanceID: inst.ID, Timestamp: ts.UTC(), Payload: in.Payload,
+			// the claim was validated against the catalog just above: remember WHICH owner/epoch spoke
+			SourceAssignment: &events.SourceAssignment{NodeID: inst.NodeID, Epoch: inst.AssignmentEpoch}}
 		if err := s.d.Bus.Publish(ictx, ev); err != nil {
 			_ = s.d.Repos.Dedup.Abort(ictx, key) // let the provider's retry publish it
 			return res, fmt.Errorf("publish event: %w", err)

@@ -755,3 +755,47 @@ func TestMigration_AdoptsExistingTargetSessionOnlyAfterVerifying(t *testing.T) {
 		t.Fatalf("adoption: %+v", cur)
 	}
 }
+
+// 15.3 An event accepted while epoch 1 owned the instance is consumed after the migration to
+// epoch 2. It must not touch the new assignment.
+func TestProjector_StaleEventOfPreviousOwnerNeverAffectsTheNewAssignment(t *testing.T) {
+	e := NewEnv(t)
+	inst := e.CreateInstance(e.Tenant, "a", true)
+	// the old owner reports DISCONNECTED; the event is accepted (valid claim) but nobody consumes it yet.
+	// Its timestamp is in the future on purpose: only the epoch guard may save us, not the timestamp check.
+	if _, err := e.App.Inbound.Handle(bg, ProviderKey, inboundBody(inst.NodeID, inst.AssignmentEpoch, memory.FakeWebhookEv{
+		InstanceID: inst.ID, Type: events.InstanceStatusChanged, ProviderMessageID: "late-1", State: "DISCONNECTED",
+		Timestamp: time.Now().Add(time.Hour), Payload: json.RawMessage(`{"state":"DISCONNECTED"}`)})); err != nil {
+		t.Fatal(err)
+	}
+	var carried bool
+	for _, ev := range e.Bus.Published() {
+		if ev.EventType == events.InstanceStatusChanged && ev.SourceAssignment != nil &&
+			ev.SourceAssignment.NodeID == inst.NodeID && ev.SourceAssignment.Epoch == 1 {
+			carried = true
+		}
+	}
+	if !carried {
+		t.Fatal("the canonical event must carry the assignment that produced it")
+	}
+
+	res, _, err := e.App.Migrations.Start(bg, e.Tenant, inst.ID, app.MigrateInput{}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	finishMigration(t, e, inst.ID, res.OperationID)
+	cur, _ := e.Repos.Instances.Get(bg, inst.ID)
+	if cur.AssignmentEpoch != 2 || cur.ObservedState != instance.Connected {
+		t.Fatalf("setup: %+v", cur)
+	}
+
+	e.StartProjector() // consumes the old event only now
+	time.Sleep(300 * time.Millisecond)
+	after, _ := e.Repos.Instances.Get(bg, inst.ID)
+	if after.ObservedState != instance.Connected {
+		t.Fatalf("a stale event of the previous owner changed the new assignment's state to %s", after.ObservedState)
+	}
+	if testutilCounter(e, "relayplane_assignment_epoch_mismatch_total") < 1 {
+		t.Error("the dropped stale event must be counted")
+	}
+}

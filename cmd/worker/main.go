@@ -50,6 +50,7 @@ func run() error {
 	out.MediaPolicy = d.Cfg.MediaPolicy
 	out.UnknownBarrierTimeout = cfg.UnknownBarrierTimeout
 	proj := worker.NewProjector(d.Repos, rt.Log)
+	proj.Metrics = rt.Metrics
 
 	rt.Log.Info("worker started", "version", version, "partitions", cfg.CommandPartitions)
 	var wg sync.WaitGroup

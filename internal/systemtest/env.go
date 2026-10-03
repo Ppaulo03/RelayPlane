@@ -155,6 +155,7 @@ func NewEnv(t *testing.T) *Env {
 	e.Worker.Retry = messaging.RetrySchedule{0, 5 * time.Millisecond, 10 * time.Millisecond, 15 * time.Millisecond}
 	e.Worker.BarrierRecheck = 10 * time.Millisecond
 	e.Projector = worker.NewProjector(e.Repos, log)
+	e.Projector.Metrics = e.Metrics
 
 	rc := reconciler.DefaultConfig()
 	rc.InstanceInterval = 0

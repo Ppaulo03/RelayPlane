@@ -74,6 +74,7 @@ func waitMigration(t *testing.T, e *Env, opID string, want ...instance.Operation
 // reconciler deliberately stays out of the way, so this is the only way forward.
 func finishMigration(t *testing.T, e *Env, instanceID, opID string) {
 	t.Helper()
+	waitMigration(t, e, opID, instance.OpSucceeded, instance.OpRunning) // reach VERIFY_CONNECTION: the new owner exists
 	cur, _ := e.Repos.Instances.Get(bg, instanceID)
 	e.Provider.SetStateOn(cur.NodeID, instanceID, instance.Connected)
 	waitMigration(t, e, opID, instance.OpSucceeded)

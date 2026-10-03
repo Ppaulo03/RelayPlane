@@ -22,6 +22,16 @@ const (
 	OwnershipViolation    Type = "ownership.violation"
 )
 
+// SourceAssignment is the assignment under which the provider produced an event.
+// It is captured when the event is accepted (after ownership validation) so that a
+// late consumer can tell "this happened to the previous owner" from "this happened
+// to the current one": the projector applies the event under THIS epoch, never
+// under whatever epoch the catalog has by the time the event is consumed.
+type SourceAssignment struct {
+	NodeID string `json:"node_id"`
+	Epoch  int64  `json:"epoch"`
+}
+
 // Event is the canonical envelope.
 type Event struct {
 	EventID    string    `json:"event_id"`
@@ -30,7 +40,10 @@ type Event struct {
 	TenantID   string    `json:"tenant_id"`
 	InstanceID string    `json:"instance_id"`
 	Timestamp  time.Time `json:"timestamp"`
-	Payload    any       `json:"payload"`
+	// SourceAssignment identifies the owner that produced the event (nil only for events emitted
+	// before this field existed; consumers then fall back to the current assignment).
+	SourceAssignment *SourceAssignment `json:"source_assignment,omitempty"`
+	Payload          any               `json:"payload"`
 }
 
 // MessageReceivedPayload is the payload of message.received.

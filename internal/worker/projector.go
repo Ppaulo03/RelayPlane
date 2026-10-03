@@ -24,6 +24,8 @@ type Projector struct {
 	Repos ports.Repositories
 	Log   *slog.Logger
 	Now   func() time.Time
+	// Metrics is optional (epoch mismatches are counted when set).
+	Metrics *observability.Metrics
 	// ReceiptGrace is how long an unknown provider message id is retried: the
 	// receipt may overtake the worker recording ACCEPTED.
 	ReceiptGrace time.Duration
@@ -117,11 +119,24 @@ func (p *Projector) instanceStatus(ctx context.Context, ev events.Event) error {
 	if inst.ObservedState == instance.Migrating || inst.ObservedState == instance.Deleting {
 		return nil // lifecycle owned by a workflow
 	}
-	_, err = p.Repos.Instances.SetObserved(ctx, inst.ID, inst.AssignmentEpoch, st, ev.Timestamp)
+	// Apply under the epoch that PRODUCED the event, not the one the catalog has now:
+	// a late event of the previous owner must not touch the new assignment.
+	epoch := inst.AssignmentEpoch
+	if ev.SourceAssignment != nil {
+		epoch = ev.SourceAssignment.Epoch
+	}
+	_, err = p.Repos.Instances.SetObserved(ctx, inst.ID, epoch, st, ev.Timestamp)
 	switch {
 	case err == nil:
 		return nil
-	case errors.Is(err, errs.ErrInvalidTransition), errors.Is(err, errs.ErrStaleAssignment):
+	case errors.Is(err, errs.ErrStaleAssignment):
+		if p.Metrics != nil {
+			p.Metrics.EpochMismatchTotal.Inc()
+		}
+		p.Log.WarnContext(ctx, "STALE_ASSIGNMENT: dropping a status event of a previous owner", "event_epoch", epoch,
+			"current_epoch", inst.AssignmentEpoch, "state", st)
+		return nil
+	case errors.Is(err, errs.ErrInvalidTransition):
 		p.Log.DebugContext(ctx, "status event not applicable", "state", st, "error", err)
 		return nil
 	}
