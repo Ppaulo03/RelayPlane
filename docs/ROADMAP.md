@@ -46,7 +46,8 @@ Legenda: ✅ feito e testado · ⚠️ feito com limitação registrada · ⏭�
 | Jitter de rede e resets de conexão (proxy TCP entre a aplicação e PostgreSQL/Redis) | ✅ `TestJitter_*` |
 | Baseline de carga (`make test-load`) | ✅ ver OPERATIONS; sem provider real a latência do WhatsApp não está incluída |
 | Queda do object store (upload falha limpo; mensagem de mídia espera e sai uma vez) | ✅ `TestChaos_ObjectStoreOutage` |
-| Carga multi-processo e carga com provider real | ⏭️ próximo passo |
+| Carga multi-processo (gateway + workers + reconciler em containers, kill -9 de workers) com verificação do lado do provider | ✅ `make test-load-stack` |
+| Carga com provider real (WhatsApp) | ⏭️ depende de números reais |
 
 ## Limitações e riscos conhecidos (decisões conscientes)
 

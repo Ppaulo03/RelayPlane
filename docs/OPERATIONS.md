@@ -28,6 +28,28 @@ e os únicos estados finais são `ACCEPTED` ou `UNKNOWN` (resolvível via `POST 
   provider falso sem latência): aceitação ~550 msg/s (p50 34 ms, p95 49 ms, p99 65 ms); entrega completa ~190 msg/s, com ordem por instância e sem duplicata.
   Use como referência de regressão, **não** como capacidade de produção: o provider real (Evolution/WhatsApp) e o hardware mudam o resultado.
 
+### Carga multi-processo (`make test-load-stack`)
+
+Sobe gateway, N workers e reconciler como **containers separados** (compose + `deploy/docker/compose.load.yml`) sobre PostgreSQL/Redis/object store reais; os nós do
+provider viram `cmd/loadstub` (pareamento instantâneo, latência de envio configurável, contadores de entrega). O `cmd/loadgen` cria tenant e instâncias pela API
+pública, envia as mensagens e confere do lado do provider, entre processos: **zero duplicatas, zero fora de ordem, nenhuma mensagem perdida**.
+`WORKERS`, `INSTANCES`, `MESSAGES`, `STUB_SEND_LATENCY` ajustam o cenário; `CHAOS_KILL=1` dá SIGKILL num worker aleatório a cada 4 s (e o reinicia): envios em voo
+viram `UNKNOWN` (nunca reenviados; o teste aceita `UNKNOWN` e confere que o provider recebeu entre `ACCEPTED` e `ACCEPTED+UNKNOWN`).
+
+Medido (Docker local no Windows, 60 instâncias, 3000 mensagens, provider com 50 ms por envio):
+
+| `COMMAND_PARTITIONS` | entrega ao provider |
+|---|---|
+| 8 | ~83 msg/s |
+| 32 (padrão) | ~165–200 msg/s, **igual com 1, 3 ou 12 workers** |
+| 128 | ~325 msg/s |
+
+**O teto é o número de partições, não de workers**: cada partição processa uma mensagem por vez, então a vazão ≈ `min(partições, instâncias ativas) / tempo_por_mensagem`.
+Adicionar workers só ajuda até haver uma partição por worker. Para mais vazão, aumente `COMMAND_PARTITIONS` (e tenha instâncias suficientes: duas mensagens da mesma
+instância nunca são processadas em paralelo). A partição de uma instância é `fnv32a(instance_id) % N`: **mude `N` apenas com a fila vazia** (`relayplane_outbound_queue_depth` = 0);
+reduzir `N` deixa streams antigos sem consumidor.
+Com 6 kills em ~1 min (6000 mensagens): 5988 `ACCEPTED`, 12 `UNKNOWN`, 5999 envios no provider, 0 duplicatas, 0 fora de ordem.
+
 ## Object store (S3-compatível)
 
 O core só conhece a porta `BlobStore`; o adapter `adapters/blob/s3` fala o protocolo S3 padrão, então o backend é uma decisão de implantação

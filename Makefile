@@ -1,9 +1,13 @@
 GO      ?= go
 PYTHON  ?= python
+WORKERS ?= 3
+INSTANCES ?= 20
+MESSAGES ?= 2000
+CHAOS_KILL ?= 0
 GODIGEST = golang:1.26.5@sha256:705e964a93a2fd2e75c7d59bb7d781b57e30f12293ffde5175c69229e18fb678
 INFRA    = deploy/docker/compose.infra.yml
 
-.PHONY: test-load test-chaos test-integration-s3 fmt fmt-check vet build test test-integration test-race sdk-test infra-up infra-down up down evolution-image
+.PHONY: test-load-stack test-load test-chaos test-integration-s3 fmt fmt-check vet build test test-integration test-race sdk-test infra-up infra-down up down evolution-image
 
 # fmt rewrites files; fmt-check only reports (tests must never modify the working tree)
 fmt:
@@ -44,6 +48,11 @@ test-integration-s3: infra-up
 # fault injection on real infrastructure (restart/pause redis and postgres, kill workers) while traffic flows
 test-chaos: infra-up
 	RELAYPLANE_SYSTEMTEST_BACKEND=real $(GO) test -tags "integration chaos" -count=1 -v -run "Chaos|Jitter" -timeout 10m ./internal/systemtest
+
+# multi-process load: real gateway + N workers + reconciler containers, provider nodes replaced by cmd/loadstub.
+# e.g. make test-load-stack WORKERS=6 INSTANCES=60 MESSAGES=6000 CHAOS_KILL=1   (see deploy/docker/load.sh)
+test-load-stack:
+	WORKERS=$(WORKERS) INSTANCES=$(INSTANCES) MESSAGES=$(MESSAGES) CHAOS_KILL=$(CHAOS_KILL) sh deploy/docker/load.sh
 
 # the race detector needs cgo; run it in the pinned golang image
 test-race:

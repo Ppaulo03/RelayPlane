@@ -1,0 +1,25 @@
+# Overlay for multi-process load tests (see deploy/docker/load.sh): the real gateway, N workers and the reconciler
+# run as separate containers against the real PostgreSQL / Redis / object store, but the provider nodes are replaced
+# by cmd/loadstub (instant pairing, configurable send latency, delivery counters). NEVER used in production.
+services:
+  evolution-node-01: &stub
+    build: !override {context: ., args: {CMD: loadstub}}
+    image: relayplane/loadstub:dev
+    depends_on: !reset {}
+    healthcheck: {disable: true}
+    environment: !override
+      AUTHENTICATION_API_KEY: ${EVOLUTION_NODE_01_API_KEY:?set EVOLUTION_NODE_01_API_KEY}
+      SEND_LATENCY: ${STUB_SEND_LATENCY:-50ms}
+    ports: ["127.0.0.1:18081:8080"]
+  evolution-node-02:
+    <<: *stub
+    environment: !override
+      AUTHENTICATION_API_KEY: ${EVOLUTION_NODE_02_API_KEY:?set EVOLUTION_NODE_02_API_KEY}
+      SEND_LATENCY: ${STUB_SEND_LATENCY:-50ms}
+    ports: ["127.0.0.1:18082:8080"]
+  gateway:
+    depends_on: !override
+      postgres: {condition: service_healthy}
+      redis: {condition: service_healthy}
+      evolution-node-01: {condition: service_started}
+      evolution-node-02: {condition: service_started}
