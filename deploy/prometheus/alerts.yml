@@ -1,0 +1,42 @@
+groups:
+  - name: relayplane
+    rules:
+      - alert: RelayPlaneOwnershipViolation
+        expr: increase(relayplane_ownership_violation_total[5m]) > 0
+        labels: {severity: page}
+        annotations: {summary: "A webhook claimed a node that does not own the instance (possible split-brain)"}
+      - alert: RelayPlaneEpochMismatch
+        expr: increase(relayplane_assignment_epoch_mismatch_total[10m]) > 5
+        labels: {severity: warn}
+        annotations: {summary: "Repeated assignment epoch mismatches (stale owners/commands)"}
+      - alert: RelayPlaneMigrationBlocked
+        expr: increase(relayplane_migration_blocked_total[15m]) > 0
+        labels: {severity: page}
+        annotations: {summary: "A migration is blocked: the old owner could not be fenced"}
+      - alert: RelayPlanePersistentDrift
+        expr: increase(relayplane_reconciliation_drift_total[30m]) > 20
+        labels: {severity: warn}
+        annotations: {summary: "Desired and observed state keep diverging"}
+      - alert: RelayPlaneReconciliationFailures
+        expr: increase(relayplane_reconciliation_failure_total[10m]) > 5
+        labels: {severity: warn}
+        annotations: {summary: "Reconciliation passes are failing"}
+      - alert: RelayPlaneNodeUnhealthy
+        expr: relayplane_provider_node_health == 0
+        for: 2m
+        labels: {severity: page}
+        annotations: {summary: "Provider node {{ $labels.node }} is not READY; its instances are unavailable (no automatic failover)"}
+      - alert: RelayPlaneQueueBacklog
+        expr: relayplane_outbound_queue_depth > 1000
+        for: 5m
+        labels: {severity: warn}
+        annotations: {summary: "Outbound command backlog is growing"}
+      - alert: RelayPlaneDLQGrowth
+        expr: increase(relayplane_outbound_dlq_total[15m]) > 0
+        labels: {severity: warn}
+        annotations: {summary: "Outbound commands are being dead-lettered"}
+      - alert: RelayPlaneNoWorkers
+        expr: absent(up{job="relayplane-worker"} == 1)
+        for: 2m
+        labels: {severity: page}
+        annotations: {summary: "No worker is consuming outbound commands"}

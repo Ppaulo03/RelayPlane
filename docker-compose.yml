@@ -1,0 +1,161 @@
+# RelayPlane local/dev stack. Every image is pinned by version AND digest
+# (see docs/VERSIONS.md). Secrets come from .env (copy .env.example).
+#
+# Provider nodes are SINGLETONS: each owns its sessions. Scale by adding
+# evolution-node-03, -04, ... (new identity, new database, new PROVIDER_NODES
+# entry), never by replicating a node.
+name: relayplane
+
+x-relayplane-env: &relayplane-env
+  APP_ENV: ${APP_ENV:-development}
+  DATABASE_URL: postgres://relayplane:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}@postgres:5432/relayplane?sslmode=disable
+  REDIS_URL: redis://redis:6379/0
+  COMMAND_PARTITIONS: ${COMMAND_PARTITIONS:-32}
+  BLOB_STORE_ENDPOINT: minio:9000
+  BLOB_STORE_BUCKET: ${BLOB_STORE_BUCKET:-relayplane-media}
+  BLOB_STORE_ACCESS_KEY: ${MINIO_ROOT_USER:?set MINIO_ROOT_USER}
+  BLOB_STORE_SECRET_KEY: ${MINIO_ROOT_PASSWORD:?set MINIO_ROOT_PASSWORD}
+  MEDIA_INLINE_MAX_BYTES: ${MEDIA_INLINE_MAX_BYTES:-262144}
+  WEBHOOK_SECRET: ${WEBHOOK_SECRET:?set WEBHOOK_SECRET}
+  WEBHOOK_BASE_URL: http://gateway:8080
+  DEFAULT_PROVIDER: evolution-v2
+  LOG_LEVEL: ${LOG_LEVEL:-info}
+  RATE_MIN_INTERVAL: ${RATE_MIN_INTERVAL:-1s}
+  RATE_MAX_PER_MINUTE: ${RATE_MAX_PER_MINUTE:-30}
+  PROVIDER_NODES: >-
+    [{"id":"node-01","provider":"evolution-v2","endpoint":"http://evolution-node-01:8080","api_key":"${EVOLUTION_NODE_01_API_KEY:?set EVOLUTION_NODE_01_API_KEY}","capacity":${NODE_CAPACITY:-50}},
+     {"id":"node-02","provider":"evolution-v2","endpoint":"http://evolution-node-02:8080","api_key":"${EVOLUTION_NODE_02_API_KEY:?set EVOLUTION_NODE_02_API_KEY}","capacity":${NODE_CAPACITY:-50}}]
+
+x-evolution-node: &evolution-node
+  image: evoapicloud/evolution-api:v2.3.7@sha256:1bd8afc4a6cf48822e6cf02469aeae7bd35a12a6b616eacd1291926307f4d339
+  restart: unless-stopped
+  depends_on:
+    postgres: {condition: service_healthy}
+  healthcheck:
+    test: ["CMD-SHELL", "node -e \"fetch('http://127.0.0.1:8080/').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))\""]
+    interval: 10s
+    timeout: 5s
+    retries: 12
+    start_period: 60s
+
+x-evolution-env: &evo-env
+  DATABASE_PROVIDER: postgresql
+  DATABASE_ENABLED: "true"
+  DATABASE_SAVE_DATA_INSTANCE: "true"
+  DATABASE_SAVE_DATA_NEW_MESSAGE: "false"
+  DATABASE_SAVE_MESSAGE_UPDATE: "false"
+  DATABASE_SAVE_DATA_CONTACTS: "false"
+  DATABASE_SAVE_DATA_CHATS: "false"
+  DATABASE_SAVE_DATA_LABELS: "false"
+  DATABASE_SAVE_DATA_HISTORIC: "false"
+  CACHE_REDIS_ENABLED: "false"
+  CACHE_LOCAL_ENABLED: "true"
+  TELEMETRY_ENABLED: "false"
+
+services:
+  postgres:
+    image: postgres:17.5-alpine@sha256:6567bca8d7bc8c82c5922425a0baee57be8402df92bae5eacad5f01ae9544daa
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: relayplane
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+      POSTGRES_DB: relayplane
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./deploy/docker/postgres-init.sql:/docker-entrypoint-initdb.d/10-evolution.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U relayplane -d relayplane"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  redis:
+    image: redis:7.4.4-alpine@sha256:ee9e8748ace004102a267f7b8265dab2c618317df22507b89d16a8add7154273
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes: [redisdata:/data]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  minio:
+    image: quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e
+    restart: unless-stopped
+    command: ["server", "/data", "--console-address", ":9001"]
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:?set MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?set MINIO_ROOT_PASSWORD}
+    volumes: [miniodata:/data]
+    ports:
+      - "127.0.0.1:${MINIO_PORT:-9000}:9000"
+      - "127.0.0.1:${MINIO_CONSOLE_PORT:-9001}:9001"
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  evolution-node-01:
+    <<: *evolution-node
+    hostname: evolution-node-01
+    environment:
+      <<: *evo-env
+      SERVER_URL: http://evolution-node-01:8080
+      DATABASE_CONNECTION_URI: postgresql://relayplane:${POSTGRES_PASSWORD}@postgres:5432/evolution_node_01?schema=public
+      DATABASE_CONNECTION_CLIENT_NAME: evolution_node_01
+      AUTHENTICATION_API_KEY: ${EVOLUTION_NODE_01_API_KEY:?set EVOLUTION_NODE_01_API_KEY}
+
+  evolution-node-02:
+    <<: *evolution-node
+    hostname: evolution-node-02
+    environment:
+      <<: *evo-env
+      SERVER_URL: http://evolution-node-02:8080
+      DATABASE_CONNECTION_URI: postgresql://relayplane:${POSTGRES_PASSWORD}@postgres:5432/evolution_node_02?schema=public
+      DATABASE_CONNECTION_CLIENT_NAME: evolution_node_02
+      AUTHENTICATION_API_KEY: ${EVOLUTION_NODE_02_API_KEY:?set EVOLUTION_NODE_02_API_KEY}
+
+  gateway:
+    build: {context: ., args: {CMD: gateway, VERSION: "${RELAYPLANE_VERSION:-dev}"}}
+    image: relayplane/gateway:${RELAYPLANE_VERSION:-dev}
+    restart: unless-stopped
+    depends_on:
+      postgres: {condition: service_healthy}
+      redis: {condition: service_healthy}
+      minio: {condition: service_healthy}
+    environment:
+      <<: *relayplane-env
+      AUTO_MIGRATE: "true"
+      HTTP_PORT: "8080"
+      ADMIN_API_KEY: ${ADMIN_API_KEY:?set ADMIN_API_KEY}
+      BLOB_STORE_PUBLIC_ENDPOINT: ${BLOB_PUBLIC_ENDPOINT:-localhost:9000}
+    ports: ["127.0.0.1:${GATEWAY_PORT:-8080}:8080"]
+
+  worker:
+    build: {context: ., args: {CMD: worker, VERSION: "${RELAYPLANE_VERSION:-dev}"}}
+    image: relayplane/worker:${RELAYPLANE_VERSION:-dev}
+    restart: unless-stopped
+    depends_on:
+      gateway: {condition: service_started}
+    environment:
+      <<: *relayplane-env
+      OPS_PORT: "9090"
+    # horizontally scalable: docker compose up -d --scale worker=3
+
+  reconciler:
+    build: {context: ., args: {CMD: reconciler, VERSION: "${RELAYPLANE_VERSION:-dev}"}}
+    image: relayplane/reconciler:${RELAYPLANE_VERSION:-dev}
+    restart: unless-stopped
+    depends_on:
+      gateway: {condition: service_started}
+    environment:
+      <<: *relayplane-env
+      OPS_PORT: "9090"
+      RECONCILER_INTERVAL: ${RECONCILER_INTERVAL:-10s}
+
+volumes:
+  pgdata:
+  redisdata:
+  miniodata:

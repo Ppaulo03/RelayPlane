@@ -1,0 +1,132 @@
+# Base Kubernetes manifests (no Helm). Secrets and PostgreSQL/Redis/S3 are expected to exist
+# (managed services or separate charts). Images are pinned by digest: replace the relayplane/* images
+# with your registry path and the digest produced by your build.
+#
+# Provider nodes are stateful singletons -> StatefulSet (stable identity: evolution-v2-0, -1, ...).
+# Gateway / worker / reconciler are stateless -> Deployments.
+apiVersion: v1
+kind: Namespace
+metadata: {name: relayplane}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata: {name: relayplane-config, namespace: relayplane}
+data:
+  APP_ENV: production
+  REDIS_URL: redis://redis.relayplane.svc:6379/0
+  BLOB_STORE_ENDPOINT: minio.relayplane.svc:9000
+  BLOB_STORE_BUCKET: relayplane-media
+  COMMAND_PARTITIONS: "32"
+  MEDIA_INLINE_MAX_BYTES: "262144"
+  DEFAULT_PROVIDER: evolution-v2
+  WEBHOOK_BASE_URL: http://gateway.relayplane.svc:8080
+  # id/endpoint/capacity per node; api_key values come from the Secret (PROVIDER_NODES is assembled by your secret tooling)
+---
+# Expected Secret `relayplane-secrets` keys: DATABASE_URL, BLOB_STORE_ACCESS_KEY, BLOB_STORE_SECRET_KEY,
+# WEBHOOK_SECRET, ADMIN_API_KEY, PROVIDER_NODES, EVOLUTION_API_KEY
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: gateway, namespace: relayplane}
+spec:
+  replicas: 2
+  selector: {matchLabels: {app: gateway}}
+  template:
+    metadata: {labels: {app: gateway}}
+    spec:
+      securityContext: {runAsNonRoot: true, seccompProfile: {type: RuntimeDefault}}
+      containers:
+        - name: gateway
+          image: registry.example.com/relayplane/gateway:0.1.0@sha256:REPLACE_WITH_BUILD_DIGEST
+          ports: [{containerPort: 8080}]
+          env: [{name: AUTO_MIGRATE, value: "true"}, {name: HTTP_PORT, value: "8080"}]
+          envFrom: [{configMapRef: {name: relayplane-config}}, {secretRef: {name: relayplane-secrets}}]
+          readinessProbe: {httpGet: {path: /health/ready, port: 8080}, periodSeconds: 5}
+          livenessProbe: {httpGet: {path: /health/live, port: 8080}, periodSeconds: 10}
+          resources: {requests: {cpu: 100m, memory: 128Mi}, limits: {memory: 512Mi}}
+          securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: gateway, namespace: relayplane}
+spec:
+  selector: {app: gateway}
+  ports: [{port: 8080, targetPort: 8080}]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: worker, namespace: relayplane}
+spec:
+  replicas: 3
+  selector: {matchLabels: {app: worker}}
+  template:
+    metadata: {labels: {app: worker}, annotations: {prometheus.io/scrape: "true", prometheus.io/port: "9090"}}
+    spec:
+      securityContext: {runAsNonRoot: true, seccompProfile: {type: RuntimeDefault}}
+      terminationGracePeriodSeconds: 30
+      containers:
+        - name: worker
+          image: registry.example.com/relayplane/worker:0.1.0@sha256:REPLACE_WITH_BUILD_DIGEST
+          env: [{name: OPS_PORT, value: "9090"}]
+          envFrom: [{configMapRef: {name: relayplane-config}}, {secretRef: {name: relayplane-secrets}}]
+          readinessProbe: {httpGet: {path: /health/ready, port: 9090}, periodSeconds: 10}
+          livenessProbe: {httpGet: {path: /health/live, port: 9090}, periodSeconds: 10}
+          resources: {requests: {cpu: 100m, memory: 128Mi}, limits: {memory: 512Mi}}
+          securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: reconciler, namespace: relayplane}
+spec:
+  replicas: 2   # replicas are safe: per-instance leases + compare-and-set in the catalog
+  selector: {matchLabels: {app: reconciler}}
+  template:
+    metadata: {labels: {app: reconciler}, annotations: {prometheus.io/scrape: "true", prometheus.io/port: "9090"}}
+    spec:
+      securityContext: {runAsNonRoot: true, seccompProfile: {type: RuntimeDefault}}
+      containers:
+        - name: reconciler
+          image: registry.example.com/relayplane/reconciler:0.1.0@sha256:REPLACE_WITH_BUILD_DIGEST
+          env: [{name: OPS_PORT, value: "9090"}]
+          envFrom: [{configMapRef: {name: relayplane-config}}, {secretRef: {name: relayplane-secrets}}]
+          readinessProbe: {httpGet: {path: /health/ready, port: 9090}, periodSeconds: 10}
+          resources: {requests: {cpu: 50m, memory: 128Mi}, limits: {memory: 512Mi}}
+          securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
+---
+# Evolution provider nodes: singletons with stable identity. Never scale a node's replicas above 1:
+# add nodes by growing this StatefulSet (new ordinal = new identity) AND adding it to PROVIDER_NODES.
+apiVersion: v1
+kind: Service
+metadata: {name: evolution-v2, namespace: relayplane}
+spec:
+  clusterIP: None
+  selector: {app: evolution-v2}
+  ports: [{port: 8080}]
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata: {name: evolution-v2, namespace: relayplane}
+spec:
+  serviceName: evolution-v2
+  replicas: 2
+  podManagementPolicy: OrderedReady
+  selector: {matchLabels: {app: evolution-v2}}
+  template:
+    metadata: {labels: {app: evolution-v2}}
+    spec:
+      containers:
+        - name: evolution
+          image: evoapicloud/evolution-api:v2.3.7@sha256:1bd8afc4a6cf48822e6cf02469aeae7bd35a12a6b616eacd1291926307f4d339
+          ports: [{containerPort: 8080}]
+          env:
+            - {name: DATABASE_PROVIDER, value: postgresql}
+            - {name: DATABASE_ENABLED, value: "true"}
+            - {name: CACHE_REDIS_ENABLED, value: "false"}
+            - {name: CACHE_LOCAL_ENABLED, value: "true"}
+            - {name: TELEMETRY_ENABLED, value: "false"}
+            - name: HOSTNAME_ORDINAL
+              valueFrom: {fieldRef: {fieldPath: metadata.name}}
+            - {name: AUTHENTICATION_API_KEY, valueFrom: {secretKeyRef: {name: relayplane-secrets, key: EVOLUTION_API_KEY}}}
+            # one database per node: DATABASE_CONNECTION_URI must be derived per pod (e.g. init container / operator)
+            - {name: DATABASE_CONNECTION_URI, valueFrom: {secretKeyRef: {name: relayplane-secrets, key: EVOLUTION_DATABASE_URI}}}
+          readinessProbe: {httpGet: {path: /, port: 8080}, initialDelaySeconds: 30, periodSeconds: 10}
+          resources: {requests: {cpu: 250m, memory: 512Mi}, limits: {memory: 2Gi}}
