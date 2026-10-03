@@ -21,9 +21,13 @@ func newStore(t *testing.T) *s3.Store {
 	t.Helper()
 	ep := os.Getenv("RELAYPLANE_TEST_S3_ENDPOINT")
 	if ep == "" {
-		ep = "127.0.0.1:59010"
+		ep = "127.0.0.1:59011" // RustFS (default backend); see `make test-integration-s3` for all of them
 	}
-	s, err := s3.New(context.Background(), s3.Config{Endpoint: ep, AccessKey: "relayplane", SecretKey: "relayplane-secret",
+	ak, sk := os.Getenv("RELAYPLANE_TEST_S3_ACCESS_KEY"), os.Getenv("RELAYPLANE_TEST_S3_SECRET_KEY")
+	if ak == "" {
+		ak, sk = "relayplane", "relayplane-secret"
+	}
+	s, err := s3.New(context.Background(), s3.Config{Endpoint: ep, AccessKey: ak, SecretKey: sk,
 		Bucket: fmt.Sprintf("rptest-%d", time.Now().UnixNano()), LifecycleDays: 7})
 	if err != nil {
 		t.Skipf("s3 unavailable: %v", err)
@@ -67,6 +71,9 @@ func TestSignedURLsWork(t *testing.T) {
 func TestOversizedBodyIsRejectedByTheRealStore(t *testing.T) {
 	ctx := context.Background()
 	s := newStore(t)
+	if err := s.Put(ctx, "t1/media/ok/a.txt", strings.NewReader("abc"), 3, "text/plain"); err != nil {
+		t.Fatalf("a valid upload must work on this backend before the negative cases mean anything: %v", err)
+	}
 	key := "t1/media/over/a.txt"
 	if err := s.Put(ctx, key, strings.NewReader("0123456789"), 3, "text/plain"); err == nil {
 		t.Fatal("a body longer than the declared size was accepted")

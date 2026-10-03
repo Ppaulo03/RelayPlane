@@ -8,9 +8,24 @@
 | `worker` | N | `docker compose up -d --scale worker=3`. Partições do broker são divididas por lease; adicionar/remover workers rebalanceia sozinho em segundos. |
 | `reconciler` | 1..N | Réplicas são seguras (lease por instância + CAS no catálogo). 2 réplicas para HA. |
 | `evolution-node-XX` | **exatamente 1 por identidade** | Singleton stateful. Escalar = **adicionar** `node-03`, `node-04`… (novo container, novo banco, nova entrada em `PROVIDER_NODES`), nunca replicar. |
-| `postgres`, `redis`, `minio` | conforme provedor | PostgreSQL é a fonte de verdade; Redis guarda comandos/eventos em trânsito. |
+| `postgres`, `redis`, object store | conforme provedor | PostgreSQL é a fonte de verdade; Redis guarda comandos/eventos em trânsito; o object store guarda mídia (qualquer backend S3). |
 
 Portas: gateway `HTTP_PORT` (8080); worker/reconciler expõem `/metrics` e `/health/*` em `OPS_PORT` (9090).
+
+## Object store (S3-compatível)
+
+O core só conhece a porta `BlobStore`; o adapter `adapters/blob/s3` fala o protocolo S3 padrão, então o backend é uma decisão de implantação
+(`BLOB_STORE_ENDPOINT`, `BLOB_STORE_ACCESS_KEY/SECRET_KEY`, `BLOB_STORE_BUCKET`; `COMPOSE_PROFILES` escolhe qual sobe no compose).
+Os três são exercitados pela mesma suíte (contrato do adapter + suíte de sistema inteira) com `make test-integration-s3`.
+
+| Backend | Licença | Observações |
+|---|---|---|
+| **RustFS** `1.0.1` (padrão) | Apache-2.0 | Binário único, S3 completo para o que usamos (put/get/stat/list/delete, URL assinada, lifecycle). Estável (1.0) há pouco tempo: acompanhe os releases e rode `make test-integration-s3` ao atualizar. |
+| **SeaweedFS** `4.47` | Apache-2.0 | Maduro (volume store + filer + gateway S3), escala bem; topologia mais pesada em produção (master, volume servers, filer, S3). **Cada bucket é uma *collection* que pré-aloca volumes**: use um bucket só (como o RelayPlane faz) e ajuste `-master.volumeSizeLimitMB`/`-volume.max` ao disco, senão aparece `We encountered an internal error` (sem volumes livres). |
+| MinIO community (legado) | AGPL-3.0 | Imagens oficiais saíram do Docker Hub e o edition community está em manutenção reduzida; mantido apenas como perfil para quem já roda. |
+
+Trocar de backend em produção = copiar os objetos (`rclone sync`/`mc mirror`) e apontar o endpoint; os `object_key` e os metadados no PostgreSQL não mudam.
+O `Put` do adapter é estrito quanto ao tamanho declarado em qualquer backend (o MinIO truncava corpo maior em silêncio).
 
 ## Configuração
 

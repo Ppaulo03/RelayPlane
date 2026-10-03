@@ -4,7 +4,7 @@ Deltas específicos deste repositório (o `AGENTS.md` global continua valendo).
 
 ## Stack e comandos
 
-* Go 1.26 (módulo `github.com/relayplane/relayplane`), PostgreSQL 17, Redis Streams 7.4, MinIO/S3, Evolution API v2.3.7.
+* Go 1.26 (módulo `github.com/relayplane/relayplane`), PostgreSQL 17, Redis Streams 7.4, object store S3-compatível (RustFS padrão; SeaweedFS e MinIO suportados), Evolution API v2.3.7.
 * `make test` (unit+contrato+sistema em memória) · `make test-integration` (infra real em `deploy/docker/compose.infra.yml`,
   portas 55440/56390/59010) · `make test-race` (Docker) · `make sdk-test`.
 * Stack completa: `cp .env.example .env && docker compose up -d --build`.
@@ -25,7 +25,11 @@ Deltas específicos deste repositório (o `AGENTS.md` global continua valendo).
   O corte de tempo do `UNKNOWN` usa o relógio do banco (skew entre containers e host quebrou a versão com `time.Time`).
 
 * **Race detector no Windows local:** não há gcc ⇒ `go test -race` falha (`requires cgo`). Rodar em container (`make test-race`).
-* **MinIO:** `minio/minio` saiu do Docker Hub; usar `quay.io/minio/minio:<RELEASE…>` (pinar digest).
+* **Object store:** `minio/minio` saiu do Docker Hub (community edition em manutenção reduzida). O adapter S3 é genérico; `make test-integration-s3`
+  roda contrato + suíte de sistema em RustFS, SeaweedFS e MinIO. SeaweedFS: cada bucket é uma *collection* que pré-aloca volumes (30 GB por padrão):
+  o teste cria um bucket por teste, então a infra de teste usa `-master.volumeSizeLimitMB=32 -volume.max=2000`; sem isso → "internal error".
+  `docker compose down` não remove serviços de perfis inativos: use `docker compose --profile "*" down -v` ao trocar de backend.
+  minio-go trunca em silêncio um corpo maior que o tamanho declarado → `Put` do adapter usa `exactReader`.
 * **Shell:** em Git Bash, comandos muito longos com vários heredocs `'EOF'` podem falhar com "unexpected EOF"; criar arquivos
   com a ferramenta Write em vez de heredocs gigantes. `docker run -v` precisa de `MSYS_NO_PATHCONV=1` e `pwd -W`.
 * **Evolution v2.3.7:** `GET /instance/connectionState` não distingue "nunca pareado" de "desconectado" (ambos `connecting`/`close`);

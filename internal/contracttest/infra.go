@@ -162,17 +162,21 @@ func BlobStoreContract(t *testing.T, factory BlobFactory) {
 	ctx := context.Background()
 	b := factory(t)
 	t.Run("DeclaredSizeIsExact", func(t *testing.T) {
-		for name, tc := range map[string]struct {
-			body string
-			size int64
-		}{"longer body": {"0123456789", 3}, "shorter body": {"ab", 5}} {
-			k := "t1/media/size/" + strings.ReplaceAll(name, " ", "-")
-			if err := b.Put(ctx, k, strings.NewReader(tc.body), tc.size, "text/plain"); !errors.Is(err, errs.ErrInvalidArgument) && err == nil {
-				t.Errorf("%s accepted", name)
-			}
-			if _, err := b.Stat(ctx, k); err == nil {
-				t.Errorf("%s: an object from the rejected upload exists", name)
-			}
+		// the negative cases only mean something on a backend that demonstrably accepts a valid upload
+		if err := b.Put(ctx, "t3/media/size/valid", strings.NewReader("abc"), 3, "text/plain"); err != nil {
+			t.Fatalf("a body that matches its declared size must be accepted: %v", err)
+		}
+		if err := b.Put(ctx, "t3/media/size/longer", strings.NewReader("0123456789"), 3, "text/plain"); !errors.Is(err, errs.ErrInvalidArgument) {
+			t.Errorf("a longer body must be refused as an invalid argument, got %v", err)
+		}
+		if _, err := b.Stat(ctx, "t3/media/size/longer"); err == nil {
+			t.Error("the truncated object of a refused upload exists")
+		}
+		if err := b.Put(ctx, "t3/media/size/shorter", strings.NewReader("ab"), 5, "text/plain"); err == nil {
+			t.Error("a shorter body was accepted")
+		}
+		if _, err := b.Stat(ctx, "t3/media/size/shorter"); err == nil {
+			t.Error("the object of a truncated upload exists")
 		}
 	})
 	key := "t1/media/m1/hello.txt"

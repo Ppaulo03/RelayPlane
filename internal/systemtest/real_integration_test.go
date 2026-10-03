@@ -49,7 +49,8 @@ func init() {
 		if err != nil {
 			t.Fatal(err)
 		}
-		blob, err := s3.New(ctx, s3.Config{Endpoint: envOr("RELAYPLANE_TEST_S3_ENDPOINT", "127.0.0.1:59010"), AccessKey: "relayplane", SecretKey: "relayplane-secret",
+		blob, err := s3.New(ctx, s3.Config{Endpoint: envOr("RELAYPLANE_TEST_S3_ENDPOINT", "127.0.0.1:59011"),
+			AccessKey: envOr("RELAYPLANE_TEST_S3_ACCESS_KEY", "relayplane"), SecretKey: envOr("RELAYPLANE_TEST_S3_SECRET_KEY", "relayplane-secret"),
 			Bucket: fmt.Sprintf("rpsys-%d", time.Now().UnixNano())})
 		if err != nil {
 			t.Skipf("s3 unavailable: %v", err)

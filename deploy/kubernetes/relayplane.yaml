@@ -14,7 +14,7 @@ metadata: {name: relayplane-config, namespace: relayplane}
 data:
   APP_ENV: production
   REDIS_URL: redis://redis.relayplane.svc:6379/0
-  BLOB_STORE_ENDPOINT: minio.relayplane.svc:9000
+  BLOB_STORE_ENDPOINT: objectstore.relayplane.svc:9000   # any S3-compatible service (RustFS, SeaweedFS, MinIO, AWS S3, ...)
   BLOB_STORE_BUCKET: relayplane-media
   COMMAND_PARTITIONS: "32"
   MEDIA_INLINE_MAX_BYTES: "262144"

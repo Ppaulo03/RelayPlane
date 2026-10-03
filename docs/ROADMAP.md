@@ -21,10 +21,10 @@ Legenda: ✅ feito e testado · ⚠️ feito com limitação registrada · ⏭�
 | Reconciler (drift, adoção, retomada, probe de nodes, dispatcher do outbox, janitor) | ✅ | |
 | Outbox transacional + `sequence_no` + barreira `UNKNOWN` (INV-07 de ponta a ponta) | ✅ | ver ARCHITECTURE §6 |
 | Serialização de lifecycle (`instance-control`) | ✅ | `TestLifecycle_*` |
-| BlobStore S3/MinIO, Claim-Check, validações, TTL, cleanup de órfãos | ✅ | MinIO real nos testes |
+| BlobStore S3-compatível, Claim-Check, validações, TTL, cleanup de órfãos | ✅ | RustFS (padrão), SeaweedFS e MinIO reais nos testes |
 | Observabilidade: métricas, logs estruturados, tracing OTel | ✅ | |
 | SDK Python (instances, messages, operations, media) | ✅ | 14 testes + smoke contra a stack |
-| Docker Compose (gateway, worker, reconciler, postgres, redis, minio, evolution-node-01/02) | ✅ | executado de ponta a ponta com Evolution v2.3.7 real |
+| Docker Compose (gateway, worker, reconciler, postgres, redis, rustfs|seaweedfs|minio por perfil, evolution-node-01/02) | ✅ | executado de ponta a ponta com Evolution v2.3.7 real |
 | Testes de concorrência/falha da especificação | ✅ | [FAILURE-MODES](FAILURE-MODES.md); `-race` limpo (container) |
 | OpenAPI, runbook, docs de arquitetura/adapters | ✅ | |
 
@@ -40,7 +40,7 @@ Legenda: ✅ feito e testado · ⚠️ feito com limitação registrada · ⏭�
 | `UNKNOWN` estrito por padrão | ✅ (`UNKNOWN_BARRIER_TIMEOUT` positivo = escolha explícita de disponibilidade) |
 | `AWAITING_PAIRING` na migração | ✅ |
 | `LookupInstance` (identidade do provider) | ✅ |
-| Upload: `MaxBytesReader`, `Put` estrito, teste MinIO real | ✅ |
+| Upload: `MaxBytesReader`, `Put` estrito, teste em object stores reais | ✅ |
 | Release da imagem Evolution (scan/push/digest) | ⚠️ alvo `make evolution-image` pronto; push e scan dependem do seu registry/scanner |
 | Chaos/load testing | ⏭️ próximo passo (kill -9 de workers, wipe/partição do Redis, queda do Postgres, jitter de rede) |
 

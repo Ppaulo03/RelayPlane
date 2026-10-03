@@ -1,5 +1,6 @@
-# Throw-away infrastructure for integration tests (non-default ports so it
-# never collides with other local stacks). Images are pinned by digest.
+# Throw-away infrastructure for integration tests (non-default ports so it never collides with
+# other local stacks). Images are pinned by digest. The object-store adapter is exercised against
+# EVERY supported S3-compatible backend (see Makefile: test-integration-s3).
 name: relayplane-infra
 services:
   postgres:
@@ -24,12 +25,34 @@ services:
       interval: 2s
       timeout: 3s
       retries: 30
+  rustfs:
+    image: rustfs/rustfs:1.0.1@sha256:1803faef57627e2d9c2e7d89d655d712ddded5389040054987163043fecb6a3c
+    environment: {RUSTFS_ACCESS_KEY: relayplane, RUSTFS_SECRET_KEY: relayplane-secret}
+    ports: ["127.0.0.1:59011:9000"]
+    tmpfs: ["/data:uid=10001,gid=10001"]
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:9000/health/ready >/dev/null"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+  seaweedfs:
+    image: chrislusf/seaweedfs:4.47@sha256:ce9e796f1fe6f06968f4c04bdaf8f678dad9c8acdfef3d244133d71bfa6bf882
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        printf '{"identities":[{"name":"relayplane","credentials":[{"accessKey":"relayplane","secretKey":"relayplane-secret"}],"actions":["Admin","Read","Write","List","Tagging"]}]}' > /tmp/s3.json
+        exec weed server -s3 -s3.port=9000 -s3.config=/tmp/s3.json -dir=/data -master.volumeSizeLimitMB=32 -volume.max=2000
+    ports: ["127.0.0.1:59012:9000"]
+    tmpfs: [/data]
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z $$(hostname -i) 9000"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
   minio:
     image: quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e
     command: ["server", "/data", "--console-address", ":9001"]
-    environment:
-      MINIO_ROOT_USER: relayplane
-      MINIO_ROOT_PASSWORD: relayplane-secret
+    environment: {MINIO_ROOT_USER: relayplane, MINIO_ROOT_PASSWORD: relayplane-secret}
     ports: ["127.0.0.1:59010:9000"]
     tmpfs: [/data]
     healthcheck:

@@ -98,18 +98,14 @@ func (s *Store) Ping(ctx context.Context) error {
 func (s *Store) Put(ctx context.Context, key string, r io.Reader, size int64, contentType string) error {
 	ctx, span := observability.Start(ctx, "blob.put", attribute.String("blob.system", "s3"))
 	defer span.End()
-	// Hide io.Seeker/ReaderAt: minio-go may rewind a seekable reader, which would make the
-	// "is there more data?" probe below meaningless.
-	src := struct{ io.Reader }{r}
+	// The declared size is a contract: exactReader serves exactly `size` bytes, hides io.Seeker/ReaderAt
+	// (minio-go may rewind a seekable reader) and notices whether the source had MORE data, which
+	// minio-go would otherwise silently truncate (or fail with a transport error, depending on the path).
+	src := &exactReader{r: r, left: size, enforce: size >= 0}
 	_, err := s.c.PutObject(ctx, s.bucket, key, src, size, minio.PutObjectOptions{ContentType: contentType})
-	if err == nil && size >= 0 {
-		// minio-go stops reading after `size` bytes, so a longer body is silently truncated.
-		// The declared size is a contract: refuse and remove what was stored.
-		var extra [1]byte
-		if n, _ := src.Read(extra[:]); n > 0 {
-			_ = s.c.RemoveObject(context.WithoutCancel(ctx), s.bucket, key, minio.RemoveObjectOptions{})
-			err = fmt.Errorf("%w: body is longer than the declared size (%d bytes)", errs.ErrInvalidArgument, size)
-		}
+	if src.over {
+		_ = s.c.RemoveObject(context.WithoutCancel(ctx), s.bucket, key, minio.RemoveObjectOptions{})
+		err = fmt.Errorf("%w: body is longer than the declared size (%d bytes)", errs.ErrInvalidArgument, size)
 	}
 	observability.Fail(span, err)
 	return err
@@ -174,4 +170,31 @@ func (s *Store) List(ctx context.Context, prefix string, fn func(ports.ObjectInf
 		}
 	}
 	return nil
+}
+
+// exactReader yields at most `left` bytes and records whether the source still had data after that.
+type exactReader struct {
+	r       io.Reader
+	left    int64
+	enforce bool
+	over    bool
+}
+
+func (e *exactReader) Read(p []byte) (int, error) {
+	if !e.enforce {
+		return e.r.Read(p)
+	}
+	if e.left <= 0 {
+		var probe [1]byte
+		if n, _ := e.r.Read(probe[:]); n > 0 {
+			e.over = true
+		}
+		return 0, io.EOF
+	}
+	if int64(len(p)) > e.left {
+		p = p[:e.left]
+	}
+	n, err := e.r.Read(p)
+	e.left -= int64(n)
+	return n, err
 }
