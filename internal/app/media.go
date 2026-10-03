@@ -104,6 +104,13 @@ func (s *MediaService) Upload(ctx context.Context, tenantID, id string, body io.
 		return nil, fmt.Errorf("store media: %w", err)
 	}
 	s.d.Metrics.BlobBytes.WithLabelValues("put").Add(float64(cw.n))
+	if cw.n == b.Size { // defence in depth: bytes left in the (size+1)-capped reader mean the body exceeded the declaration
+		var extra [1]byte
+		if n, _ := limited.Read(extra[:]); n > 0 {
+			_ = s.d.Blob.Delete(ctx, b.ObjectKey)
+			return nil, fmt.Errorf("%w: uploaded content is larger than the declared size", errs.ErrInvalidArgument)
+		}
+	}
 	if cw.n != b.Size || hex.EncodeToString(h.Sum(nil)) != b.SHA256 {
 		_ = s.d.Blob.Delete(ctx, b.ObjectKey)
 		return nil, fmt.Errorf("%w: uploaded content does not match the declared size/sha256", errs.ErrInvalidArgument)

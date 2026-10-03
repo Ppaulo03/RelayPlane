@@ -35,7 +35,7 @@ func newHarness(t *testing.T) *harness {
 	t2, k2, _ := e.App.Tenants.Create(context.Background(), "t-two")
 	_ = t2
 	api := &apihttp.Server{App: e.App, Metrics: e.Metrics, Log: slog.New(slog.NewTextHandler(io.Discard, nil)),
-		Auth: apihttp.KeyAuthenticator{Tenants: e.App.Tenants, AdminKey: "admin-key"}}
+		MaxUpload: 1 << 20, Auth: apihttp.KeyAuthenticator{Tenants: e.App.Tenants, AdminKey: "admin-key"}}
 	srv := httptest.NewServer(api.Handler())
 	t.Cleanup(srv.Close)
 	return &harness{t: t, env: e, srv: srv, key1: k1, key2: k2, admin: "admin-key"}
@@ -275,3 +275,30 @@ func sha256Hex(b []byte) string {
 }
 
 func (h *harness) tenantID(t *testing.T) string { return "" }
+
+// The gateway never reads more than MaxUpload, and nothing of a rejected upload is kept.
+func TestMediaUploadHardCap(t *testing.T) {
+	h := newHarness(t)
+	data := bytes.Repeat([]byte("y"), 2<<20) // 2 MiB against a 1 MiB cap
+	c, tk, _ := h.call("POST", "/api/v1/media/uploads", h.key1, `{"content_type":"application/pdf","size":2097152,"sha256":"`+sha256Hex(data)+`","filename":"big.pdf"}`)
+	if c != 201 {
+		t.Fatalf("%d %v", c, tk)
+	}
+	id := tk["media_id"].(string)
+	req, _ := nethttp.NewRequest("PUT", h.srv.URL+"/api/v1/media/"+id+"/content", bytes.NewReader(data))
+	req.Header.Set("Authorization", "Bearer "+h.key1)
+	resp, err := nethttp.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != 413 {
+		t.Fatalf("want 413, got %d", resp.StatusCode)
+	}
+	if _, m, _ := h.call("GET", "/api/v1/media/"+id, h.key1, ""); m["status"] != "PENDING" {
+		t.Fatalf("a rejected upload must not become READY: %v", m)
+	}
+	if _, err := h.env.Blob.Stat(context.Background(), tk["object_key"].(string)); err == nil {
+		t.Fatal("a rejected upload left an object behind")
+	}
+}

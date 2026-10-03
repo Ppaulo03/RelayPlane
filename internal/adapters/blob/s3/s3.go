@@ -5,6 +5,7 @@ package s3
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net/url"
 	"strings"
@@ -97,7 +98,19 @@ func (s *Store) Ping(ctx context.Context) error {
 func (s *Store) Put(ctx context.Context, key string, r io.Reader, size int64, contentType string) error {
 	ctx, span := observability.Start(ctx, "blob.put", attribute.String("blob.system", "s3"))
 	defer span.End()
-	_, err := s.c.PutObject(ctx, s.bucket, key, r, size, minio.PutObjectOptions{ContentType: contentType})
+	// Hide io.Seeker/ReaderAt: minio-go may rewind a seekable reader, which would make the
+	// "is there more data?" probe below meaningless.
+	src := struct{ io.Reader }{r}
+	_, err := s.c.PutObject(ctx, s.bucket, key, src, size, minio.PutObjectOptions{ContentType: contentType})
+	if err == nil && size >= 0 {
+		// minio-go stops reading after `size` bytes, so a longer body is silently truncated.
+		// The declared size is a contract: refuse and remove what was stored.
+		var extra [1]byte
+		if n, _ := src.Read(extra[:]); n > 0 {
+			_ = s.c.RemoveObject(context.WithoutCancel(ctx), s.bucket, key, minio.RemoveObjectOptions{})
+			err = fmt.Errorf("%w: body is longer than the declared size (%d bytes)", errs.ErrInvalidArgument, size)
+		}
+	}
 	observability.Fail(span, err)
 	return err
 }

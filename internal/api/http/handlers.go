@@ -324,12 +324,34 @@ func (s *Server) uploadContent(w nethttp.ResponseWriter, r *nethttp.Request, p P
 	if max <= 0 {
 		max = 100 << 20
 	}
-	b, err := s.App.Media.Upload(r.Context(), p.TenantID, r.PathValue("id"), io.LimitReader(r.Body, max+1))
+	// Hard ceiling on what the gateway will ever read, independent of the declared size
+	// (which the service enforces more tightly while streaming).
+	body := &capReader{r: nethttp.MaxBytesReader(w, r.Body, max)}
+	b, err := s.App.Media.Upload(r.Context(), p.TenantID, r.PathValue("id"), body)
+	if body.exceeded {
+		writeError(w, r, s.Log, errs.Wrap(errs.ErrPayloadTooLarge, "upload exceeds the maximum accepted size"))
+		return
+	}
 	if err != nil {
 		writeError(w, r, s.Log, err)
 		return
 	}
 	writeJSON(w, 200, viewMedia(*b))
+}
+
+// capReader remembers whether http.MaxBytesReader refused more data.
+type capReader struct {
+	r        io.Reader
+	exceeded bool
+}
+
+func (c *capReader) Read(p []byte) (int, error) {
+	n, err := c.r.Read(p)
+	var mbe *nethttp.MaxBytesError
+	if errors.As(err, &mbe) {
+		c.exceeded = true
+	}
+	return n, err
 }
 
 func (s *Server) getMedia(w nethttp.ResponseWriter, r *nethttp.Request, p Principal) {

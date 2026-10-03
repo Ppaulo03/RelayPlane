@@ -161,6 +161,20 @@ type BlobFactory func(t *testing.T) ports.BlobStore
 func BlobStoreContract(t *testing.T, factory BlobFactory) {
 	ctx := context.Background()
 	b := factory(t)
+	t.Run("DeclaredSizeIsExact", func(t *testing.T) {
+		for name, tc := range map[string]struct {
+			body string
+			size int64
+		}{"longer body": {"0123456789", 3}, "shorter body": {"ab", 5}} {
+			k := "t1/media/size/" + strings.ReplaceAll(name, " ", "-")
+			if err := b.Put(ctx, k, strings.NewReader(tc.body), tc.size, "text/plain"); !errors.Is(err, errs.ErrInvalidArgument) && err == nil {
+				t.Errorf("%s accepted", name)
+			}
+			if _, err := b.Stat(ctx, k); err == nil {
+				t.Errorf("%s: an object from the rejected upload exists", name)
+			}
+		}
+	})
 	key := "t1/media/m1/hello.txt"
 	if err := b.Put(ctx, key, strings.NewReader("hello world"), 11, "text/plain"); err != nil {
 		t.Fatalf("put: %v", err)

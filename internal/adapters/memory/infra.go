@@ -135,10 +135,13 @@ type blobObj struct {
 // NewBlob returns an empty store.
 func NewBlob() *Blob { return &Blob{objects: map[string]blobObj{}} }
 
-func (b *Blob) Put(_ context.Context, key string, r io.Reader, _ int64, contentType string) error {
+func (b *Blob) Put(_ context.Context, key string, r io.Reader, size int64, contentType string) error {
 	data, err := io.ReadAll(r)
 	if err != nil {
 		return err
+	}
+	if size >= 0 && int64(len(data)) != size { // same contract as the S3 adapter: the declared size is exact
+		return fmt.Errorf("%w: body has %d bytes, declared %d", errs.ErrInvalidArgument, len(data), size)
 	}
 	b.mu.Lock()
 	b.objects[key] = blobObj{data: data, ct: contentType, mod: time.Now()}

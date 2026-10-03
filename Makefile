@@ -3,7 +3,7 @@ PYTHON  ?= python
 GODIGEST = golang:1.26.5@sha256:705e964a93a2fd2e75c7d59bb7d781b57e30f12293ffde5175c69229e18fb678
 INFRA    = deploy/docker/compose.infra.yml
 
-.PHONY: fmt fmt-check vet build test test-integration test-race sdk-test infra-up infra-down up down
+.PHONY: fmt fmt-check vet build test test-integration test-race sdk-test infra-up infra-down up down evolution-image
 
 # fmt rewrites files; fmt-check only reports (tests must never modify the working tree)
 fmt:
@@ -40,6 +40,21 @@ test-race:
 
 sdk-test:
 	cd sdk/python && $(PYTHON) -m pip install -q -e ".[dev]" && $(PYTHON) -m pytest -q
+
+# Release flow of the Evolution image (build -> verify Baileys -> scan -> push -> capture digest).
+# Pushing needs REGISTRY=registry.example.com/relayplane; without it only the local build runs.
+EVO_TAG ?= 2.3.7-baileys-rc13
+# SCANNER=scout uses Docker Scout (needs `docker login`); trivy is used automatically when installed
+evolution-image:
+	docker build -t relayplane/evolution:$(EVO_TAG) deploy/docker/evolution
+	@echo "baileys in image: $$(docker run --rm --entrypoint node relayplane/evolution:$(EVO_TAG) -p "require('/evolution/node_modules/baileys/package.json').version")"
+	@if command -v trivy >/dev/null 2>&1; then trivy image --exit-code 1 --severity CRITICAL relayplane/evolution:$(EVO_TAG); \
+	elif [ "$(SCANNER)" = "scout" ]; then docker scout cves --exit-code --only-severity critical relayplane/evolution:$(EVO_TAG); \
+	else echo "WARNING: no image scanner found (install trivy or docker scout): the image was NOT scanned"; fi
+	@if [ -n "$(REGISTRY)" ]; then \
+	  docker tag relayplane/evolution:$(EVO_TAG) $(REGISTRY)/evolution:$(EVO_TAG) && docker push $(REGISTRY)/evolution:$(EVO_TAG) && \
+	  echo "deploy with: $$(docker image inspect $(REGISTRY)/evolution:$(EVO_TAG) --format '{{index .RepoDigests 0}}')"; \
+	else echo "REGISTRY not set: not pushed. Set it to publish and capture the immutable digest to deploy."; fi
 
 up:
 	docker compose up -d --build

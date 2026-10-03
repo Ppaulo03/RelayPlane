@@ -62,3 +62,23 @@ func TestSignedURLsWork(t *testing.T) {
 		t.Fatal("a signed URL must not authorise other objects")
 	}
 }
+
+// 15.9 Real MinIO: declared 3 bytes, body of 10. The store must refuse and keep nothing.
+func TestOversizedBodyIsRejectedByTheRealStore(t *testing.T) {
+	ctx := context.Background()
+	s := newStore(t)
+	key := "t1/media/over/a.txt"
+	if err := s.Put(ctx, key, strings.NewReader("0123456789"), 3, "text/plain"); err == nil {
+		t.Fatal("a body longer than the declared size was accepted")
+	}
+	if _, err := s.Stat(ctx, key); err == nil {
+		t.Fatal("an object from the rejected upload exists")
+	}
+	// a body shorter than declared is refused too
+	if err := s.Put(ctx, "t1/media/short/a.txt", strings.NewReader("ab"), 5, "text/plain"); err == nil {
+		t.Fatal("a body shorter than the declared size was accepted")
+	}
+	if _, err := s.Stat(ctx, "t1/media/short/a.txt"); err == nil {
+		t.Fatal("an object from the truncated upload exists")
+	}
+}
