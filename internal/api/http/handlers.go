@@ -53,20 +53,30 @@ func viewOperation(o instance.Operation) operationView {
 }
 
 type messageView struct {
-	ID        string    `json:"id"`
-	Status    string    `json:"status"`
-	To        string    `json:"to"`
-	Type      string    `json:"type"`
-	Attempts  int       `json:"attempts"`
-	Sequence  int64     `json:"sequence_no"`
-	ErrorCode string    `json:"error_code,omitempty"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
+	ID       string `json:"id"`
+	Status   string `json:"status"`
+	To       string `json:"to"`
+	Type     string `json:"type"`
+	Attempts int    `json:"attempts"`
+	Sequence int64  `json:"sequence_no"`
+	// ProviderMessageID is the id the provider gave the message once it ACCEPTED it: the id an answer's
+	// reply_to_provider_message_id refers to.
+	ProviderMessageID string     `json:"provider_message_id,omitempty"`
+	AcceptedAt        *time.Time `json:"accepted_at,omitempty"`
+	ErrorCode         string     `json:"error_code,omitempty"`
+	ErrorMessage      string     `json:"error_message,omitempty"`
+	CreatedAt         time.Time  `json:"created_at"`
+	UpdatedAt         time.Time  `json:"updated_at"`
 }
 
 func viewMessage(m messaging.Message) messageView {
-	return messageView{ID: m.ID, Status: string(m.Status), To: m.Recipient, Type: string(m.Type), Attempts: m.AttemptCount, Sequence: m.SequenceNo,
-		ErrorCode: m.ErrorCode, CreatedAt: m.CreatedAt, UpdatedAt: m.UpdatedAt}
+	v := messageView{ID: m.ID, Status: string(m.Status), To: m.Recipient, Type: string(m.Type), Attempts: m.AttemptCount, Sequence: m.SequenceNo,
+		ProviderMessageID: m.ProviderMessageID, ErrorCode: m.ErrorCode, ErrorMessage: m.ErrorMessage, CreatedAt: m.CreatedAt, UpdatedAt: m.UpdatedAt}
+	if !m.AcceptedAt.IsZero() {
+		t := m.AcceptedAt
+		v.AcceptedAt = &t
+	}
+	return v
 }
 
 func idemKey(r *nethttp.Request) string { return r.Header.Get("Idempotency-Key") }

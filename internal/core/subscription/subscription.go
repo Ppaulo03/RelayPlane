@@ -31,6 +31,8 @@ type Subscription struct {
 	SecretVersion int
 	RotatedAt     time.Time
 	Active        bool
+	// ExcludeGroups drops events of group chats (message.received with group=true).
+	ExcludeGroups bool
 	CreatedAt     time.Time
 }
 
@@ -41,6 +43,9 @@ func (s Subscription) Matches(ev events.Event) bool {
 		return false
 	}
 	if len(s.EventTypes) > 0 && !containsType(s.EventTypes, ev.EventType) {
+		return false
+	}
+	if s.ExcludeGroups && events.IsGroupMessage(ev) {
 		return false
 	}
 	if len(s.InstanceIDs) > 0 {

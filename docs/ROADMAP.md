@@ -60,6 +60,11 @@ Legenda: ✅ feito e testado · ⚠️ feito com limitação registrada · ⏭�
 | `reply_to_provider_message_id` e timestamp do provedor no `message.received` | ✅ |
 | `message.outbound_status` durável (outbox transacional) com `accepted_at` | ✅ |
 | `IDEMPOTENCY_TTL` configurável (padrão 24 h) | ✅ |
+| `GET /messages/{id}` com `provider_message_id`, `accepted_at`, `error_message` (R01) | ✅ |
+| Criação idempotente de subscription (`Idempotency-Key`) (R04) | ✅ |
+| `traceparent` nos webhooks; eventos de status carregam o trace do envio (R05) | ✅ |
+| `GET /api/v1/limits` (janela de idempotência, tamanhos, ritmo, retries de webhook) (R13) | ✅ |
+| `exclude_groups` na subscription (R14) | ✅ |
 | Sequência inbound confiável (`source_sequence`) | ⏭️ o provedor não expõe; o consumidor ordena pelo `timestamp` do evento |
 | Entrega estritamente ordenada por instância | ⏭️ melhor esforço (um em voo por assinatura+instância); estrita exigiria bloquear a fila atrás de uma entrega em retry |
 

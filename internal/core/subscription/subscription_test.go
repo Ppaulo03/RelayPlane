@@ -1,6 +1,7 @@
 package subscription
 
 import (
+	"encoding/json"
 	"errors"
 	"net"
 	"strings"
@@ -130,5 +131,30 @@ func TestSignatureGoldenVectorMatchesThePythonSDK(t *testing.T) {
 	const want = "a5433ca61a8029297236aed569798e0ad71a192250b77b5d17f38893f1e1bf38"
 	if got := Sign("whsec_golden", 1800000000, []byte(`{"event_id":"evt_1","payload":{"text":"oi"}}`)); got != want {
 		t.Fatalf("signature changed: %s (the SDK and every consumer would break)", got)
+	}
+}
+
+func TestExcludeGroupsDropsGroupMessagesOnly(t *testing.T) {
+	group := events.Event{EventID: "g", EventType: events.MessageReceived, TenantID: "t1", InstanceID: "i", Payload: events.MessageReceivedPayload{Group: true}}
+	groupJSON := events.Event{EventID: "g2", EventType: events.MessageReceived, TenantID: "t1", InstanceID: "i", Payload: map[string]any{"group": true}} // after the bus
+	direct := events.Event{EventID: "d", EventType: events.MessageReceived, TenantID: "t1", InstanceID: "i", Payload: events.MessageReceivedPayload{Group: false}}
+	raw := events.Event{EventID: "r", EventType: events.MessageReceived, TenantID: "t1", InstanceID: "i", Payload: json.RawMessage(`{"group":true}`)}
+	status := events.Event{EventID: "s", EventType: events.MessageOutboundStatus, TenantID: "t1", InstanceID: "i", Payload: map[string]any{"group": true}}
+
+	all := Subscription{TenantID: "t1", Active: true}
+	for _, e := range []events.Event{group, groupJSON, direct, status} {
+		if !all.Matches(e) {
+			t.Errorf("a subscription without the filter gets %s", e.EventID)
+		}
+	}
+	noGroups := Subscription{TenantID: "t1", Active: true, ExcludeGroups: true}
+	if noGroups.Matches(group) || noGroups.Matches(groupJSON) || noGroups.Matches(raw) {
+		t.Error("exclude_groups must drop group messages, typed or decoded from JSON")
+	}
+	if !noGroups.Matches(direct) {
+		t.Error("direct messages still arrive")
+	}
+	if !noGroups.Matches(status) {
+		t.Error("the group filter only concerns message.received")
 	}
 }

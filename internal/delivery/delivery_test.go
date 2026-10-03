@@ -8,6 +8,7 @@ import (
 	"io"
 	"log/slog"
 	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -367,5 +368,29 @@ func TestPerInstanceDeliveriesAreNotConcurrent(t *testing.T) {
 	}
 	if fmt.Sprint(order) != "[evt_1 evt_2 evt_3]" {
 		t.Errorf("delivery order %v", order)
+	}
+}
+
+// The consumer's trace links to ours: an event that carries a trace (a message status carries the trace of the send)
+// is delivered with that traceparent.
+func TestDeliveryForwardsTheEventTraceparent(t *testing.T) {
+	e := newEnv(t)
+	e.sub(t, "sub_a", "t1", "https://a.example.com/h")
+	const tp = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"
+	traced := event("evt_traced", "t1", "inst_1")
+	traced.TraceParent = tp
+	plain := event("evt_plain", "t1", "inst_2")
+	_ = e.fan.Handle(bg, traced)
+	_ = e.fan.Handle(bg, plain)
+	_, _ = e.disp.RunOnce(bg)
+	got := map[string]string{}
+	for _, r := range e.sender.reqs {
+		got[r.Headers[subscription.HeaderEventID]] = r.Headers["traceparent"]
+	}
+	if got["evt_traced"] != tp {
+		t.Errorf("the event's trace must be forwarded verbatim: %q", got["evt_traced"])
+	}
+	if p := got["evt_plain"]; p != "" && !strings.HasPrefix(p, "00-") {
+		t.Errorf("a traceparent, when present, must be well formed: %q", p)
 	}
 }

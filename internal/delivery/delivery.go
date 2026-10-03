@@ -204,6 +204,13 @@ func (d *Dispatcher) process(ctx context.Context, dl subscription.Delivery) {
 		subscription.HeaderSignature: subscription.SignatureHeader(sigs...),
 		subscription.HeaderAttempt:   strconv.Itoa(dl.Attempts + 1),
 	}}
+	// link the consumer's trace to ours: the event's own trace (a message status carries the trace of the send), or this
+	// delivery's span when the event started at the provider (an inbound message has no upstream trace)
+	if tp := dl.Event.TraceParent; tp != "" {
+		req.Headers["traceparent"] = tp
+	} else if tp := observability.TraceParent(ctx); tp != "" {
+		req.Headers["traceparent"] = tp
+	}
 	start := time.Now()
 	status, serr := d.Sender.Send(ctx, req)
 	d.Metrics.WebhookLatency.Observe(time.Since(start).Seconds())

@@ -3,8 +3,12 @@ package systemtest
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
+
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/propagation"
 
 	"github.com/relayplane/relayplane/internal/adapters/memory"
 	"github.com/relayplane/relayplane/internal/app"
@@ -12,6 +16,7 @@ import (
 	"github.com/relayplane/relayplane/internal/core/instance"
 	"github.com/relayplane/relayplane/internal/core/messaging"
 	"github.com/relayplane/relayplane/internal/core/subscription"
+	"github.com/relayplane/relayplane/internal/observability"
 )
 
 const hookURL = "http://agent.local/hooks/relayplane"
@@ -19,7 +24,7 @@ const hookURL = "http://agent.local/hooks/relayplane"
 // subscribe registers a webhook subscription for the tenant and returns its signing secret.
 func subscribe(t *testing.T, e *Env, tenant, url string, types ...string) (id, secret string) {
 	t.Helper()
-	sv, err := e.App.Subscriptions.Create(bg, tenant, app.CreateSubscriptionInput{URL: url, EventTypes: types})
+	sv, _, err := e.App.Subscriptions.Create(bg, tenant, app.CreateSubscriptionInput{URL: url, EventTypes: types}, "")
 	if err != nil {
 		t.Fatalf("subscribe: %v", err)
 	}
@@ -344,4 +349,86 @@ func TestTenantEvents_DeadLetterAndRedelivery(t *testing.T) {
 	}
 	Eventually(t, 10*time.Second, "redelivered", func() bool { return len(e.Receiver.Accepted(hookURL)) == 1 })
 	var _ = instance.Connected
+}
+
+// R05: the trace of the request that sent a message travels with its status events, to the consumer's endpoint.
+func TestTenantEvents_StatusEventsCarryTheTraceOfTheSend(t *testing.T) {
+	otel.SetTextMapPropagator(propagation.TraceContext{})
+	e := NewEnv(t)
+	inst := e.CreateInstance(e.Tenant, "a", true)
+	subscribe(t, e, e.Tenant, hookURL, string(events.MessageOutboundStatus))
+	e.StartWorkers(1)
+	e.StartOutbox()
+	e.StartWebhooks()
+
+	const tp = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"
+	ctx := observability.WithTraceParent(bg, tp)
+	r, _, err := e.App.Messages.Send(ctx, e.Tenant, app.SendInput{InstanceID: inst.ID, To: "5562999999999", Type: messaging.TypeText, Payload: app.SendPayload{Text: "oi"}}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.WaitMessage(r.MessageID, messaging.StatusAccepted)
+	Eventually(t, 10*time.Second, "ACCEPTED event delivered", func() bool { return len(e.Receiver.Accepted(hookURL)) >= 1 })
+	for _, rec := range e.Receiver.Accepted(hookURL) {
+		if got := rec.Traceparent; !strings.HasPrefix(got, "00-4bf92f3577b34da6a3ce929d0e0e4736-") {
+			t.Fatalf("the webhook must carry the trace of the send (same trace id), got %q", got)
+		}
+	}
+}
+
+// R14: a subscription that excludes groups never sees group messages; the others still do.
+func TestTenantEvents_ExcludeGroups(t *testing.T) {
+	e := NewEnv(t)
+	inst := e.CreateInstance(e.Tenant, "a", true)
+	if _, _, err := e.App.Subscriptions.Create(bg, e.Tenant, app.CreateSubscriptionInput{URL: "http://nogroups.local/h", ExcludeGroups: true}, ""); err != nil {
+		t.Fatal(err)
+	}
+	subscribe(t, e, e.Tenant, "http://everything.local/h")
+	e.StartOutbox()
+	e.StartWebhooks()
+
+	mk := func(id string, group bool) memory.FakeWebhookEv {
+		return memory.FakeWebhookEv{InstanceID: inst.ID, Type: events.MessageReceived, ProviderMessageID: id, Timestamp: time.Now(),
+			Payload: json.RawMessage(fmt.Sprintf(`{"provider_message_id":%q,"from":"5562","type":"text","text":"x","group":%v}`, id, group))}
+	}
+	if _, err := e.App.Inbound.Handle(bg, ProviderKey, inboundBody(inst.NodeID, inst.AssignmentEpoch, mk("WA-GROUP", true), mk("WA-DIRECT", false))); err != nil {
+		t.Fatal(err)
+	}
+	received := func(url string) []Received {
+		var out []Received
+		for _, r := range e.Receiver.Accepted(url) {
+			if r.EventType == string(events.MessageReceived) {
+				out = append(out, r)
+			}
+		}
+		return out
+	}
+	Eventually(t, 10*time.Second, "both messages reach the unfiltered endpoint", func() bool { return len(received("http://everything.local/h")) == 2 })
+	Eventually(t, 10*time.Second, "the direct message reaches the filtered endpoint", func() bool { return len(received("http://nogroups.local/h")) >= 1 })
+	time.Sleep(150 * time.Millisecond)
+	got := received("http://nogroups.local/h")
+	if len(got) != 1 || containsBytes(got[0].Body, "WA-GROUP") || !containsBytes(got[0].Body, "WA-DIRECT") {
+		t.Fatalf("exclude_groups must drop the group message and keep the direct one: %d requests", len(got))
+	}
+}
+
+// R01: the REST view of a message exposes what the events say (provider id and acceptance time), so a consumer that missed
+// an event can reconcile by polling, and match an answer's reply_to to the message it quotes.
+func TestTenantEvents_MessageViewMatchesTheStatusEvent(t *testing.T) {
+	e := NewEnv(t)
+	inst := e.CreateInstance(e.Tenant, "a", true)
+	subscribe(t, e, e.Tenant, hookURL, string(events.MessageOutboundStatus))
+	e.StartWorkers(1)
+	e.StartOutbox()
+	e.StartWebhooks()
+	r, _, _ := e.SendText(e.Tenant, inst.ID, "oi", "")
+	acc := e.WaitMessage(r.MessageID, messaging.StatusAccepted)
+	Eventually(t, 10*time.Second, "event", func() bool {
+		_, ok := outboundStatuses(t, e.Receiver.Accepted(hookURL))[r.MessageID+"/ACCEPTED"]
+		return ok
+	})
+	st := outboundStatuses(t, e.Receiver.Accepted(hookURL))[r.MessageID+"/ACCEPTED"]
+	if acc.ProviderMessageID == "" || st.ProviderMessageID != acc.ProviderMessageID || acc.AcceptedAt.IsZero() {
+		t.Errorf("event %+v vs message %+v", st, acc)
+	}
 }
