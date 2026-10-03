@@ -1,0 +1,13 @@
+{
+  "event": "connection.update",
+  "instance": "inst_01m41bad3refzv7nc1h5p7tgf4",
+  "data": {
+    "instance": "inst_01m41bad3refzv7nc1h5p7tgf4",
+    "state": "connecting",
+    "statusReason": 200
+  },
+  "destination": "https://media.example.invalid/1",
+  "date_time": "2026-10-03T13:59:52.736Z",
+  "server_url": "https://media.example.invalid/2",
+  "apikey": "<redacted:apikey:36>"
+}

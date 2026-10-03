@@ -1,0 +1,85 @@
+{
+  "event": "messages.upsert",
+  "instance": "inst_01m41bad3refzv7nc1h5p7tgf4",
+  "data": {
+    "key": {
+      "remoteJid": "5511900000014@s.whatsapp.net",
+      "remoteJidAlt": "5511900000014@s.whatsapp.net",
+      "fromMe": false,
+      "id": "3EB0FAKE00000000090000",
+      "participant": "",
+      "addressingMode": "lid"
+    },
+    "pushName": "[texto 2]",
+    "status": "DELIVERY_ACK",
+    "message": {
+      "imageMessage": {
+        "interactiveAnnotations": [],
+        "scanLengths": [],
+        "annotations": [],
+        "url": "https://media.example.invalid/38",
+        "mimetype": "image/jpeg",
+        "caption": "[texto 11]",
+        "fileSha256": "<redacted>",
+        "fileLength": {
+          "low": 34122,
+          "high": 0,
+          "unsigned": true
+        },
+        "height": 333,
+        "width": 398,
+        "mediaKey": "<redacted>",
+        "fileEncSha256": "<redacted>",
+        "directPath": "<directPath:216>",
+        "mediaKeyTimestamp": {
+          "low": 1791067494,
+          "high": 0,
+          "unsigned": false
+        },
+        "jpegThumbnail": "<redacted>",
+        "contextInfo": {
+          "mentionedJid": [],
+          "groupMentions": [],
+          "statusAttributions": [],
+          "ephemeralSettingTimestamp": {
+            "low": 1790894627,
+            "high": 0,
+            "unsigned": false
+          },
+          "disappearingMode": {
+            "initiator": 0
+          }
+        },
+        "viewOnce": false
+      },
+      "messageContextInfo": {
+        "threadId": [],
+        "deviceListMetadata": "<redacted>",
+        "deviceListMetadataVersion": 2,
+        "messageSecret": "<redacted>"
+      }
+    },
+    "contextInfo": {
+      "mentionedJid": [],
+      "groupMentions": [],
+      "statusAttributions": [],
+      "ephemeralSettingTimestamp": {
+        "low": 1790894627,
+        "high": 0,
+        "unsigned": false
+      },
+      "disappearingMode": {
+        "initiator": 0
+      }
+    },
+    "messageType": "imageMessage",
+    "messageTimestamp": 1791067495,
+    "instanceId": "9f28f842-afcd-4009-90b9-9ac28ccfdf58",
+    "source": "web"
+  },
+  "destination": "https://media.example.invalid/1",
+  "date_time": "2026-10-03T19:47:55.380Z",
+  "sender": "5511900000011@s.whatsapp.net",
+  "server_url": "https://media.example.invalid/2",
+  "apikey": "<redacted:apikey:36>"
+}

@@ -1,0 +1,58 @@
+{
+  "event": "messages.upsert",
+  "instance": "inst_01m41bad3refzv7nc1h5p7tgf4",
+  "data": {
+    "key": {
+      "remoteJid": "5511900000014@s.whatsapp.net",
+      "remoteJidAlt": "5511900000014@s.whatsapp.net",
+      "fromMe": false,
+      "id": "3EB0FAKE00000000030000",
+      "participant": "",
+      "addressingMode": "lid"
+    },
+    "pushName": "[texto 2]",
+    "status": "DELIVERY_ACK",
+    "message": {
+      "messageContextInfo": {
+        "threadId": [],
+        "deviceListMetadata": "<redacted>",
+        "deviceListMetadataVersion": 2,
+        "messageSecret": "<redacted>",
+        "limitSharingV2": {
+          "trigger": 0,
+          "initiatedByMe": false
+        }
+      },
+      "conversation": "[texto 6]"
+    },
+    "contextInfo": {
+      "mentionedJid": [],
+      "groupMentions": [],
+      "statusAttributions": [],
+      "stanzaId": "3EB0FAKE00000000020000",
+      "participant": "5511900000018@lid",
+      "quotedMessage": {
+        "conversation": "[texto 5]"
+      },
+      "ephemeralSettingTimestamp": {
+        "low": 1790894627,
+        "high": 0,
+        "unsigned": false
+      },
+      "disappearingMode": {
+        "initiator": 0,
+        "trigger": 1,
+        "initiatedByMe": false
+      }
+    },
+    "messageType": "conversation",
+    "messageTimestamp": 1791067442,
+    "instanceId": "9f28f842-afcd-4009-90b9-9ac28ccfdf58",
+    "source": "web"
+  },
+  "destination": "https://media.example.invalid/1",
+  "date_time": "2026-10-03T19:44:17.093Z",
+  "sender": "5511900000011@s.whatsapp.net",
+  "server_url": "https://media.example.invalid/2",
+  "apikey": "<redacted:apikey:36>"
+}

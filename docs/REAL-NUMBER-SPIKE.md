@@ -78,6 +78,9 @@ sh deploy/docker/spike.sh down -v            # apaga os volumes (inclui a sessã
 ```
 Remova o aparelho em **Aparelhos conectados** no celular.
 
+## Resultado
+O que foi observado, os defeitos encontrados e os limites que o consumidor precisa tratar estão em [`SPIKE-FINDINGS`](./SPIKE-FINDINGS.md).
+
 ## O que vem depois
 Os payloads reais viram fixtures de ouro (`internal/adapters/providers/evolution/v2/testdata/`), os testes do adapter passam a usá-los, o simulador passa a gerar o formato
 observado e as questões A1–A6 ficam respondidas no [`AGENT-READINESS`](./AGENT-READINESS.md) (R20).
