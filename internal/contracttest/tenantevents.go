@@ -536,3 +536,45 @@ func deliveryOrderContract(t *testing.T, f RepoFactory) {
 		}
 	}
 }
+
+// Every lease is counted: a delivery that was claimed again after its lease expired (a worker died holding it) is told apart from
+// one that went out on the first claim, so the latency of crash recovery is not mistaken for the healthy path.
+func deliveryClaimsContract(t *testing.T, f RepoFactory) {
+	fx, ctx := newFixture(t, f), context.Background()
+	fx.tenant(t, "t1")
+	if err := fx.r.Subscriptions.Create(ctx, newSub("sub_1", "t1")); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC().Truncate(time.Millisecond)
+	if _, err := fx.r.Deliveries.Enqueue(ctx, []subscription.Delivery{newDelivery("d1", "sub_1", "t1", "inst_1", "e1", now)}); err != nil {
+		t.Fatal(err)
+	}
+	first, err := fx.r.Deliveries.ClaimDue(ctx, now.Add(time.Second), time.Minute, 10)
+	if err != nil || len(first) != 1 || first[0].Claims != 1 {
+		t.Fatalf("the first lease is claim 1: %+v %v", first, err)
+	}
+	// the worker dies: nobody releases the lease; once it has expired the delivery is claimed again
+	if again, _ := fx.r.Deliveries.ClaimDue(ctx, now.Add(time.Second+30*time.Second), time.Minute, 10); len(again) != 0 {
+		t.Fatalf("the lease is still held: %d", len(again))
+	}
+	second, _ := fx.r.Deliveries.ClaimDue(ctx, now.Add(2*time.Minute), time.Minute, 10)
+	if len(second) != 1 || second[0].Claims != 2 || second[0].Attempts != 0 {
+		t.Fatalf("a re-claim after the lease expired is claim 2 and no failed attempt: %+v", second)
+	}
+	// an open circuit postpones the delivery without sending: that claim led nowhere and is not counted
+	if err := fx.r.Deliveries.Postpone(ctx, "d1", now.Add(150*time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	postponed, _ := fx.r.Deliveries.ClaimDue(ctx, now.Add(160*time.Second), time.Minute, 10)
+	if len(postponed) != 1 || postponed[0].Claims != 2 {
+		t.Fatalf("a postponement is not a claim: %+v", postponed)
+	}
+	// a failure releases the lease and counts an attempt; the next claim keeps counting
+	if err := fx.r.Deliveries.MarkRetry(ctx, "d1", now.Add(3*time.Minute), "http 500"); err != nil {
+		t.Fatal(err)
+	}
+	third, _ := fx.r.Deliveries.ClaimDue(ctx, now.Add(4*time.Minute), time.Minute, 10)
+	if len(third) != 1 || third[0].Claims != 3 || third[0].Attempts != 1 {
+		t.Errorf("claims keep counting across attempts: %+v", third)
+	}
+}

@@ -61,8 +61,10 @@ sandbox-down:
 test-sandbox:
 	sh deploy/docker/sandbox.sh test
 
-# the p95 delivery lag of outbound status events (first attempts) must stay below this (measured: ~1.1 s under chaos at 285 msg/s)
-LOAD_MAX_EVENT_LAG_P95 ?= 2s
+# set LOAD_MAX_EVENT_LAG_P95=2s to gate on the p95 delivery lag measured by the dispatchers. Use it WITHOUT CHAOS_KILL: killing
+# workers every few seconds makes crash recovery (dispatcher lease, circuit breaker, bus redelivery) a large part of the sample and
+# resets the counters of the workers that were killed; the healthy path is what the target is about.
+LOAD_MAX_EVENT_LAG_P95 ?=
 
 # multi-process load: real gateway + N workers + reconciler containers, provider nodes replaced by cmd/loadstub.
 # e.g. make test-load-stack WORKERS=6 INSTANCES=60 MESSAGES=6000 CHAOS_KILL=1   (see deploy/docker/load.sh)

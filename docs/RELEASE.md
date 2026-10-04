@@ -62,6 +62,13 @@ Parear um celular e o comportamento das mensagens (isso é o [`REAL-NUMBER-SPIKE
 host, cluster, DNS, TLS, gestão de segredos nem backup. O staging do CI é efêmero. Para um staging permanente você precisa de um host ou cluster e dos segredos; com isso, os comandos acima
 (compose) ou `kubectl apply -f relayplane-<v>.yaml` (Kubernetes, com o ConfigMap e o Secret descritos no manifesto) são o caminho.
 
+## Um defeito que só a medição de latência mostrou
+
+Ao medir a latência de entrega apareceu um defeito antigo do dispatcher: o `UPDATE` que arrenda uma entrega só rechecava o **lease**. Com vários workers, se outro acabasse de entregar a mesma
+entrega (ou de agendar um retry), o PostgreSQL relia a linha, via o lease vazio e **arrendava de novo**: eventos já entregues eram reenviados (5 a 330 reenvios em 2000 eventos, conforme a carga) e o
+backoff dos retries era ignorado. O `UPDATE` agora rechecka o estado inteiro (`PENDING`, `next_attempt_at`, lease), e há testes de concorrência contra o PostgreSQL real (que reproduziram o defeito: 136 a 205
+de 300 entregas arrendadas mais de uma vez) para a fila de entregas e a de anexos. Depois da correção o sink recebe **exatamente** uma requisição por evento.
+
 ## Rollback
 
 Reaplique o manifesto (ou o `images.env`) do release anterior. As migrações do banco são **só para frente** (todas aditivas até hoje): voltar de imagem não desfaz uma migração, então um

@@ -167,3 +167,45 @@ func TestEventDeliveryLag_RetriesAreSeparatedFromTheHealthyPath(t *testing.T) {
 		t.Errorf("the lag of a retried delivery includes the backoff: bucket %.3fs", retry.quantileBound(1))
 	}
 }
+
+// A worker that dies holding a delivery leaves it leased: it goes out only after the lease expires. That wait is crash recovery,
+// bounded by the lease, and must neither be counted as the healthy path nor pass unnoticed: the consumer sees claim 2, the metric
+// says "recovered".
+func TestEventDeliveryLag_ADeliveryAWorkerDiedHoldingIsToldApart(t *testing.T) {
+	e := NewEnv(t)
+	inst := e.CreateInstance(e.Tenant, "a", true)
+	subID, _ := subscribe(t, e, e.Tenant, hookURL, string(events.MessageReceived))
+	// only the fan-out runs: the delivery gets created, nobody sends it yet
+	e.wg.Add(1)
+	go func() { defer e.wg.Done(); _ = e.Bus.Subscribe(e.ctx, "webhook-fanout", e.FanOut.Handle) }()
+	if _, err := e.App.Inbound.Handle(bg, ProviderKey, inboundBody(inst.NodeID, inst.AssignmentEpoch, recvEv(inst.ID, "WA-DEAD"))); err != nil {
+		t.Fatal(err)
+	}
+	Eventually(t, 10*time.Second, "the delivery exists", func() bool {
+		bl, _ := e.App.Subscriptions.Backlog(bg, e.Tenant)
+		return bl[subID].Pending == 1
+	})
+	// the "worker" leases it and dies: nothing is ever sent, nobody releases the lease
+	got, err := e.Repos.Deliveries.ClaimDue(bg, time.Now(), 200*time.Millisecond, 10)
+	if err != nil || len(got) != 1 || got[0].Claims != 1 {
+		t.Fatalf("the doomed claim: %+v %v", got, err)
+	}
+	if again, _ := e.Repos.Deliveries.ClaimDue(bg, time.Now(), time.Minute, 10); len(again) != 0 {
+		t.Fatal("while the lease is held nobody else may send it")
+	}
+	time.Sleep(300 * time.Millisecond) // the lease expires
+	e.wg.Add(1)
+	go func() { defer e.wg.Done(); e.Dispatcher.Run(e.ctx) }()
+	Eventually(t, 10*time.Second, "another worker sends it and its lag is recorded", func() bool {
+		_, rec := readLag(t, e, "recovered")
+		return len(e.Receiver.Accepted(hookURL)) == 1 && rec.count == 1
+	})
+	if c := e.Receiver.Accepted(hookURL)[0].Claim; c != "2" {
+		t.Errorf("the consumer is told this is the second lease: claim %q", c)
+	}
+	_, first := readLag(t, e, "first")
+	_, retry := readLag(t, e, "retry")
+	if first.count != 0 || retry.count != 0 {
+		t.Errorf("it is neither the healthy path nor a retry: first=%d retry=%d", first.count, retry.count)
+	}
+}

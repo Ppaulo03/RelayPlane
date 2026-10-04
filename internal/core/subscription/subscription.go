@@ -107,7 +107,10 @@ type Delivery struct {
 	// Sequence is assigned when the delivery is created (Enqueue): 1, 2, 3... per (subscription, instance), gapless.
 	// A redelivery keeps it.
 	Sequence int64
-	Status   DeliveryStatus
+	// Claims counts how many times a dispatcher leased the delivery: 1 on the healthy path, more when the lease of a dead or
+	// hung worker had to expire first.
+	Claims int
+	Status DeliveryStatus
 	// Attempts counts recorded failed attempts.
 	Attempts      int
 	NextAttemptAt time.Time
@@ -153,6 +156,8 @@ const (
 	HeaderTimestamp = "X-RelayPlane-Timestamp"
 	HeaderSignature = "X-RelayPlane-Signature"
 	HeaderAttempt   = "X-RelayPlane-Delivery-Attempt"
+	// HeaderClaim is how many times the delivery was leased (1: healthy path; more: a worker died holding it).
+	HeaderClaim = "X-RelayPlane-Delivery-Claim"
 	// RotationGrace is how long the previous secret keeps being used to sign (alongside the new one) after a rotation,
 	// so a consumer can switch without a gap.
 	RotationGrace = 24 * time.Hour

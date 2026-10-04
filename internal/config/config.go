@@ -132,7 +132,7 @@ func Load() (Config, error) {
 		SubscriptionSecret:     os.Getenv("SUBSCRIPTION_SECRET"),
 		WebhooksMaxPerTenant:   getInt("WEBHOOKS_MAX_PER_TENANT", 10),
 		WebhookDeliveryTimeout: getDur("WEBHOOK_DELIVERY_TIMEOUT", 5*time.Second),
-		WebhookDeliveryWorkers: getInt("WEBHOOK_DELIVERY_WORKERS", 8), WebhookMaxInFlightPerSub: getInt("WEBHOOK_MAX_IN_FLIGHT_PER_SUBSCRIPTION", 8), OutboxInterval: getDur("OUTBOX_INTERVAL", 250*time.Millisecond),
+		WebhookDeliveryWorkers: getInt("WEBHOOK_DELIVERY_WORKERS", 8), WebhookMaxInFlightPerSub: getInt("WEBHOOK_MAX_IN_FLIGHT_PER_SUBSCRIPTION", 32), OutboxInterval: getDur("OUTBOX_INTERVAL", 250*time.Millisecond),
 
 		WebhookDeliveredRetention: getDur("WEBHOOK_DELIVERED_RETENTION", 7*24*time.Hour),
 	}

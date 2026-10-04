@@ -36,6 +36,7 @@ UNKNOWN_BARRIER_TIMEOUT=$([ "${CHAOS_KILL:-0}" = 1 ] && echo 5s || echo 0)
 STUB_SEND_LATENCY=${STUB_SEND_LATENCY:-50ms}
 ENV
 fi
+CURL_IMAGE=curlimages/curl@sha256:d9b4541e214bcd85196d6e92e2753ac6d0ea699f0af5741f8c6cccbfcf00ef4b
 DC="docker compose --env-file $ENVF -f docker-compose.yml -f deploy/docker/compose.load.yml"
 cleanup() { [ "${KEEP:-0}" = 1 ] || $DC --profile '*' down -v >/dev/null 2>&1; [ "${KEEP:-0}" = 1 ] || rm -f "$ENVF"; }
 trap cleanup EXIT
@@ -62,10 +63,20 @@ if [ "${CHAOS_KILL:-0}" = 1 ]; then
   trap 'kill $CHAOS_PID 2>/dev/null; cleanup' EXIT
 fi
 set +e
-go run ./cmd/loadgen -webhook-listen "0.0.0.0:${WEBHOOK_SINK_PORT:-18090}" -webhook-url "http://host.docker.internal:${WEBHOOK_SINK_PORT:-18090}/hook" -webhook-fail-rate "${WEBHOOK_FAIL_RATE:-0.1}" -max-event-lag-p95 "${LOAD_MAX_EVENT_LAG_P95:-0}" -gateway http://127.0.0.1:18080 -admin-key "$ADMIN_API_KEY" -instances "$INSTANCES" -messages "$MESSAGES" -timeout "${LOAD_TIMEOUT:-5m}" \
+go run ./cmd/loadgen -webhook-listen "0.0.0.0:${WEBHOOK_SINK_PORT:-18090}" -webhook-url "http://host.docker.internal:${WEBHOOK_SINK_PORT:-18090}/hook" -webhook-fail-rate "${WEBHOOK_FAIL_RATE:-0.1}" -gateway http://127.0.0.1:18080 -admin-key "$ADMIN_API_KEY" -instances "$INSTANCES" -messages "$MESSAGES" -timeout "${LOAD_TIMEOUT:-5m}" \
   -allow-unknown="$([ "${CHAOS_KILL:-0}" = 1 ] && echo true || echo false)" \
   -stubs "http://127.0.0.1:18081=$EVOLUTION_NODE_01_API_KEY,http://127.0.0.1:18082=$EVOLUTION_NODE_02_API_KEY"
 status=$?
+# the gate on the delivery lag uses what the dispatchers measured (the loadgen's own number is taken on the host and includes any skew
+# between the host and the Docker VM clock): scrape the surviving workers and check p95
+if [ "$status" -eq 0 ] && [ -n "${LOAD_MAX_EVENT_LAG_P95:-}" ] && [ "${LOAD_MAX_EVENT_LAG_P95}" != 0 ]; then
+  : > "$ENVF.metrics"
+  for c in $($DC ps -q worker); do
+    docker run --rm --network "container:$c" "$CURL_IMAGE" -fsS http://127.0.0.1:9090/metrics >> "$ENVF.metrics" 2>/dev/null || true
+  done
+  "${PYTHON:-python}" tools/loadcheck/lag.py "$LOAD_MAX_EVENT_LAG_P95" < "$ENVF.metrics" || status=1
+  rm -f "$ENVF.metrics"
+fi
 [ -z "${CHAOS_PID:-}" ] || kill "$CHAOS_PID" 2>/dev/null
 $DC logs --no-log-prefix worker reconciler gateway 2>&1 | grep -ci '"level":"error"\|level=error' | sed 's/^/error log lines: /' || true
 exit $status
