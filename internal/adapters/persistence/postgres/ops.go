@@ -10,6 +10,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/relayplane/relayplane/internal/core/errs"
+	"github.com/relayplane/relayplane/internal/core/events"
 	"github.com/relayplane/relayplane/internal/core/instance"
 	"github.com/relayplane/relayplane/internal/core/media"
 	"github.com/relayplane/relayplane/internal/core/messaging"
@@ -529,32 +530,37 @@ func (r idemRepo) DeleteExpired(ctx context.Context, now time.Time) (int64, erro
 
 type dedupRepo struct{ s *Store }
 
-func (r dedupRepo) Begin(ctx context.Context, key, instanceID string, ttl, inflight time.Duration) (ports.DedupOutcome, error) {
-	now := time.Now()
-	var one int
-	err := r.s.pool.QueryRow(ctx, `INSERT INTO event_deduplication(key,instance_id,status,claimed_at,expires_at)
-		VALUES($1,$2,'IN_FLIGHT',$3,$4)
-		ON CONFLICT (key) DO UPDATE SET status='IN_FLIGHT', claimed_at=EXCLUDED.claimed_at, expires_at=EXCLUDED.expires_at, instance_id=EXCLUDED.instance_id
-		WHERE (event_deduplication.status='IN_FLIGHT' AND event_deduplication.claimed_at < $3 - $5::interval)
-		   OR event_deduplication.expires_at <= $3
-		RETURNING 1`, key, instanceID, now, now.Add(ttl), fmt.Sprintf("%d microseconds", inflight.Microseconds())).Scan(&one)
-	switch {
-	case err == nil:
-		return ports.DedupProceed, nil
-	case errors.Is(err, pgx.ErrNoRows):
-		return ports.DedupDuplicate, nil
+func (r dedupRepo) Accept(ctx context.Context, key string, ttl time.Duration, ev events.Event, job *media.InboundJob) (ports.DedupOutcome, error) {
+	out := ports.DedupDuplicate
+	err := r.s.withTx(ctx, func(tx pgx.Tx) error {
+		now := time.Now()
+		var one int
+		err := tx.QueryRow(ctx, `INSERT INTO event_deduplication(key,instance_id,status,claimed_at,expires_at)
+			VALUES($1,$2,'PUBLISHED',$3,$4)
+			ON CONFLICT (key) DO UPDATE SET status='PUBLISHED', claimed_at=EXCLUDED.claimed_at, expires_at=EXCLUDED.expires_at, instance_id=EXCLUDED.instance_id
+			WHERE event_deduplication.expires_at <= $3
+			RETURNING 1`, key, ev.InstanceID, now, now.Add(ttl)).Scan(&one)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil // already accepted
+		}
+		if err != nil {
+			return err
+		}
+		if job != nil {
+			err = insertInboundMedia(ctx, tx, *job)
+		} else {
+			err = insertEventOutbox(ctx, tx, ev)
+		}
+		if err != nil {
+			return err
+		}
+		out = ports.DedupProceed
+		return nil
+	})
+	if err != nil {
+		return ports.DedupDuplicate, err
 	}
-	return ports.DedupDuplicate, err
-}
-
-func (r dedupRepo) Commit(ctx context.Context, key string) error {
-	_, err := r.s.pool.Exec(ctx, `UPDATE event_deduplication SET status='PUBLISHED' WHERE key=$1`, key)
-	return err
-}
-
-func (r dedupRepo) Abort(ctx context.Context, key string) error {
-	_, err := r.s.pool.Exec(ctx, `DELETE FROM event_deduplication WHERE key=$1 AND status='IN_FLIGHT'`, key)
-	return err
+	return out, nil
 }
 
 func (r dedupRepo) DeleteExpired(ctx context.Context, now time.Time) (int64, error) {

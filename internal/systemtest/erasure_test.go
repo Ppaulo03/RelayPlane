@@ -74,6 +74,10 @@ func TestErasure_NothingOfTheContactIsLeft(t *testing.T) {
 		t.Fatal(err)
 	}
 	f.receiveFrom(target, "WA-T3", "mais uma coisa", nil)
+	Eventually(t, 10*time.Second, "the event waits, fanned out, for the paused consumer", func() bool {
+		bl, _ := e.App.Subscriptions.Backlog(bg, e.Tenant)
+		return bl[deadSub].Pending >= 1
+	})
 
 	// ---- erase ----
 	rep, err := e.App.Contacts.Erase(bg, e.Tenant, "+"+target[:2]+" ("+target[2:4]+") "+target[4:]) // however the caller typed it

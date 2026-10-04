@@ -219,6 +219,16 @@ func (s *SubscriptionService) Redeliver(ctx context.Context, tenantID, deliveryI
 }
 
 // RecordDeliveryGauges refreshes the webhook gauges (called by the reconciler's maintenance pass).
+// RecordEventOutboxGauges publishes how many accepted events wait to reach the bus and for how long.
+func RecordEventOutboxGauges(ctx context.Context, d Deps) {
+	n, oldest, err := d.Repos.Events.PendingStats(ctx)
+	if err != nil {
+		return
+	}
+	d.Metrics.EventOutboxPending.Set(float64(n))
+	d.Metrics.EventOutboxOldest.Set(oldest.Seconds())
+}
+
 func RecordDeliveryGauges(ctx context.Context, d Deps) {
 	c, err := d.Repos.Deliveries.Counts(ctx, d.now())
 	if err != nil {

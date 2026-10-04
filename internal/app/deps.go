@@ -34,8 +34,7 @@ type Config struct {
 	InboundMediaTTL      time.Duration
 	PendingTTL           time.Duration // how long a declared-but-not-uploaded blob lives
 
-	DedupTTL      time.Duration
-	DedupInflight time.Duration
+	DedupTTL time.Duration
 
 	MigrationVerifyTimeout time.Duration
 	MaxTextLength          int
@@ -76,7 +75,6 @@ func DefaultConfig() Config {
 		InboundMediaTTL:        7 * 24 * time.Hour,
 		PendingTTL:             30 * time.Minute,
 		DedupTTL:               24 * time.Hour,
-		DedupInflight:          30 * time.Second,
 		MigrationVerifyTimeout: 10 * time.Minute,
 		MaxTextLength:          4096,
 	}

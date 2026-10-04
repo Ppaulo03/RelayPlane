@@ -52,9 +52,11 @@ func TestBackpressure_PauseAccumulatesAndResumeDeliversInOrder(t *testing.T) {
 	if fmt.Sprint(seqs) != "[1 2 3]" {
 		t.Errorf("resumed in sequence order: %v", seqs)
 	}
-	if bl, _ := e.App.Subscriptions.Backlog(bg, e.Tenant); bl[subID].Pending != 0 {
-		t.Errorf("nothing is left waiting: %+v", bl[subID])
-	}
+	// the receiver answers before the dispatcher records the delivery: wait for the record
+	Eventually(t, 5*time.Second, "nothing is left waiting", func() bool {
+		bl, _ := e.App.Subscriptions.Backlog(bg, e.Tenant)
+		return bl[subID].Pending == 0
+	})
 }
 
 // A consumer that answers slowly takes at most its share of the dispatcher: another consumer is still served at once.

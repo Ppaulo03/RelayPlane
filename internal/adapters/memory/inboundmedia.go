@@ -21,20 +21,25 @@ type inboundMediaRepo struct{ s *Store }
 func (r inboundMediaRepo) Enqueue(_ context.Context, j media.InboundJob) (bool, error) {
 	r.s.mu.Lock()
 	defer r.s.mu.Unlock()
-	for _, e := range r.s.inbound {
+	return r.s.enqueueInbound(j), nil
+}
+
+// enqueueInbound queues an attachment job unless one exists for its event. The caller holds s.mu.
+func (s *Store) enqueueInbound(j media.InboundJob) bool {
+	for _, e := range s.inbound {
 		if e.EventID == j.EventID {
-			return false, nil
+			return false
 		}
 	}
 	if j.CreatedAt.IsZero() {
-		j.CreatedAt = r.s.Now()
+		j.CreatedAt = s.Now()
 	}
 	if j.NextAttemptAt.IsZero() {
 		j.NextAttemptAt = j.CreatedAt
 	}
 	j.Stage = media.StageDownload
-	r.s.inbound[j.ID] = &inboundRow{InboundJob: j}
-	return true, nil
+	s.inbound[j.ID] = &inboundRow{InboundJob: j}
+	return true
 }
 
 func (r inboundMediaRepo) ClaimDue(_ context.Context, now time.Time, lease time.Duration, limit int) ([]media.InboundJob, error) {

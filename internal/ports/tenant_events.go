@@ -18,6 +18,12 @@ type EventOutboxRepository interface {
 	MarkPublished(ctx context.Context, eventIDs []string, at time.Time) error
 	// Purge deletes events published before `before`.
 	Purge(ctx context.Context, before time.Time) (int64, error)
+	// EraseContact deletes the events of the tenant that are about the contact (payload.from == number), published or not:
+	// an accepted inbound event waits here until it is published, and keeps the text and the number while it does.
+	EraseContact(ctx context.Context, tenantID, number string) (int64, error)
+	// PendingStats counts the accepted events that are not on the bus yet and the age of the oldest one (by the store's clock). A
+	// growing age means nobody is publishing the outbox (the reconciler is down): accepted inbound messages are safe but late.
+	PendingStats(ctx context.Context) (count int64, oldest time.Duration, err error)
 }
 
 // SubscriptionRepository persists tenant webhook subscriptions. Every method that takes a tenant id is scoped by

@@ -109,6 +109,7 @@ func (r *Receiver) DistinctEvents(url string) map[string]int {
 
 // StartWebhooks runs the fan-out consumer and the delivery dispatcher (what the worker binary does).
 func (e *Env) StartWebhooks() {
+	e.StartOutbox() // inbound events reach the bus through the outbox, as in production
 	e.wg.Add(2)
 	go func() { defer e.wg.Done(); _ = e.Bus.Subscribe(e.ctx, "webhook-fanout", e.FanOut.Handle) }()
 	go func() { defer e.wg.Done(); e.Dispatcher.Run(e.ctx) }()

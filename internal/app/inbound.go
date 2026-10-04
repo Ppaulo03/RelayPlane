@@ -76,19 +76,8 @@ func (s *InboundService) Handle(ctx context.Context, providerKey string, req por
 			return res, verr
 		}
 
-		// 4. deduplicate (two-phase: begin -> publish -> commit)
+		// 4. build the canonical event
 		key := events.DedupeKey(in.InstanceID, in.Type, in.ProviderMessageID, in.State)
-		out, err := s.d.Repos.Dedup.Begin(ictx, key, inst.ID, s.d.Cfg.DedupTTL, s.d.Cfg.DedupInflight)
-		if err != nil {
-			return res, err
-		}
-		if out == ports.DedupDuplicate {
-			s.d.Metrics.InboundDuplicates.Inc()
-			res.Duplicates++
-			continue
-		}
-
-		// 5. publish the canonical event
 		ts := in.Timestamp
 		if ts.IsZero() {
 			ts = s.d.now()
@@ -100,17 +89,19 @@ func (s *InboundService) Handle(ctx context.Context, providerKey string, req por
 			SourceAssignment: &events.SourceAssignment{NodeID: inst.NodeID, Epoch: inst.AssignmentEpoch}, ObservedAt: &observed}
 		// an attachment is resolved (downloaded and stored, or rejected) BEFORE the event is delivered: a message with
 		// media is queued and the ingestor publishes it, so the tenant never sees a half-resolved media
-		if job := s.admitMedia(inst, &ev, in); job != nil {
-			if _, err := s.d.Repos.InboundMedia.Enqueue(ictx, *job); err != nil {
-				_ = s.d.Repos.Dedup.Abort(ictx, key)
-				return res, fmt.Errorf("queue inbound media: %w", err)
-			}
-		} else if err := s.d.Bus.Publish(ictx, ev); err != nil {
-			_ = s.d.Repos.Dedup.Abort(ictx, key) // let the provider's retry publish it
-			return res, fmt.Errorf("publish event: %w", err)
+		job := s.admitMedia(inst, &ev, in)
+
+		// 5. ACCEPT DURABLY: the deduplication key and the event (or its attachment job) are written in ONE transaction. A 200
+		// below means the event can no longer be lost: the outbox publisher puts it on the bus (at-least-once, deterministic
+		// event id). If this fails the provider retries and nothing was half recorded.
+		out, err := s.d.Repos.Dedup.Accept(ictx, key, s.d.Cfg.DedupTTL, ev, job)
+		if err != nil {
+			return res, fmt.Errorf("accept inbound event: %w", err)
 		}
-		if err := s.d.Repos.Dedup.Commit(ictx, key); err != nil {
-			s.d.Log.WarnContext(ictx, "dedupe commit failed (event may be re-published with the same id)", "error", err)
+		if out == ports.DedupDuplicate {
+			s.d.Metrics.InboundDuplicates.Inc()
+			res.Duplicates++
+			continue
 		}
 		s.d.Metrics.InboundEventsTotal.WithLabelValues(string(in.Type)).Inc()
 		res.Published++

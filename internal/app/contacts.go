@@ -71,6 +71,11 @@ func (s *ContactService) Erase(ctx context.Context, tenantID, rawNumber string) 
 	if rep.EventsDeleted, err = s.d.Repos.Deliveries.EraseContact(ctx, tenantID, number); err != nil {
 		return nil, fmt.Errorf("erase events: %w", err)
 	}
+	waiting, err := s.d.Repos.Events.EraseContact(ctx, tenantID, number) // accepted, not yet fanned out
+	if err != nil {
+		return nil, fmt.Errorf("erase queued events: %w", err)
+	}
+	rep.EventsDeleted += waiting
 	jobs, err := s.d.Repos.InboundMedia.EraseContact(ctx, tenantID, number)
 	if err != nil {
 		return nil, fmt.Errorf("erase attachment jobs: %w", err)

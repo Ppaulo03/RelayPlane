@@ -37,6 +37,7 @@ const (
 
 // Env is a full in-memory RelayPlane.
 type Env struct {
+	outboxOnce sync.Once
 	T          *testing.T
 	Store      *memory.Store // nil with real infrastructure
 	Repos      ports.Repositories
@@ -236,8 +237,22 @@ func (e *Env) StartWorkers(n int) {
 	}
 }
 
-// StartOutbox runs the outbox dispatcher loop (what the reconciler binary does every second).
+// Flush publishes, now, the events waiting in the event outbox (an accepted inbound event reaches the bus through it).
+func (e *Env) Flush() {
+	for {
+		n, err := e.App.EventOutbox.PublishPending(e.ctx, 100)
+		if err != nil || n == 0 {
+			return
+		}
+	}
+}
+
+// StartOutbox runs the outbox dispatcher loop (what the reconciler binary does every second). Calling it twice starts one loop.
 func (e *Env) StartOutbox() {
+	e.outboxOnce.Do(e.startOutbox)
+}
+
+func (e *Env) startOutbox() {
 	e.wg.Add(1)
 	go func() {
 		defer e.wg.Done()
@@ -263,6 +278,7 @@ func (e *Env) StartMedia() {
 
 // StartProjector launches the event projector consumer.
 func (e *Env) StartProjector() {
+	e.StartOutbox() // inbound events reach the bus through the outbox, as in production
 	e.wg.Add(1)
 	go func() { defer e.wg.Done(); _ = e.Bus.Subscribe(e.ctx, "projector", e.Projector.Handle) }()
 }

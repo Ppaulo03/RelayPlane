@@ -27,6 +27,11 @@ func emitOutbound(ctx context.Context, tx pgx.Tx, m *messaging.Message) error {
 		return err
 	}
 	ev := messaging.OutboundStatusEvent(*m, provider)
+	return insertEventOutbox(ctx, tx, ev)
+}
+
+// insertEventOutbox queues a tenant-facing event for publication, inside the caller's transaction.
+func insertEventOutbox(ctx context.Context, tx pgx.Tx, ev events.Event) error {
 	raw, err := json.Marshal(ev)
 	if err != nil {
 		return err
@@ -75,6 +80,21 @@ func (r eventsRepo) MarkPublished(ctx context.Context, ids []string, at time.Tim
 func (r eventsRepo) Purge(ctx context.Context, before time.Time) (int64, error) {
 	tag, err := r.s.pool.Exec(ctx, `DELETE FROM event_outbox WHERE published_at IS NOT NULL AND published_at < $1`, before)
 	return tag.RowsAffected(), err
+}
+
+func (r eventsRepo) EraseContact(ctx context.Context, tenantID, number string) (int64, error) {
+	tag, err := r.s.pool.Exec(ctx, `DELETE FROM event_outbox WHERE tenant_id=$1 AND (event #>> '{payload,from}') = $2`, tenantID, number)
+	return tag.RowsAffected(), err
+}
+
+func (r eventsRepo) PendingStats(ctx context.Context) (int64, time.Duration, error) {
+	var n int64
+	var age *float64
+	err := r.s.pool.QueryRow(ctx, `SELECT count(*), extract(epoch FROM now() - min(created_at)) FROM event_outbox WHERE published_at IS NULL`).Scan(&n, &age)
+	if err != nil || age == nil {
+		return n, 0, err
+	}
+	return n, time.Duration(*age * float64(time.Second)), nil
 }
 
 // ---- subscriptions ----

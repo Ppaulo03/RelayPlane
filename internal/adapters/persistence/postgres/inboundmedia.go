@@ -8,6 +8,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/relayplane/relayplane/internal/core/errs"
 	"github.com/relayplane/relayplane/internal/core/events"
 	"github.com/relayplane/relayplane/internal/core/media"
@@ -34,6 +35,20 @@ func scanInbound(row pgx.Row) (*media.InboundJob, error) {
 }
 
 func (r inboundMediaRepo) Enqueue(ctx context.Context, j media.InboundJob) (bool, error) {
+	return execInboundMedia(ctx, r.s.pool, j)
+}
+
+type execer interface {
+	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
+}
+
+// insertInboundMedia queues an attachment job inside the caller's transaction.
+func insertInboundMedia(ctx context.Context, tx pgx.Tx, j media.InboundJob) error {
+	_, err := execInboundMedia(ctx, tx, j)
+	return err
+}
+
+func execInboundMedia(ctx context.Context, db execer, j media.InboundJob) (bool, error) {
 	ev, err := json.Marshal(j.Event)
 	if err != nil {
 		return false, err
@@ -48,7 +63,7 @@ func (r inboundMediaRepo) Enqueue(ctx context.Context, j media.InboundJob) (bool
 	if j.NextAttemptAt.IsZero() {
 		j.NextAttemptAt = j.CreatedAt
 	}
-	tag, err := r.s.pool.Exec(ctx, `INSERT INTO inbound_media(id,tenant_id,instance_id,event_id,event,ref,next_attempt_at,created_at)
+	tag, err := db.Exec(ctx, `INSERT INTO inbound_media(id,tenant_id,instance_id,event_id,event,ref,next_attempt_at,created_at)
 		VALUES($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT (event_id) DO NOTHING`,
 		j.ID, j.TenantID, j.InstanceID, j.EventID, ev, ref, j.NextAttemptAt, j.CreatedAt)
 	if err != nil {
