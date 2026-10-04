@@ -92,6 +92,7 @@ func RepositoryContract(t *testing.T, factory RepoFactory) {
 	t.Run("Subscriptions", func(t *testing.T) { subscriptionsContract(t, factory) })
 	t.Run("Deliveries", func(t *testing.T) { deliveriesContract(t, factory) })
 	t.Run("DeliverySequence", func(t *testing.T) { deliverySequenceContract(t, factory) })
+	t.Run("InboundMedia", func(t *testing.T) { inboundMediaContract(t, factory) })
 }
 
 func tenantsContract(t *testing.T, f RepoFactory) {

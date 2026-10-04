@@ -42,6 +42,7 @@ type Store struct {
 	subs        map[string]*subscription.Subscription
 	deliveries  map[string]*deliveryRow
 	deliverySeq map[string]int64 // "subscription|instance" -> last sequence
+	inbound     map[string]*inboundRow
 
 	// BeforeCommit lets failure tests inject a fault into multi-step writes
 	// (simulating a transaction rollback). Return an error to abort.
@@ -71,6 +72,7 @@ func NewStore() *Store {
 		subs:        map[string]*subscription.Subscription{},
 		deliveries:  map[string]*deliveryRow{},
 		deliverySeq: map[string]int64{},
+		inbound:     map[string]*inboundRow{},
 		nextSeq:     map[string]int64{},
 	}
 }
@@ -81,7 +83,7 @@ func (s *Store) Repositories() ports.Repositories {
 		Tenants: tenantRepo{s}, Instances: instanceRepo{s}, Nodes: nodeRepo{s},
 		Operations: opRepo{s}, Messages: msgRepo{s}, Blobs: blobRepo{s},
 		Idempotency: idemRepo{s}, Dedup: dedupRepo{s},
-		Events: eventsRepo{s}, Subscriptions: subsRepo{s}, Deliveries: deliveriesRepo{s},
+		Events: eventsRepo{s}, Subscriptions: subsRepo{s}, Deliveries: deliveriesRepo{s}, InboundMedia: inboundMediaRepo{s},
 	}
 }
 

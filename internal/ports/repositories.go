@@ -14,4 +14,6 @@ type Repositories struct {
 	Events        EventOutboxRepository
 	Subscriptions SubscriptionRepository
 	Deliveries    DeliveryRepository
+	// InboundMedia is the durable work queue that resolves the attachments of inbound messages before they are delivered.
+	InboundMedia InboundMediaRepository
 }

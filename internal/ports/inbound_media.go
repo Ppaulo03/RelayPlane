@@ -1,0 +1,34 @@
+package ports
+
+import (
+	"context"
+	"time"
+
+	"github.com/relayplane/relayplane/internal/core/events"
+	"github.com/relayplane/relayplane/internal/core/media"
+)
+
+// InboundMediaRepository is the work queue of inbound attachments. Every method is safe to call from several workers.
+type InboundMediaRepository interface {
+	// Enqueue records the job at StageDownload. It is idempotent per EventID: a provider retry of the same webhook
+	// creates nothing and reports created=false.
+	Enqueue(ctx context.Context, j media.InboundJob) (created bool, err error)
+	// ClaimDue leases up to limit jobs of stage DOWNLOAD or PUBLISH whose next_attempt_at has passed, oldest first.
+	ClaimDue(ctx context.Context, now time.Time, lease time.Duration, limit int) ([]media.InboundJob, error)
+	// Resolve records the outcome: the final event and StagePublish. Attempts and lease are reset.
+	Resolve(ctx context.Context, id string, ev events.Event) error
+	// Retry counts a failed attempt and schedules the next one (the lease is released).
+	Retry(ctx context.Context, id string, next time.Time, lastErr string) error
+	// Done marks the job as published.
+	Done(ctx context.Context, id string, at time.Time) error
+	// Purge deletes jobs finished before `before`.
+	Purge(ctx context.Context, before time.Time) (int64, error)
+	// Counts feeds the gauges.
+	Counts(ctx context.Context, now time.Time) (InboundMediaCounts, error)
+}
+
+// InboundMediaCounts is a snapshot for metrics/alerts.
+type InboundMediaCounts struct {
+	Download, Publish int64
+	OldestPending     time.Duration
+}
