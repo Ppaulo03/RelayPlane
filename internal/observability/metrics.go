@@ -83,7 +83,7 @@ func NewMetrics() *Metrics {
 	m.ReconciliationDrift = prometheus.NewCounter(prometheus.CounterOpts{Name: "relayplane_reconciliation_drift_total", Help: "Instances found with desired != observed."})
 	m.RateLimitWait = prometheus.NewHistogram(prometheus.HistogramOpts{Name: "relayplane_rate_limit_wait_seconds", Help: "Time sends were delayed by rate limiting.", Buckets: prometheus.ExponentialBuckets(0.05, 2, 12)})
 	m.EventDeliveryLag = prometheus.NewHistogramVec(prometheus.HistogramOpts{Name: "relayplane_event_delivery_lag_seconds",
-		Help:    "Seconds from the moment RelayPlane learned of an event to the consumer's 2xx answer. attempt=first is the healthy-path latency (target p95 < 2s); attempt=retry includes the backoff.",
+		Help:    "Seconds from the moment RelayPlane learned of an event to the consumer's 2xx answer. attempt=first is the healthy-path latency (target p95 < 2s); attempt=recovered waited for the lease of a dead worker; attempt=retry includes the backoff.",
 		Buckets: []float64{0.025, 0.05, 0.1, 0.25, 0.5, 1, 2, 5, 10, 30, 60, 300}}, []string{"event_type", "attempt"})
 	m.RetentionApplied = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "relayplane_retention_applied_total", Help: "Records anonymized or deleted by retention."}, []string{"kind"})
 	m.RateLimited = prometheus.NewCounter(prometheus.CounterOpts{Name: "relayplane_api_rate_limited_total", Help: "API requests refused with 429."})

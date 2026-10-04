@@ -76,12 +76,14 @@ type Dispatcher struct {
 	// Rand returns a number in [0,1) for retry jitter (default math/rand).
 	Rand func() float64
 
-	BatchSize      int           // deliveries claimed per pass (default 50)
-	Concurrency    int           // parallel POSTs (default 8)
-	Lease          time.Duration // how long a claimed delivery is exclusive (default 1m)
+	BatchSize   int // deliveries claimed per pass (default 4x Concurrency: 32 POSTs of at most 5 s on 8 workers finish in 20 s, inside the 30 s lease)
+	Concurrency int // parallel POSTs (default 8)
+	// Lease is how long a claimed delivery is exclusive (default 30s). It is also how long the deliveries of a worker that DIED wait
+	// for another one (and, through the per-instance order, everything behind them): keep it a few times the POST timeout, no more.
+	Lease          time.Duration
 	RequestTimeout time.Duration // per POST (default 5s)
 	Poll           time.Duration // pause when idle (default 250ms)
-	// MaxInFlightPerSubscription caps the POSTs one subscription can have going at the same time (default 8), so a
+	// MaxInFlightPerSubscription caps the POSTs one subscription can have going at the same time (default 32), so a
 	// consumer that answers slowly cannot take every dispatcher slot from the others.
 	MaxInFlightPerSubscription int
 
@@ -96,14 +98,14 @@ func (d *Dispatcher) now() time.Time {
 }
 
 func (d *Dispatcher) defaults() {
-	if d.BatchSize <= 0 {
-		d.BatchSize = 50
-	}
 	if d.Concurrency <= 0 {
 		d.Concurrency = 8
 	}
+	if d.BatchSize <= 0 {
+		d.BatchSize = 4 * d.Concurrency
+	}
 	if d.Lease <= 0 {
-		d.Lease = time.Minute
+		d.Lease = 30 * time.Second
 	}
 	if d.RequestTimeout <= 0 {
 		d.RequestTimeout = 5 * time.Second
@@ -112,7 +114,7 @@ func (d *Dispatcher) defaults() {
 		d.Poll = 250 * time.Millisecond
 	}
 	if d.MaxInFlightPerSubscription <= 0 {
-		d.MaxInFlightPerSubscription = 8
+		d.MaxInFlightPerSubscription = 32
 	}
 	if d.Rand == nil {
 		d.Rand = rand.Float64
@@ -211,6 +213,7 @@ func (d *Dispatcher) process(ctx context.Context, dl subscription.Delivery) {
 		subscription.HeaderTimestamp: strconv.FormatInt(ts, 10),
 		subscription.HeaderSignature: subscription.SignatureHeader(sigs...),
 		subscription.HeaderAttempt:   strconv.Itoa(dl.Attempts + 1),
+		subscription.HeaderClaim:     strconv.Itoa(max(dl.Claims, 1)),
 	}}
 	// link the consumer's trace to ours: the event's own trace (a message status carries the trace of the send), or this
 	// delivery's span when the event started at the provider (an inbound message has no upstream trace)
@@ -231,9 +234,14 @@ func (d *Dispatcher) process(ctx context.Context, dl subscription.Delivery) {
 			return
 		}
 		d.Metrics.WebhookDeliveries.WithLabelValues("delivered").Inc()
+		// first: the healthy path. recovered: no failed attempt, but a worker died holding the delivery and its lease had to
+		// expire (that latency is the lease, bounded and reported apart). retry: it failed and was sent again after a backoff.
 		attempt := "retry"
-		if dl.Attempts == 0 {
+		switch {
+		case dl.Attempts == 0 && dl.Claims <= 1:
 			attempt = "first"
+		case dl.Attempts == 0:
+			attempt = "recovered"
 		}
 		// the origin of an outbound status is the database clock: a few hundred milliseconds of skew against this host must
 		// not make the sample disappear, so a "negative" lag counts as zero (the skew is the measurement error)

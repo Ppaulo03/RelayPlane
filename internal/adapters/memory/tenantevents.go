@@ -299,6 +299,7 @@ func (r deliveriesRepo) ClaimDueWith(_ context.Context, now time.Time, lease tim
 			break
 		}
 		d.leaseUntil = now.Add(lease)
+		d.Claims++
 		inFlight[key] = true
 		perSub[d.SubscriptionID]++
 		out = append(out, d.Delivery)
@@ -375,6 +376,9 @@ func (r deliveriesRepo) Postpone(_ context.Context, id string, until time.Time) 
 		return err
 	}
 	d.NextAttemptAt, d.leaseUntil = until, time.Time{}
+	if d.Claims > 0 {
+		d.Claims-- // postponing is not a claim that led anywhere
+	}
 	return nil
 }
 

@@ -24,6 +24,7 @@ type Received struct {
 	Signature   string
 	Timestamp   int64
 	Attempt     string
+	Claim       string
 	Traceparent string
 	At          time.Time
 	Status      int // what the endpoint answered
@@ -52,7 +53,7 @@ func (r *Receiver) Send(_ context.Context, req ports.WebhookRequest) (int, error
 	ts, _ := strconv.ParseInt(req.Headers[subscription.HeaderTimestamp], 10, 64)
 	rec := Received{URL: req.URL, EventID: req.Headers[subscription.HeaderEventID], EventType: req.Headers[subscription.HeaderEventType],
 		Body: append([]byte(nil), req.Body...), Signature: req.Headers[subscription.HeaderSignature], Timestamp: ts,
-		Attempt: req.Headers[subscription.HeaderAttempt], Traceparent: req.Headers["traceparent"], At: time.Now()}
+		Attempt: req.Headers[subscription.HeaderAttempt], Claim: req.Headers[subscription.HeaderClaim], Traceparent: req.Headers["traceparent"], At: time.Now()}
 	if err := eventschema.Validate(req.Body); err != nil {
 		r.mu.Lock()
 		r.schemaErrs = append(r.schemaErrs, fmt.Sprintf("%v: %s", err, req.Body))

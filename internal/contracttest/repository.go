@@ -96,6 +96,7 @@ func RepositoryContract(t *testing.T, factory RepoFactory) {
 	t.Run("DeliveryBackpressure", func(t *testing.T) { deliveryBackpressureContract(t, factory) })
 	t.Run("DeliveryOrder", func(t *testing.T) { deliveryOrderContract(t, factory) })
 	t.Run("Erasure", func(t *testing.T) { erasureContract(t, factory) })
+	t.Run("DeliveryClaims", func(t *testing.T) { deliveryClaimsContract(t, factory) })
 	t.Run("APIKeys", func(t *testing.T) { apiKeysContract(t, factory) })
 }
 

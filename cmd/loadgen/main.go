@@ -280,6 +280,9 @@ func main() {
 		bad = bad || len(miss) > 0 || sink.badSignatures() > 0
 		if n, p50, p95, p99 := sink.lagReport(); n > 0 {
 			fmt.Printf("event delivery lag (%d first-attempt status events): p50=%v p95=%v p99=%v\n", n, p50.Round(time.Millisecond), p95.Round(time.Millisecond), p99.Round(time.Millisecond))
+			if rn, longest := sink.recoveredReport(); rn > 0 {
+				fmt.Printf("%d deliveries waited for the lease of a killed worker (longest %v): crash recovery, outside the healthy-path target\n", rn, longest.Round(time.Millisecond))
+			}
 			if *maxLagP95 > 0 && p95 > *maxLagP95 {
 				fmt.Printf("FAIL: p95 event delivery lag %v is above the limit %v\n", p95.Round(time.Millisecond), *maxLagP95)
 				bad = true

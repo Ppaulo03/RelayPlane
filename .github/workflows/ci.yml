@@ -56,6 +56,8 @@ jobs:
         with:
           go-version-file: go.mod
       - run: make test-load-stack WORKERS=4 INSTANCES=40 MESSAGES=2000 CHAOS_KILL=1
+      # the healthy path, no kills: p95 of the delivery lag measured by the dispatchers must stay under 2 s
+      - run: make test-load-stack WORKERS=4 INSTANCES=40 MESSAGES=2000 CHAOS_KILL=0 LOAD_MAX_EVENT_LAG_P95=2s
 
   sandbox:
     name: sandbox (simulator + python quickstart)

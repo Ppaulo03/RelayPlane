@@ -29,7 +29,8 @@ type webhookSink struct {
 	statuses   map[string]map[string]struct{} // message id -> statuses seen
 	badSig     int
 	failed     int
-	lags       []time.Duration // first-attempt outbound status events: arrival minus the moment the status changed
+	lags       []time.Duration // healthy-path outbound status events (first attempt, first claim): arrival minus the moment the status changed
+	recovered  []time.Duration // first attempts that had to wait for the lease of a dead worker
 }
 
 func startSink(listen string, failRate float64) (*webhookSink, error) {
@@ -107,7 +108,12 @@ func (s *webhookSink) handle(w http.ResponseWriter, r *http.Request) {
 			if lag < 0 {
 				lag = 0
 			}
-			s.lags = append(s.lags, lag)
+			if r.Header.Get(subscription.HeaderClaim) == "1" {
+				s.lags = append(s.lags, lag)
+			} else {
+				// a worker died holding this delivery: it waited for the lease, which is reported apart from the healthy path
+				s.recovered = append(s.recovered, lag)
+			}
 		}
 		if s.statuses[ev.Payload.MessageID] == nil {
 			s.statuses[ev.Payload.MessageID] = map[string]struct{}{}
@@ -157,4 +163,16 @@ func (s *webhookSink) lagReport() (n int, p50, p95, p99 time.Duration) {
 	sort.Slice(lags, func(i, j int) bool { return lags[i] < lags[j] })
 	at := func(q float64) time.Duration { return lags[min(len(lags)-1, int(q*float64(len(lags))))] }
 	return len(lags), at(0.50), at(0.95), at(0.99)
+}
+
+// recoveredReport returns how many deliveries waited for a dead worker's lease and the longest wait.
+func (s *webhookSink) recoveredReport() (n int, longest time.Duration) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, l := range s.recovered {
+		if l > longest {
+			longest = l
+		}
+	}
+	return len(s.recovered), longest
 }

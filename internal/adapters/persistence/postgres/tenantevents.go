@@ -198,14 +198,14 @@ func (r subsRepo) CountByTenant(ctx context.Context, tenantID string) (int, erro
 
 type deliveriesRepo struct{ s *Store }
 
-const delCols = `id,subscription_id,tenant_id,instance_id,event_id,event_type,event,sequence,status,attempts,next_attempt_at,last_error,created_at,delivered_at`
+const delCols = `id,subscription_id,tenant_id,instance_id,event_id,event_type,event,sequence,claims,status,attempts,next_attempt_at,last_error,created_at,delivered_at`
 
 func scanDelivery(row pgx.Row) (*subscription.Delivery, error) {
 	var d subscription.Delivery
 	var raw []byte
 	var typ, st string
 	var delivered *time.Time
-	if err := row.Scan(&d.ID, &d.SubscriptionID, &d.TenantID, &d.InstanceID, &d.EventID, &typ, &raw, &d.Sequence, &st, &d.Attempts, &d.NextAttemptAt, &d.LastError, &d.CreatedAt, &delivered); err != nil {
+	if err := row.Scan(&d.ID, &d.SubscriptionID, &d.TenantID, &d.InstanceID, &d.EventID, &typ, &raw, &d.Sequence, &d.Claims, &st, &d.Attempts, &d.NextAttemptAt, &d.LastError, &d.CreatedAt, &delivered); err != nil {
 		return nil, notFound(err)
 	}
 	d.EventType, d.Status, d.DeliveredAt = events.Type(typ), subscription.DeliveryStatus(st), zeroIfNil(delivered)
@@ -290,8 +290,12 @@ WITH heads AS (
 ), locked AS (
     SELECT w.id FROM webhook_deliveries w JOIN picked h ON h.id=w.id ORDER BY h.created_at, h.id FOR UPDATE OF w SKIP LOCKED
 )
-UPDATE webhook_deliveries x SET lease_until = $1 + make_interval(secs => $2)
-FROM locked WHERE x.id = locked.id AND (x.lease_until IS NULL OR x.lease_until <= $1)
+UPDATE webhook_deliveries x SET lease_until = $1 + make_interval(secs => $2), claims = x.claims + 1
+FROM locked WHERE x.id = locked.id
+  -- the claimers share no lock until here: another one may have FINISHED this delivery since this statement's snapshot (delivered it,
+  -- or scheduled a retry for later, both of which clear the lease). The row is re-read at update time, so the whole eligibility is
+  -- checked again: a lease alone would revive a delivered event or ignore a retry backoff.
+  AND x.status = 'PENDING' AND x.next_attempt_at <= $1 AND (x.lease_until IS NULL OR x.lease_until <= $1)
 RETURNING `+prefixCols("x", delCols), now, lease.Seconds(), limit, perSubscription)
 	if err != nil {
 		return nil, err
@@ -356,7 +360,7 @@ func (r deliveriesRepo) MarkDead(ctx context.Context, id string, lastErr string)
 }
 
 func (r deliveriesRepo) Postpone(ctx context.Context, id string, until time.Time) error {
-	return r.exec(ctx, `UPDATE webhook_deliveries SET next_attempt_at=$2, lease_until=NULL WHERE id=$1`, id, until)
+	return r.exec(ctx, `UPDATE webhook_deliveries SET next_attempt_at=$2, lease_until=NULL, claims=GREATEST(claims-1,0) WHERE id=$1`, id, until) // postponing is not a claim that led anywhere
 }
 
 func (r deliveriesRepo) List(ctx context.Context, tenantID, subscriptionID string, status subscription.DeliveryStatus, limit int) ([]subscription.Delivery, error) {
