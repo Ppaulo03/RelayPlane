@@ -92,7 +92,23 @@ type apiResponse struct {
 }
 
 // do performs a request against a node and translates failures.
+// callLimits overrides the defaults of one call (a media download is slow and large).
+type callLimits struct {
+	timeout  time.Duration
+	maxBytes int64
+}
+
 func (c *client) do(ctx context.Context, nodeID, method, path string, query url.Values, in any, kind opKind, authenticated bool) (*apiResponse, error) {
+	return c.doWith(ctx, nodeID, method, path, query, in, kind, authenticated, callLimits{})
+}
+
+func (c *client) doWith(ctx context.Context, nodeID, method, path string, query url.Values, in any, kind opKind, authenticated bool, lim callLimits) (*apiResponse, error) {
+	if lim.timeout <= 0 {
+		lim.timeout = c.cfg.Timeout
+	}
+	if lim.maxBytes <= 0 {
+		lim.maxBytes = 8 << 20
+	}
 	var node NodeInfo
 	if nodeID != "" {
 		var err error
@@ -112,7 +128,7 @@ func (c *client) do(ctx context.Context, nodeID, method, path string, query url.
 		}
 		body = bytes.NewReader(raw)
 	}
-	ctx, cancel := context.WithTimeout(ctx, c.cfg.Timeout)
+	ctx, cancel := context.WithTimeout(ctx, lim.timeout)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, method, u, body)
 	if err != nil {
@@ -129,7 +145,10 @@ func (c *client) do(ctx context.Context, nodeID, method, path string, query url.
 		return nil, transportError(err, kind)
 	}
 	defer resp.Body.Close()
-	raw, err := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, lim.maxBytes+1))
+	if err == nil && int64(len(raw)) > lim.maxBytes {
+		return nil, fmt.Errorf("%w: response larger than %d bytes", errs.ErrPayloadTooLarge, lim.maxBytes)
+	}
 	if err != nil { // the response was cut short: the call may have been executed
 		return nil, transportError(err, kind)
 	}

@@ -1,6 +1,7 @@
 package v2_test
 
 import (
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/relayplane/relayplane/internal/adapters/providers/evolution/v2"
 	"github.com/relayplane/relayplane/internal/contracttest"
+	"github.com/relayplane/relayplane/internal/core/errs"
 	"github.com/relayplane/relayplane/internal/core/events"
 	"github.com/relayplane/relayplane/internal/core/messaging"
 	"github.com/relayplane/relayplane/internal/core/ownership"
@@ -229,5 +231,72 @@ func TestSimulatorControlAPIAndFaults(t *testing.T) {
 	}
 	if c := call("GET", "/instance/fetchInstances", simKey); c != 200 {
 		t.Errorf("faults are consumed: %d", c)
+	}
+}
+
+// An attachment goes: user message -> the REAL normalizer (description + key-bearing reference) -> the REAL DownloadMedia
+// -> the simulator's getBase64FromMediaMessage, which, like the real node, is handed the message instead of finding it.
+func TestInboundAttachmentIsDownloadedThroughTheRealAdapter(t *testing.T) {
+	const secret = "whsec"
+	g, gw := newGateway(t, secret)
+	sim := simulator.New(simulator.Config{APIKey: simKey})
+	srv := httptest.NewServer(sim.Handler())
+	defer srv.Close()
+	p := v2.New(v2.Config{Nodes: v2.StaticNodes{"node-01": {BaseURL: srv.URL, APIKey: simKey}}, WebhookBaseURL: gw.URL, WebhookSecret: secret})
+	a := ownership.Assignment{InstanceID: "inst_media", NodeID: "node-01", Epoch: 1}
+	ctx := t.Context()
+	if _, err := p.CreateInstance(ctx, ports.CreateInstanceRequest{Assignment: a}); err != nil {
+		t.Fatal(err)
+	}
+	var dl ports.MediaDownloader = p
+	content := []byte("OggS the user's voice note")
+
+	if _, err := sim.Receive(a.InstanceID, simulator.Inbound{Type: "audio", Seconds: 7, Content: content, ID: "SIM-AUD"}); err != nil {
+		t.Fatal(err)
+	}
+	ev := g.last()
+	pl := ev.Payload.(events.MessageReceivedPayload)
+	if ev.Media == nil || pl.Media == nil || pl.Media.Kind != "audio" || pl.Media.Size != int64(len(content)) || pl.Media.Seconds != 7 {
+		t.Fatalf("description (the Long-encoded fileLength must be understood): %+v", pl.Media)
+	}
+	got, err := dl.DownloadMedia(ctx, a, ev.Media.Ref, 1<<20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := io.ReadAll(got.Body)
+	if string(raw) != string(content) || got.Size != int64(len(content)) || got.ContentType != "audio/ogg; codecs=opus" {
+		t.Fatalf("download: %q %+v", raw, got)
+	}
+
+	// a limit smaller than the content: refused, not truncated
+	if _, err := dl.DownloadMedia(ctx, a, ev.Media.Ref, 5); !errors.Is(err, errs.ErrPayloadTooLarge) {
+		t.Errorf("over the limit: %v", err)
+	}
+
+	// an attachment WhatsApp no longer has: the node answers 400 and the adapter calls it a rejection (permanent-ish)
+	if _, err := sim.Receive(a.InstanceID, simulator.Inbound{Type: "image", Content: []byte("jpg"), FailDownloads: 1, ID: "SIM-IMG"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := dl.DownloadMedia(ctx, a, g.last().Media.Ref, 1<<20); !errors.Is(err, errs.ErrProviderRejected) {
+		t.Errorf("an attachment the node cannot fetch: %v", err)
+	}
+	if _, err := dl.DownloadMedia(ctx, a, g.last().Media.Ref, 1<<20); err != nil {
+		t.Errorf("it can be fetched afterwards: %v", err)
+	}
+
+	// an announced size above 4 GiB survives the Long encoding (low/high words)
+	if _, err := sim.Receive(a.InstanceID, simulator.Inbound{Type: "video", DeclaredSize: 5 << 30, ID: "SIM-VID"}); err != nil {
+		t.Fatal(err)
+	}
+	if m := g.last().Payload.(events.MessageReceivedPayload).Media; m.Size != 5<<30 {
+		t.Errorf("announced size: %d", m.Size)
+	}
+
+	// a plain text message has no attachment
+	if _, err := sim.Receive(a.InstanceID, simulator.Inbound{Text: "oi"}); err != nil {
+		t.Fatal(err)
+	}
+	if ev = g.last(); ev.Media != nil || ev.Payload.(events.MessageReceivedPayload).Media != nil {
+		t.Errorf("text has no media: %+v", ev)
 	}
 }

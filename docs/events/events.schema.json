@@ -50,7 +50,23 @@
             "text": {"type": "string", "description": "Text, or the caption of a media message."},
             "group": {"type": "boolean"},
             "chat_id": {"type": "string", "description": "Group JID (<id>@g.us); present for group messages only."},
-            "sender_lid": {"type": "string", "description": "Opaque WhatsApp LID of the sender, when the provider addressed them that way."}
+            "sender_lid": {"type": "string", "description": "Opaque WhatsApp LID of the sender, when the provider addressed them that way."},
+            "media": {
+              "type": "object",
+              "description": "The attachment, present when the message has one. The event is delivered only after RelayPlane resolved it: status says whether the bytes are available.",
+              "properties": {
+                "media_id": {"type": "string", "minLength": 1, "description": "Download the bytes with GET /api/v1/media/{media_id}/content (status READY only)."},
+                "status": {"enum": ["READY", "REJECTED", "FAILED"], "description": "READY: stored and downloadable. REJECTED: deliberately not downloaded (see reason). FAILED: the provider could not deliver the bytes."},
+                "reason": {"enum": ["too_large", "type_not_allowed", "unsupported", "expired", "download_failed"], "description": "Why a media is not READY."},
+                "kind": {"enum": ["image", "audio", "video", "document", "sticker"]},
+                "mime_type": {"type": "string"},
+                "size": {"type": "integer", "minimum": 0, "description": "Bytes. The real size when READY, otherwise what the sender's client declared."},
+                "filename": {"type": "string"},
+                "seconds": {"type": "integer", "minimum": 0, "description": "Duration of audio and video."}
+              },
+              "required": ["media_id", "status", "kind"],
+              "additionalProperties": false
+            }
           },
           "required": ["provider_message_id", "from", "type"],
           "additionalProperties": false

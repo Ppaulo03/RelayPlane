@@ -149,9 +149,15 @@ func (w Webhook) Normalize(r ports.InboundRequest) ([]events.Inbound, error) {
 				chatID = d.Key.RemoteJid
 			}
 			typ, text := messageContent(d)
-			out = append(out, events.Inbound{InstanceID: env.Instance, Type: events.MessageReceived, ProviderMessageID: d.Key.ID, Timestamp: ts,
+			inMedia := mediaOf(d)
+			var payloadMedia *events.MessageMedia
+			if inMedia != nil {
+				m := inMedia.Media
+				payloadMedia = &m
+			}
+			out = append(out, events.Inbound{InstanceID: env.Instance, Type: events.MessageReceived, ProviderMessageID: d.Key.ID, Timestamp: ts, Media: inMedia,
 				Payload: events.MessageReceivedPayload{ProviderMessageID: d.Key.ID, ReplyToProviderMessageID: replyTo(d), From: from, PushName: d.PushName,
-					Type: typ, Text: text, Group: group, ChatID: chatID, SenderLID: senderLID}})
+					Type: typ, Text: text, Group: group, ChatID: chatID, SenderLID: senderLID, Media: payloadMedia}})
 		}
 		return out, nil
 

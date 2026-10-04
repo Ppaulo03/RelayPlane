@@ -42,7 +42,8 @@ type FakeProvider struct {
 	// tests use it to interleave other operations at an exact point.
 	BeforeCall func(method string, a ownership.Assignment)
 
-	calls []Call
+	calls         []Call
+	mediaFailures map[string]int
 }
 
 // Call is one recorded provider call.
