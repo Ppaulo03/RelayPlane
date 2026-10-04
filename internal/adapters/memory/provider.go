@@ -43,6 +43,8 @@ type FakeProvider struct {
 	BeforeCall func(method string, a ownership.Assignment)
 
 	calls         []Call
+	presences     []FakePresence
+	reads         []FakeRead
 	mediaFailures map[string]int
 }
 

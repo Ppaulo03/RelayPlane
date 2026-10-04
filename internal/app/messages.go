@@ -38,6 +38,18 @@ type SendPayload struct {
 	MediaID  string `json:"media_id,omitempty"`
 	Caption  string `json:"caption,omitempty"`
 	Filename string `json:"filename,omitempty"`
+	// ReplyTo quotes an earlier message. Give EITHER the provider id of a message (typically the inbound one the user
+	// wrote: message.received -> provider_message_id) with its text for the preview, OR the id of a message YOU sent
+	// through RelayPlane (message_id: RelayPlane fills in the rest).
+	ReplyTo *SendReplyTo `json:"reply_to,omitempty"`
+}
+
+// SendReplyTo selects the message to quote.
+type SendReplyTo struct {
+	ProviderMessageID string `json:"provider_message_id,omitempty"`
+	Text              string `json:"text,omitempty"`
+	FromMe            bool   `json:"from_me,omitempty"`
+	MessageID         string `json:"message_id,omitempty"`
 }
 
 // SendResult is the (replayable) accept response.
@@ -100,6 +112,11 @@ func (s *MessageService) send(ctx context.Context, tenantID, msgID string, in Se
 	}
 
 	payload := messaging.Payload{Text: in.Payload.Text, Caption: in.Payload.Caption, Filename: in.Payload.Filename}
+	reply, err := s.resolveReply(ctx, tenantID, inst.ID, in.Payload.ReplyTo)
+	if err != nil {
+		return SendResult{}, err
+	}
+	payload.ReplyTo = reply
 	if in.Type.IsMedia() {
 		blob, err := s.d.Repos.Blobs.Get(ctx, in.Payload.MediaID)
 		if err != nil || blob.TenantID != tenantID { // other tenants' objects are indistinguishable from missing ones
@@ -159,6 +176,46 @@ func (s *MessageService) send(ctx context.Context, tenantID, msgID string, in Se
 	}
 	s.d.Log.InfoContext(ctx, "message queued", "assignment_epoch", inst.AssignmentEpoch, "sequence_no", seq, "type", in.Type)
 	return SendResult{MessageID: msgID, Status: messaging.StatusQueued}, nil
+}
+
+// resolveReply turns what the caller gave into the quote that travels with the message.
+func (s *MessageService) resolveReply(ctx context.Context, tenantID, instanceID string, r *SendReplyTo) (*messaging.ReplyTo, error) {
+	if r == nil {
+		return nil, nil
+	}
+	switch {
+	case r.ProviderMessageID != "" && r.MessageID != "":
+		return nil, fmt.Errorf("%w: reply_to takes provider_message_id or message_id, not both", errs.ErrInvalidArgument)
+	case r.MessageID != "":
+		m, err := s.Get(ctx, tenantID, r.MessageID)
+		if err != nil || m.InstanceID != instanceID {
+			return nil, fmt.Errorf("%w: reply_to message %q", errs.ErrNotFound, r.MessageID)
+		}
+		if m.ProviderMessageID == "" {
+			return nil, fmt.Errorf("%w: message %q has not been accepted by the provider yet (it has no provider id to quote): wait for ACCEPTED", errs.ErrConflict, r.MessageID)
+		}
+		var p messaging.Payload
+		_ = json.Unmarshal(m.Payload, &p) // erased messages have an empty payload: the quote is then sent without a preview
+		text := p.Text
+		if text == "" {
+			text = p.Caption
+		}
+		return &messaging.ReplyTo{ProviderMessageID: m.ProviderMessageID, Text: clipQuote(text), FromMe: true}, nil
+	case r.ProviderMessageID != "":
+		if len(r.ProviderMessageID) > 128 {
+			return nil, fmt.Errorf("%w: reply_to.provider_message_id is too long", errs.ErrInvalidArgument)
+		}
+		return &messaging.ReplyTo{ProviderMessageID: r.ProviderMessageID, Text: clipQuote(r.Text), FromMe: r.FromMe}, nil
+	}
+	return nil, fmt.Errorf("%w: reply_to needs provider_message_id or message_id", errs.ErrInvalidArgument)
+}
+
+// clipQuote shortens a preview to messaging.MaxQuotePreview characters (WhatsApp shows only the start anyway).
+func clipQuote(s string) string {
+	if r := []rune(s); len(r) > messaging.MaxQuotePreview {
+		return string(r[:messaging.MaxQuotePreview])
+	}
+	return s
 }
 
 // Get returns a message owned by tenantID.

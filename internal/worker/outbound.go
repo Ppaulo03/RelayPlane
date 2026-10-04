@@ -227,7 +227,7 @@ func (w *Outbound) handle(ctx context.Context, cmd ports.Command, env messaging.
 	}
 
 	out := messaging.OutboundMessage{ID: msg.ID, To: env.To, Type: env.Type, Text: env.Payload.Text,
-		Caption: env.Payload.Caption, Filename: env.Payload.Filename}
+		Caption: env.Payload.Caption, Filename: env.Payload.Filename, ReplyTo: env.Payload.ReplyTo}
 	if env.Payload.Media != nil {
 		att, cls, err := w.resolveMedia(ctx, env)
 		if err != nil {

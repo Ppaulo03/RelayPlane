@@ -300,3 +300,103 @@ func TestInboundAttachmentIsDownloadedThroughTheRealAdapter(t *testing.T) {
 		t.Errorf("text has no media: %+v", ev)
 	}
 }
+
+// A reply can quote a message. The REAL node only quotes when the request carries the quoted message itself (it keeps no
+// history), so the simulator drops a bare id exactly like the node does: this test fails if the adapter ever stops sending
+// the preview.
+func TestSendingAReplyQuotesTheMessage(t *testing.T) {
+	sim := simulator.New(simulator.Config{APIKey: simKey})
+	srv := httptest.NewServer(sim.Handler())
+	defer srv.Close()
+	p := v2.New(v2.Config{Nodes: v2.StaticNodes{"node-01": {BaseURL: srv.URL, APIKey: simKey}}})
+	a := ownership.Assignment{InstanceID: "inst_q", NodeID: "node-01", Epoch: 1}
+	ctx := t.Context()
+	if _, err := p.CreateInstance(ctx, ports.CreateInstanceRequest{Assignment: a}); err != nil {
+		t.Fatal(err)
+	}
+	_, _ = sim.Scan(a.InstanceID)
+
+	send := func(m messaging.OutboundMessage) simulator.Sent {
+		t.Helper()
+		if _, err := p.SendMessage(ctx, a, m); err != nil {
+			t.Fatal(err)
+		}
+		sent := sim.SentMessages(a.InstanceID)
+		return sent[len(sent)-1]
+	}
+	// a quote of the user's message (not ours), with the text it had
+	got := send(messaging.OutboundMessage{ID: "m1", To: "5562988887777", Type: messaging.TypeText, Text: "Confirma amanhã às 15h?",
+		ReplyTo: &messaging.ReplyTo{ProviderMessageID: "3EB0USERMSG", Text: "quero agendar"}})
+	if got.QuotedID != "3EB0USERMSG" || got.QuotedText != "quero agendar" || got.QuotedFromMe || got.QuoteDropped {
+		t.Errorf("text reply: %+v", got)
+	}
+	// a quote of one of OUR messages
+	got = send(messaging.OutboundMessage{ID: "m2", To: "+55 62 98888-7777", Type: messaging.TypeText, Text: "ok",
+		ReplyTo: &messaging.ReplyTo{ProviderMessageID: "3EB0OURS", Text: "Confirma?", FromMe: true}})
+	if got.QuotedID != "3EB0OURS" || !got.QuotedFromMe {
+		t.Errorf("quote of our own message: %+v", got)
+	}
+	// without a preview text the quote is still sent (an empty box), never silently dropped
+	got = send(messaging.OutboundMessage{ID: "m3", To: "5562988887777", Type: messaging.TypeText, Text: "ok", ReplyTo: &messaging.ReplyTo{ProviderMessageID: "3EB0NOTEXT"}})
+	if got.QuotedID != "3EB0NOTEXT" || got.QuoteDropped {
+		t.Errorf("a quote without preview: %+v", got)
+	}
+	// media and voice notes can quote too
+	got = send(messaging.OutboundMessage{ID: "m4", To: "5562988887777", Type: messaging.TypeDocument, Filename: "a.pdf",
+		Media: &messaging.Attachment{ContentType: "application/pdf", Size: 4, URL: "http://blob.example.com/a.pdf"}, ReplyTo: &messaging.ReplyTo{ProviderMessageID: "3EB0DOC", Text: "manda o contrato"}})
+	if got.QuotedID != "3EB0DOC" {
+		t.Errorf("media reply: %+v", got)
+	}
+	// a plain message quotes nothing
+	if got = send(messaging.OutboundMessage{ID: "m5", To: "5562988887777", Type: messaging.TypeText, Text: "oi"}); got.QuotedID != "" || got.QuoteDropped {
+		t.Errorf("plain message: %+v", got)
+	}
+}
+
+// The node's own validation is part of the simulator: sendPresence needs number, presence AND delay, markMessageAsRead
+// needs id, fromMe and remoteJid for each message. The adapter must produce exactly that.
+func TestPresenceAndReadGoThroughTheRealAdapter(t *testing.T) {
+	sim := simulator.New(simulator.Config{APIKey: simKey})
+	srv := httptest.NewServer(sim.Handler())
+	defer srv.Close()
+	p := v2.New(v2.Config{Nodes: v2.StaticNodes{"node-01": {BaseURL: srv.URL, APIKey: simKey}}})
+	a := ownership.Assignment{InstanceID: "inst_p", NodeID: "node-01", Epoch: 1}
+	ctx := t.Context()
+	if _, err := p.CreateInstance(ctx, ports.CreateInstanceRequest{Assignment: a}); err != nil {
+		t.Fatal(err)
+	}
+	var presence ports.PresenceSender = p
+	var reader ports.ReadMarker = p
+
+	// not connected yet: the node refuses, the adapter reports it
+	if err := presence.SendPresence(ctx, a, "5562988887777", ports.PresenceComposing, 3*time.Second); err == nil {
+		t.Error("a node that is not connected cannot show typing")
+	}
+	_, _ = sim.Scan(a.InstanceID)
+
+	if err := presence.SendPresence(ctx, a, "5562988887777", ports.PresenceComposing, 3*time.Second); err != nil {
+		t.Fatal(err)
+	}
+	if err := presence.SendPresence(ctx, a, "5562988887777", ports.PresenceRecording, 0); err != nil {
+		t.Fatal(err)
+	}
+	got := sim.Presences(a.InstanceID)
+	if len(got) != 2 || got[0].State != "composing" || got[0].DelayMS != 3000 || got[0].To != "5562988887777" || got[1].State != "recording" || got[1].DelayMS != 0 {
+		t.Errorf("presences: %+v", got)
+	}
+
+	if err := reader.MarkRead(ctx, a, "+55 62 98888-7777", []string{"WA-1", "WA-2"}); err != nil {
+		t.Fatal(err)
+	}
+	reads := sim.Reads(a.InstanceID)
+	if len(reads) != 2 || reads[0].ID != "WA-1" || reads[0].Chat != "5562988887777@s.whatsapp.net" || reads[0].FromMe {
+		t.Errorf("reads: %+v", reads)
+	}
+	// a group chat keeps its JID
+	if err := reader.MarkRead(ctx, a, "120363000000000001@g.us", []string{"WA-3"}); err != nil {
+		t.Fatal(err)
+	}
+	if r := sim.Reads(a.InstanceID); r[len(r)-1].Chat != "120363000000000001@g.us" {
+		t.Errorf("group chat: %+v", r)
+	}
+}

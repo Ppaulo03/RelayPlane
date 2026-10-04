@@ -4,7 +4,7 @@ import json
 import httpx
 import pytest
 
-from relayplane import (IdempotencyConflict, NotFound, PayloadTooLarge, RelayPlaneClient, RequestInProgress,
+from relayplane import (ReplyTo, IdempotencyConflict, NotFound, PayloadTooLarge, RelayPlaneClient, RequestInProgress,
                         ServiceUnavailable)
 
 
@@ -223,3 +223,44 @@ async def test_contact_erasure_call():
     async with client(handler) as rp:
         out = await rp.contacts.erase("5562999999999")
     assert out["messages_anonymized"] == 3 and out["attachments_deleted"] == 1
+
+
+async def test_reply_to_quotes_the_users_message_or_our_own():
+    bodies = []
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        bodies.append(json.loads(req.content))
+        return httpx.Response(202, json={"message_id": "msg_9", "status": "QUEUED"})
+
+    async with client(handler) as rp:
+        await rp.messages.send_text("inst", "5562", "Confirma?", reply_to=ReplyTo.to_user_message("3EB0USER", "quero agendar"))
+        await rp.messages.send_text("inst", "5562", "ok", reply_to=ReplyTo.to_own_message("msg_1"))
+        await rp.messages.send_text("inst", "5562", "oi")
+        await rp.messages.send_media("inst", "5562", "med_1", reply_to=ReplyTo.to_user_message("3EB0DOC"))
+    assert bodies[0]["payload"]["reply_to"] == {"provider_message_id": "3EB0USER", "text": "quero agendar"}
+    assert bodies[1]["payload"]["reply_to"] == {"message_id": "msg_1"}
+    assert "reply_to" not in bodies[2]["payload"]
+    assert bodies[3]["payload"]["reply_to"] == {"provider_message_id": "3EB0DOC"}
+    with pytest.raises(ValueError):
+        ReplyTo().as_dict()
+    with pytest.raises(ValueError):
+        ReplyTo(provider_message_id="a", message_id="b").as_dict()
+
+
+async def test_typing_indicator_and_read_receipts():
+    seen = []
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        seen.append((req.url.path, json.loads(req.content)))
+        if req.url.path.endswith("/presence"):
+            return httpx.Response(202, json={"accepted": True})
+        return httpx.Response(200, json={"read": 2})
+
+    async with client(handler) as rp:
+        await rp.instances.send_presence("inst_1", "5562988887777", "recording", duration_ms=4000)
+        await rp.instances.send_presence("inst_1", "5562988887777")
+        n = await rp.messages.mark_read("inst_1", "5562988887777", ["WA-1", "WA-2"])
+    assert n == 2
+    assert seen[0] == ("/api/v1/instances/inst_1/presence", {"to": "5562988887777", "state": "recording", "duration_ms": 4000})
+    assert seen[1][1] == {"to": "5562988887777", "state": "composing"}
+    assert seen[2] == ("/api/v1/messages/read", {"instance_id": "inst_1", "chat": "5562988887777", "provider_message_ids": ["WA-1", "WA-2"]})

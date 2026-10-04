@@ -72,23 +72,62 @@ type fetchInstance struct {
 	OwnerJid         string `json:"ownerJid"`
 }
 
+// quotedRef is how Evolution is told which message a send quotes. The node keeps no message history in our deployment
+// (DATABASE_SAVE_DATA_NEW_MESSAGE=false), so it can only quote when the request carries the quoted MESSAGE itself; with a
+// bare key it sends the reply WITHOUT the quote and says nothing. The preview text is therefore part of the request.
+type quotedRef struct {
+	Key     quotedKey         `json:"key"`
+	Message map[string]string `json:"message"`
+}
+
+type quotedKey struct {
+	ID        string `json:"id"`
+	RemoteJid string `json:"remoteJid"`
+	FromMe    bool   `json:"fromMe"`
+}
+
+func quotedOf(m messaging.OutboundMessage) *quotedRef {
+	if m.ReplyTo == nil || m.ReplyTo.ProviderMessageID == "" {
+		return nil
+	}
+	return &quotedRef{Key: quotedKey{ID: m.ReplyTo.ProviderMessageID, RemoteJid: chatJID(m.To), FromMe: m.ReplyTo.FromMe},
+		Message: map[string]string{"conversation": m.ReplyTo.Text}}
+}
+
+// chatJID is the WhatsApp address of a destination given as a number ("+55 62 ..." digits) or already as a JID.
+func chatJID(to string) string {
+	if strings.Contains(to, "@") {
+		return to
+	}
+	digits := strings.Map(func(r rune) rune {
+		if r >= '0' && r <= '9' {
+			return r
+		}
+		return -1
+	}, to)
+	return digits + "@s.whatsapp.net"
+}
+
 type sendTextRequest struct {
-	Number string `json:"number"`
-	Text   string `json:"text"`
+	Number string     `json:"number"`
+	Text   string     `json:"text"`
+	Quoted *quotedRef `json:"quoted,omitempty"`
 }
 
 type sendMediaRequest struct {
-	Number    string `json:"number"`
-	MediaType string `json:"mediatype"`
-	MimeType  string `json:"mimetype"`
-	Caption   string `json:"caption,omitempty"`
-	Media     string `json:"media"`
-	FileName  string `json:"fileName,omitempty"`
+	Number    string     `json:"number"`
+	MediaType string     `json:"mediatype"`
+	MimeType  string     `json:"mimetype"`
+	Caption   string     `json:"caption,omitempty"`
+	Media     string     `json:"media"`
+	FileName  string     `json:"fileName,omitempty"`
+	Quoted    *quotedRef `json:"quoted,omitempty"`
 }
 
 type sendAudioRequest struct {
-	Number string `json:"number"`
-	Audio  string `json:"audio"`
+	Number string     `json:"number"`
+	Audio  string     `json:"audio"`
+	Quoted *quotedRef `json:"quoted,omitempty"`
 }
 
 type sendResponse struct {
@@ -272,20 +311,20 @@ func (p *Provider) SendMessage(ctx context.Context, a ownership.Assignment, m me
 	var body any
 	switch m.Type {
 	case messaging.TypeText:
-		path, body = "/message/sendText/", sendTextRequest{Number: m.To, Text: m.Text}
+		path, body = "/message/sendText/", sendTextRequest{Number: m.To, Text: m.Text, Quoted: quotedOf(m)}
 	case messaging.TypeAudio:
 		media, err := p.mediaRef(ctx, m)
 		if err != nil {
 			return nil, err
 		}
-		path, body = "/message/sendWhatsAppAudio/", sendAudioRequest{Number: m.To, Audio: media}
+		path, body = "/message/sendWhatsAppAudio/", sendAudioRequest{Number: m.To, Audio: media, Quoted: quotedOf(m)}
 	case messaging.TypeImage, messaging.TypeVideo, messaging.TypeDocument:
 		media, err := p.mediaRef(ctx, m)
 		if err != nil {
 			return nil, err
 		}
 		path, body = "/message/sendMedia/", sendMediaRequest{Number: m.To, MediaType: string(m.Type), MimeType: m.Media.ContentType,
-			Caption: m.Caption, Media: media, FileName: m.Filename}
+			Caption: m.Caption, Media: media, FileName: m.Filename, Quoted: quotedOf(m)}
 	default:
 		return nil, fmt.Errorf("%w: unsupported message type %q", errs.ErrCapabilityMissing, m.Type)
 	}

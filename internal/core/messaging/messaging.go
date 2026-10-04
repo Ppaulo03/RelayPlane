@@ -107,12 +107,25 @@ type Message struct {
 	ErasedAt time.Time
 }
 
+// ReplyTo is the message an outbound message answers by QUOTING it (the grey box above the reply). Text is the preview
+// shown in that box: the node keeps no message history, so the preview must travel with the request.
+type ReplyTo struct {
+	ProviderMessageID string `json:"provider_message_id"`
+	Text              string `json:"text,omitempty"`
+	// FromMe is true when the quoted message is one WE sent (its provider id comes from message.outbound_status).
+	FromMe bool `json:"from_me,omitempty"`
+}
+
+// MaxQuotePreview bounds the preview text of a quote (characters).
+const MaxQuotePreview = 1024
+
 // Payload is the claim-check message body carried in the command.
 type Payload struct {
 	Text     string     `json:"text,omitempty"`
 	Caption  string     `json:"caption,omitempty"`
 	Filename string     `json:"filename,omitempty"`
 	Media    *media.Ref `json:"media,omitempty"`
+	ReplyTo  *ReplyTo   `json:"reply_to,omitempty"`
 }
 
 // Envelope is the canonical outbound command (see the design doc §17).
@@ -189,6 +202,8 @@ type OutboundMessage struct {
 	Caption  string
 	Filename string
 	Media    *Attachment
+	// ReplyTo quotes an earlier message (nil: a plain message).
+	ReplyTo *ReplyTo
 }
 
 // SendResult is a provider's acknowledgement of a dispatch.

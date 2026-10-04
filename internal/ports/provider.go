@@ -103,6 +103,31 @@ type MediaDownloader interface {
 	DownloadMedia(ctx context.Context, assignment ownership.Assignment, ref json.RawMessage, maxBytes int64) (*DownloadedMedia, error)
 }
 
+// PresenceState is what the account shows to a contact.
+type PresenceState string
+
+const (
+	PresenceComposing PresenceState = "composing" // "typing…"
+	PresenceRecording PresenceState = "recording" // "recording audio…"
+	PresencePaused    PresenceState = "paused"    // stopped typing
+)
+
+// Valid reports whether s is a state RelayPlane exposes.
+func (s PresenceState) Valid() bool {
+	return s == PresenceComposing || s == PresenceRecording || s == PresencePaused
+}
+
+// PresenceSender is implemented by providers that can show "typing…" / "recording…" to a contact. The provider holds the
+// state for `duration` and then pauses on its own, so a forgotten "composing" never stays on.
+type PresenceSender interface {
+	SendPresence(ctx context.Context, assignment ownership.Assignment, to string, state PresenceState, duration time.Duration) error
+}
+
+// ReadMarker is implemented by providers that can mark received messages as read (the blue ticks on the contact's side).
+type ReadMarker interface {
+	MarkRead(ctx context.Context, assignment ownership.Assignment, chat string, providerMessageIDs []string) error
+}
+
 // InboundRequest is a raw webhook request handed to a provider's adapter.
 type InboundRequest struct {
 	Header http.Header
