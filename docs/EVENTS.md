@@ -42,6 +42,21 @@ Mensagem de uma pessoa. `from` é o **telefone** (o provedor às vezes endereça
 > **`secretEncrypted` é uma edição ilegível.** Com a versão atual do provedor, quando a pessoa edita uma mensagem o novo texto não chega. Não trate
 > um "sim" editado depois de enviado como confirmação: pergunte de novo.
 
+#### Anexos (`payload.media`)
+
+Quando a mensagem tem anexo (imagem, áudio, nota de voz, vídeo, documento, figurinha) o evento **só é entregue depois que o RelayPlane resolveu o anexo**:
+ele baixa os bytes do provedor, guarda no object store e então publica `message.received` com `media`. Você nunca recebe um anexo "pela metade", e a entrega
+de uma nota de voz pode chegar depois de mensagens de texto mais novas (reordene por `sequence`).
+
+| `media.status` | Significado | O que fazer |
+|---|---|---|
+| `READY` | guardado: `GET /api/v1/media/{media_id}/content` devolve os bytes (SDK: `await rp.media.download(media_id)`), por `inbound_ttl_seconds` (7 dias) | baixe e processe (transcrição, OCR, …) |
+| `REJECTED` | recusado de propósito, **sem baixar**: `reason` = `too_large` (acima de `inbound_max_bytes`, 25 MiB), `type_not_allowed` (tipo fora da lista de `GET /limits`), `unsupported` (o provedor não entrega anexos, ou a função está desligada) | responda à pessoa; não há o que baixar |
+| `FAILED` | o provedor não conseguiu entregar os bytes: `expired` (o WhatsApp já não tem o arquivo) ou `download_failed` (esgotou as tentativas) | peça para a pessoa reenviar |
+
+`size` é o tamanho **real** quando `READY`; nos outros casos é o que o aparelho de quem enviou anunciou. `text` guarda a legenda. `seconds` é a duração de áudio e vídeo.
+O `media_id` é por tenant (outro tenant recebe 404) e a referência de download do provedor, que pode conter a chave de decifragem, **nunca** sai do RelayPlane.
+
 ### `message.deleted`
 A pessoa apagou uma mensagem para todos. `provider_message_id` é o da mensagem apagada, como foi entregue em `message.received`:
 invalide qualquer decisão tomada com base nela.

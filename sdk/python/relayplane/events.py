@@ -17,6 +17,30 @@ SUPPORTED_SCHEMA_VERSION = 1
 
 
 @dataclass(frozen=True)
+class MessageMedia:
+    """The attachment of a ``message.received``. Only ``status == "READY"`` can be downloaded
+    (``await rp.media.download(media.media_id)``); REJECTED and FAILED say why in ``reason``."""
+
+    media_id: str
+    status: str  # READY | REJECTED | FAILED
+    kind: str  # image | audio | video | document | sticker
+    reason: str = ""  # too_large | type_not_allowed | unsupported | expired | download_failed
+    mime_type: str = ""
+    size: int = 0
+    filename: str = ""
+    seconds: int = 0
+
+    @property
+    def ready(self) -> bool:
+        return self.status == "READY"
+
+    @classmethod
+    def from_dict(cls, d: dict[str, Any]) -> "MessageMedia":
+        return cls(media_id=d["media_id"], status=d["status"], kind=d["kind"], reason=d.get("reason", ""), mime_type=d.get("mime_type", ""),
+                   size=int(d.get("size", 0)), filename=d.get("filename", ""), seconds=int(d.get("seconds", 0)))
+
+
+@dataclass(frozen=True)
 class Event:
     event_id: str
     event_type: str
@@ -28,6 +52,12 @@ class Event:
     timestamp: str
     payload: dict[str, Any]
     traceparent: str = ""
+
+    @property
+    def media(self) -> MessageMedia | None:
+        """The attachment of a ``message.received`` (None when the message has none)."""
+        m = self.payload.get("media") if self.event_type == "message.received" else None
+        return MessageMedia.from_dict(m) if m else None
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> "Event":

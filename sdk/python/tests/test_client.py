@@ -153,3 +153,21 @@ async def test_resolve_unknown_message(sent, outcome):
     async with client(handler) as rp:
         msg = await rp.messages.resolve("msg_1", sent=sent)
     assert msg.sequence_no == 7 and msg.status == ("ACCEPTED" if sent else "FAILED")
+
+
+async def test_media_download_verifies_the_checksum():
+    data = b"OggS voice"
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        assert req.url.path == "/api/v1/media/med_1/content"
+        return httpx.Response(200, content=data, headers={"ETag": '"' + hashlib.sha256(data).hexdigest() + '"'})
+
+    async with client(handler) as rp:
+        assert await rp.media.download("med_1") == data
+
+    def truncated(req: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=data[:-1], headers={"ETag": '"' + hashlib.sha256(data).hexdigest() + '"'})
+
+    async with client(truncated) as rp:
+        with pytest.raises(ValueError):
+            await rp.media.download("med_1")

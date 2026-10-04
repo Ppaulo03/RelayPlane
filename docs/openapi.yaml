@@ -250,6 +250,23 @@ paths:
       tags: [media]
       responses:
         '204': {description: Deleted}
+  /api/v1/media/{id}/content:
+    parameters: [{$ref: '#/components/parameters/Id'}]
+    get:
+      tags: [media]
+      summary: Download the bytes of a media (an attachment of a message you received, or something you uploaded)
+      description: >
+        Streams the stored content, authenticated, with the SHA-256 as ETag, Content-Disposition attachment and nosniff.
+        A media of an inbound message is downloadable when message.received carries media.status READY, for
+        inbound_ttl_seconds (GET /limits). 404: not found, not yours, expired or deleted.
+      responses:
+        '200': {description: The content, content: {'*/*': {schema: {type: string, format: binary}}}}
+        '404': {$ref: '#/components/responses/Error'}
+    put:
+      tags: [media]
+      summary: Upload the content of a declared media
+      responses:
+        '200': {description: OK, content: {application/json: {schema: {$ref: '#/components/schemas/Media'}}}}
   /api/v1/nodes:
     get:
       tags: [admin]
@@ -443,6 +460,8 @@ components:
             max_bytes: {type: integer, format: int64}
             inline_max_bytes: {type: integer}
             allowed_types: {type: array, items: {type: string}}
+            inbound_max_bytes: {type: integer, format: int64, description: "Largest inbound attachment that is downloaded (0: inbound media is off). A larger one is reported as REJECTED / too_large."}
+            inbound_ttl_seconds: {type: integer, format: int64}
         send_rate_default:
           type: object
           description: Default outbound pacing per instance (tenant/instance policies may tighten it)

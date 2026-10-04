@@ -196,11 +196,37 @@ func TestMediaUploadFlow(t *testing.T) {
 	if c, _, _ := h.call("GET", "/api/v1/media/"+id, h.key2, ""); c != 404 {
 		t.Errorf("cross-tenant media: %d", c)
 	}
+	// the bytes come back through the gateway, authenticated, with the checksum as ETag
+	get := func(key string) (*nethttp.Response, []byte) {
+		rq, _ := nethttp.NewRequest("GET", h.srv.URL+"/api/v1/media/"+id+"/content", nil)
+		rq.Header.Set("Authorization", "Bearer "+key)
+		rs, err := nethttp.DefaultClient.Do(rq)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer rs.Body.Close()
+		body, _ := io.ReadAll(rs.Body)
+		return rs, body
+	}
+	if rs, body := get(h.key1); rs.StatusCode != 200 || !bytes.Equal(body, data) || rs.Header.Get("ETag") != `"`+sum+`"` ||
+		rs.Header.Get("Content-Type") != "application/pdf" || rs.Header.Get("X-Content-Type-Options") != "nosniff" ||
+		!strings.Contains(rs.Header.Get("Content-Disposition"), "attachment") {
+		t.Errorf("content: %d %v", rs.StatusCode, rs.Header)
+	}
+	if rs, _ := get(h.key2); rs.StatusCode != 404 {
+		t.Errorf("another tenant must not read the bytes: %d", rs.StatusCode)
+	}
+	if rs, _ := get("rpk_wrong"); rs.StatusCode != 401 {
+		t.Errorf("unauthenticated: %d", rs.StatusCode)
+	}
 	if c, _, _ := h.call("DELETE", "/api/v1/media/"+id, h.key1, ""); c != 204 {
 		t.Errorf("delete: %d", c)
 	}
 	if c, _, _ := h.call("GET", "/api/v1/media/"+id, h.key1, ""); c != 404 {
 		t.Errorf("deleted media still visible: %d", c)
+	}
+	if rs, _ := get(h.key1); rs.StatusCode != 404 {
+		t.Errorf("deleted media content still readable: %d", rs.StatusCode)
 	}
 }
 
