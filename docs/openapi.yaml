@@ -1,4 +1,4 @@
-openapi: 3.0.3
+openapi: 3.1.0
 info:
   title: RelayPlane API
   version: 0.1.0
@@ -17,6 +17,22 @@ tags:
   - {name: media}
   - {name: admin, description: Requires the admin key}
   - {name: ops}
+webhooks:
+  tenantEvent:
+    post:
+      tags: [subscriptions]
+      summary: An event RelayPlane delivers to a subscription's URL
+      description: >
+        Signed with X-RelayPlane-Signature (HMAC-SHA256 over "<timestamp>.<body>"); respond 2xx to acknowledge. Delivery is
+        at-least-once: deduplicate by event_id and reorder by sequence. The contract is events/events.schema.json
+        (schema_version 1); see EVENTS.md.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: './events/events.schema.json'}
+      responses:
+        '2XX': {description: Acknowledged}
 paths:
   /api/v1/instances:
     post:
@@ -394,6 +410,7 @@ components:
         event_id: {type: string}
         event_type: {type: string}
         instance_id: {type: string}
+        sequence: {type: integer, description: "Delivery sequence of (subscription, instance): 1, 2, 3 without gaps; a redelivery keeps it."}
         status: {type: string, enum: [PENDING, DELIVERED, DEAD]}
         attempts: {type: integer}
         next_attempt_at: {type: string, format: date-time}

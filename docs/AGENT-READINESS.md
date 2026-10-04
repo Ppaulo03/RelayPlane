@@ -31,12 +31,12 @@ As Fases 1–5 do agente (núcleo, confiabilidade, confirmação, flows, compile
 
 ## 3. G1 — Contrato (sem WhatsApp)
 
-✅ = entregue (R01, R03, R04, R05, R13, R14). Faltam R02, R06–R12 e os itens R15–R16 abaixo.
+✅ = entregue (R01, R02, R03, R04, R05, R13, R14, R15). Faltam R06–R12 e o R16 (parte de documentação) abaixo.
 
 | ID | Item | Por quê (requisito do agente) | Tam. | Pronto quando |
 |---|---|---|---|---|
 | **R01** ✅ | `GET /messages/{id}` expõe `provider_message_id`, `accepted_at`, `error_message`. **Hoje devolve só id, status, to, type, attempts, sequence_no, error_code** | o agente reconcilia o prompt de confirmação (`RUNTIME_PROTOCOL` §7/§8) e liga o `reply_to` do inbound ao seu prompt pelo `provider_message_id`; sem isso só dá para saber via evento (que pode ser perdido) | S | campo no OpenAPI, no SDK e teste que compara com o evento `message.outbound_status` |
-| **R02** | **Contrato de eventos versionado:** `schema_version` no envelope, JSON Schema de cada evento (`docs/events/*.json`), seção `webhooks` no OpenAPI, e teste de contrato que valida amostras reais contra os schemas (Go e SDK Python) | o compiler/versionamento do agente fixa o que consome; evolução do evento não pode quebrar em silêncio | M | mudança incompatível de schema falha o CI; `docs/EVENTS.md` com exemplos |
+| **R02** ✅ | **Contrato de eventos versionado:** `schema_version` no envelope, JSON Schema de cada evento (`docs/events/*.json`), seção `webhooks` no OpenAPI, e teste de contrato que valida amostras reais contra os schemas (Go e SDK Python) | o compiler/versionamento do agente fixa o que consome; evolução do evento não pode quebrar em silêncio | M | mudança incompatível de schema falha o CI; `docs/EVENTS.md` com exemplos. **Feito:** `docs/events/events.schema.json` (v1, campos não declarados proibidos), exemplos por tipo, `webhooks` no OpenAPI 3.1, conformidade verificada contra o que o código emite, contra os fixtures reais e contra tudo que a suíte de sistema entrega; o SDK recusa versão desconhecida. A métrica de latência (R12) segue pendente |
 | **R03** ✅ | **Simulador/sandbox do provedor** (evolução do `cmd/loadstub`): API para injetar mensagens inbound (texto, `reply_to`, áudio, imagem, grupo), receipts, desconexão; perfil `sandbox` no compose | o CI do agente (Fase 6, chaos C07/C08/C13 e evals) precisa de um RelayPlane **real** ponta a ponta sem número de WhatsApp | M | `docker compose --profile sandbox up` + exemplo Python que envia, injeta resposta com `reply_to` e recebe o webhook |
 | **R04** ✅ | **Criação idempotente de subscription** (`Idempotency-Key` ou nome único com upsert) | deploy do agente repetido hoje cria subscriptions duplicadas (limite 10) e entregas em dobro | S | reexecutar o bootstrap do agente não duplica |
 | **R05** ✅ | **Propagação de trace:** `traceparent` nos webhooks e no `message.outbound_status` (a partir do trace do envio) | o trace do turno do agente (`DESIGN` §41) liga com o do RelayPlane | S | header presente; teste de ponta a ponta |
@@ -54,7 +54,7 @@ As Fases 1–5 do agente (núcleo, confiabilidade, confirmação, flows, compile
 
 | ID | Item | Por quê | Tam. | Pronto quando |
 |---|---|---|---|---|
-| **R15** | **Número de sequência inbound por instância** no envelope (atribuído na aceitação do webhook) | a Evolution reenvia webhooks em paralelo quando o gateway falha e o `messageTimestamp` tem resolução de 1 s: três mensagens do mesmo segundo chegaram como a, c, b e a ordem não é recuperável. Uma sequência de aceitação ao menos torna a ordem de chegada observável e a perda de eventos detectável | M | `sequence` monotônico por instância no envelope e no SDK; teste de ordem sob retry |
+| **R15** ✅ | **Número de sequência de entrega** no envelope, por (assinatura, instância), sem buracos | a Evolution reenvia webhooks em paralelo quando o gateway falha e o `messageTimestamp` tem resolução de 1 s: três mensagens do mesmo segundo chegaram como a, c, b e a ordem não é recuperável. A ordem em que as pessoas escreveram não é recuperável (empate de 1 s), mas a ordem **de entrega ao agente** e a perda de eventos são. **Decisão de desenho:** o número é por assinatura e instância (atribuído ao criar a entrega), não por instância global: com `exclude_groups` ou filtro de tipos, uma sequência global teria buracos legítimos e a detecção de perda deixaria de ser confiável | M | `sequence` no envelope, na API de entregas e no SDK (`Event`, `SequenceTracker`); contrato (memória e Postgres) garante 1,2,3 sem buracos, idempotente e estável na reentrega. **Feito** |
 | **R16** | **Orientação ao agente sobre edição e exclusão:** edição chega como `type: secretEncrypted` sem texto; exclusão chega como `message.deleted` | um "sim" editado ou apagado depois de enviado não pode valer como confirmação (`INV-022`) | S | `docs/EVENTS.md` e exemplo no SDK; `message.deleted` ✅ já entregue |
 
 ## 4. G2 — Realidade (precisa de número 🔑 e de staging)
@@ -88,7 +88,7 @@ RelayPlane  [ G1 em paralelo ] ──────┘   [ G2 ]──────�
 Pacotes de PR sugeridos para G1 (cada um independente e com testes):
 
 1. **Contrato rápido:** R01, R04, R05, R13, R14 (quase tudo S; um PR).
-2. **Contrato de eventos:** R02 + R12 (schemas, versão, métrica de latência).
+2. **Contrato de eventos:** R02 ✅ + R15 ✅ + R12 (schemas, versão, métrica de latência).
 3. **Sandbox:** R03 ✅ (desbloqueia o CI do agente; **é o item de maior alavanca**).
 4. **Capacidades do canal:** R07, R08, depois **R06** (mídia inbound, o maior).
 5. **Segurança e dados:** R09, R10, R11.

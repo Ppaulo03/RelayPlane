@@ -2,10 +2,12 @@ package systemtest
 
 import (
 	"context"
+	"fmt"
 	"strconv"
 	"sync"
 	"time"
 
+	eventschema "github.com/relayplane/relayplane/docs/events"
 	"github.com/relayplane/relayplane/internal/core/subscription"
 	"github.com/relayplane/relayplane/internal/ports"
 )
@@ -33,6 +35,16 @@ type Receiver struct {
 	reqs []Received
 	// Behave decides the HTTP status for the n-th request (1-based) to a URL; nil answers 200.
 	Behave func(n int, r Received) (status int, err error)
+	// schemaErrs collects every body that does not satisfy docs/events/events.schema.json: the whole system suite doubles
+	// as a conformance test of what really goes over the wire.
+	schemaErrs []string
+}
+
+// SchemaViolations lists the delivered bodies that break the published event contract.
+func (r *Receiver) SchemaViolations() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]string(nil), r.schemaErrs...)
 }
 
 // Send implements ports.WebhookSender.
@@ -41,6 +53,11 @@ func (r *Receiver) Send(_ context.Context, req ports.WebhookRequest) (int, error
 	rec := Received{URL: req.URL, EventID: req.Headers[subscription.HeaderEventID], EventType: req.Headers[subscription.HeaderEventType],
 		Body: append([]byte(nil), req.Body...), Signature: req.Headers[subscription.HeaderSignature], Timestamp: ts,
 		Attempt: req.Headers[subscription.HeaderAttempt], Traceparent: req.Headers["traceparent"], At: time.Now()}
+	if err := eventschema.Validate(req.Body); err != nil {
+		r.mu.Lock()
+		r.schemaErrs = append(r.schemaErrs, fmt.Sprintf("%v: %s", err, req.Body))
+		r.mu.Unlock()
+	}
 	r.mu.Lock()
 	n := 0
 	for _, x := range r.reqs {

@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "event_id": "evt_01m4234r0a3b4c5d6e7f8g9h0j",
+  "sequence": 13,
+  "event_type": "message.received",
+  "provider": "evolution-v2",
+  "tenant_id": "tenant_01m41bacsxnveg6wcrr8ht19av",
+  "instance_id": "inst_01m41bad3refzv7nc1h5p7tgf4",
+  "timestamp": "2026-10-03T23:12:02Z",
+  "payload": {
+    "provider_message_id": "3EB0B5F3291D51D5238ED4",
+    "from": "5511999990000",
+    "push_name": "Ana",
+    "type": "text",
+    "text": "oi, pessoal",
+    "group": true,
+    "chat_id": "120363000000000001@g.us",
+    "sender_lid": "19600000000001"
+  }
+}

@@ -185,7 +185,13 @@ func NewEnv(t *testing.T) *Env {
 		Poll:  5 * time.Millisecond, Breaker: delivery.NewBreaker(1000, time.Millisecond, time.Millisecond)}
 
 	e.ctx, e.cancel = context.WithCancel(context.Background())
-	t.Cleanup(func() { e.cancel(); e.wg.Wait() })
+	t.Cleanup(func() {
+		e.cancel()
+		e.wg.Wait()
+		for _, v := range e.Receiver.SchemaViolations() {
+			t.Errorf("a delivered webhook body breaks the published event schema: %s", v)
+		}
+	})
 
 	for _, id := range []string{"node-01", "node-02"} {
 		e.AddNode(id, 10)
