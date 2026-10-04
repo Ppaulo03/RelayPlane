@@ -69,3 +69,12 @@ def test_tracker_state_survives_a_restart():
     t2 = SequenceTracker(t.state())
     assert t2.push(ev("i", 2)) == []  # redelivered after the restart: already done
     assert [e.sequence for e in t2.push(ev("i", 3))] == [3]
+
+
+def test_media_of_a_message_is_typed():
+    ready = Event.from_dict(json.loads((EXAMPLES / "message.received.media.json").read_text(encoding="utf-8")))
+    assert ready.media and ready.media.ready and ready.media.kind == "audio" and ready.media.seconds == 7 and ready.media.size == 4719
+    refused = Event.from_dict(json.loads((EXAMPLES / "message.received.media.rejected.json").read_text(encoding="utf-8")))
+    assert refused.media and not refused.media.ready and refused.media.reason == "too_large"
+    plain = Event.from_dict(json.loads((EXAMPLES / "message.received.json").read_text(encoding="utf-8")))
+    assert plain.media is None

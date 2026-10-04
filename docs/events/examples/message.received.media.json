@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "event_id": "evt_01m4234r5f6g7h8j9k0m1n2p3q",
+  "sequence": 18,
+  "event_type": "message.received",
+  "provider": "evolution-v2",
+  "tenant_id": "tenant_01m41bacsxnveg6wcrr8ht19av",
+  "instance_id": "inst_01m41bad3refzv7nc1h5p7tgf4",
+  "timestamp": "2026-10-03T23:11:12Z",
+  "payload": {
+    "provider_message_id": "3EB07C8AFA989E5DEBC3F3",
+    "from": "5511999990000",
+    "push_name": "Ana",
+    "type": "audio",
+    "media": {
+      "media_id": "med_4234r5f6g7h8j9k0m1n2p3q",
+      "status": "READY",
+      "kind": "audio",
+      "mime_type": "audio/ogg",
+      "size": 4719,
+      "seconds": 7
+    }
+  }
+}

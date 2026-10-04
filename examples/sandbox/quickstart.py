@@ -8,11 +8,14 @@ What it does, against the REAL gateway/worker/reconciler and a provider simulato
   2. creates an instance and "scans the QR" through the simulator's control API;
   3. sends a message through the public API and waits for the signed ``message.outbound_status`` (ACCEPTED) webhook;
   4. plays the user ANSWERING BY QUOTING that message and checks the signed ``message.received`` webhook carries
-     ``reply_to_provider_message_id`` equal to the id of the message we sent: the evidence a confirmation relies on.
+     ``reply_to_provider_message_id`` equal to the id of the message we sent: the evidence a confirmation relies on;
+  5. plays the user sending a VOICE NOTE: RelayPlane downloads it from the node, stores it, and only then delivers the
+     ``message.received`` webhook with ``media.status == "READY"``; the script downloads the audio and checks every byte.
 """
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import os
 import sys
@@ -22,7 +25,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import httpx
 
-from relayplane import RelayPlaneClient, WebhookSignatureError, verify_request
+from relayplane import Event, RelayPlaneClient, WebhookSignatureError, verify_request
 
 GATEWAY = os.environ.get("GATEWAY", "http://127.0.0.1:18080")
 ADMIN_KEY = os.environ["ADMIN_API_KEY"]
@@ -115,6 +118,20 @@ async def main() -> None:
         if quoted != msg.provider_message_id:
             raise SystemExit(f"reply_to {quoted!r} is not the id of our message {msg.provider_message_id!r}")
         print(f"   webhook: message.received text={event['payload']['text']!r} reply_to matches our message: confirmation evidence OK")
+
+        # the user sends a voice note: the event is delivered once RelayPlane has downloaded and stored the audio
+        voice = b"OggS" + bytes(60)
+        res = control(node_url, node_key, "POST", f"/_sim/instances/{inst.id}/inbound", type="audio", seconds=3, push_name="Ana",
+                      content=base64.b64encode(voice).decode())
+        audio = wait_for("voice note webhook", lambda: next((e for e in received if e["event_type"] == "message.received"
+                                                              and e["payload"].get("media", {}).get("kind") == "audio"), None))
+        media = Event.from_dict(audio).media
+        if not media or not media.ready:
+            raise SystemExit(f"expected a READY attachment, got {audio['payload'].get('media')}")
+        got = await rp.media.download(media.media_id)
+        if got != voice:
+            raise SystemExit("the downloaded voice note is not what the user sent")
+        print(f"6. voice note {res['id']}: media {media.media_id} READY ({media.size} bytes, {media.mime_type}); downloaded and verified")
 
     if bad:
         raise SystemExit(f"{len(bad)} webhook(s) failed signature verification: {bad[:2]}")

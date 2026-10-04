@@ -1,0 +1,25 @@
+{
+  "schema_version": 1,
+  "event_id": "evt_01m4234r6g7h8j9k0m1n2p3q4r",
+  "sequence": 19,
+  "event_type": "message.received",
+  "provider": "evolution-v2",
+  "tenant_id": "tenant_01m41bacsxnveg6wcrr8ht19av",
+  "instance_id": "inst_01m41bad3refzv7nc1h5p7tgf4",
+  "timestamp": "2026-10-03T23:12:40Z",
+  "payload": {
+    "provider_message_id": "3EB048D8AD08C0D5A6D22D",
+    "from": "5511999990000",
+    "type": "video",
+    "text": "o vídeo do evento",
+    "media": {
+      "media_id": "med_4234r6g7h8j9k0m1n2p3q4r",
+      "status": "REJECTED",
+      "reason": "too_large",
+      "kind": "video",
+      "mime_type": "video/mp4",
+      "size": 103604682,
+      "seconds": 156
+    }
+  }
+}

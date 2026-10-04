@@ -187,6 +187,16 @@ class MediaAPI:
         body, _ = await self._h.request("GET", f"/api/v1/media/{media_id}")
         return Media.from_dict(body)
 
+    async def download(self, media_id: str) -> bytes:
+        """The bytes of a media: an attachment of a message you received (``message.received`` with ``media.status == "READY"``)
+        or something you uploaded. The checksum the gateway reports is verified, so a truncated body is an error."""
+        _, resp = await self._h.request("GET", f"/api/v1/media/{media_id}/content")
+        data = resp.content
+        expected = resp.headers.get("ETag", "").strip('"')
+        if expected and hashlib.sha256(data).hexdigest() != expected:
+            raise ValueError(f"downloaded media {media_id} does not match its checksum")
+        return data
+
     async def delete(self, media_id: str) -> None:
         await self._h.request("DELETE", f"/api/v1/media/{media_id}")
 

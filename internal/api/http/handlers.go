@@ -3,7 +3,9 @@ package http
 import (
 	"errors"
 	"io"
+	"mime"
 	nethttp "net/http"
+	"strconv"
 	"time"
 
 	"github.com/relayplane/relayplane/internal/app"
@@ -371,6 +373,31 @@ func (s *Server) getMedia(w nethttp.ResponseWriter, r *nethttp.Request, p Princi
 		return
 	}
 	writeJSON(w, 200, viewMedia(*b))
+}
+
+// getMediaContent streams the stored bytes (an inbound attachment, or an object the tenant uploaded) through the gateway,
+// so it works whatever the blob store's network address is and always passes authentication.
+func (s *Server) getMediaContent(w nethttp.ResponseWriter, r *nethttp.Request, p Principal) {
+	b, body, err := s.App.Media.Open(r.Context(), p.TenantID, r.PathValue("id"))
+	if err != nil {
+		writeError(w, r, s.Log, err)
+		return
+	}
+	defer body.Close()
+	w.Header().Set("Content-Type", b.ContentType)
+	w.Header().Set("Content-Length", strconv.FormatInt(b.Size, 10))
+	w.Header().Set("ETag", `"`+b.SHA256+`"`)
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.Header().Set("Cache-Control", "private, no-store")
+	w.Header().Set("Content-Disposition", mime.FormatMediaType("attachment", map[string]string{"filename": media.SafeFilename(b.Filename)}))
+	w.WriteHeader(200)
+	if _, err := io.Copy(w, body); err != nil {
+		s.Log.WarnContext(r.Context(), "media download interrupted", "media_id", b.ID, "error", err)
+		return
+	}
+	if s.Metrics != nil {
+		s.Metrics.BlobBytes.WithLabelValues("get").Add(float64(b.Size))
+	}
 }
 
 func (s *Server) deleteMedia(w nethttp.ResponseWriter, r *nethttp.Request, p Principal) {

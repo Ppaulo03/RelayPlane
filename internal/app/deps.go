@@ -27,7 +27,12 @@ type Config struct {
 
 	MediaPolicy media.Policy
 	MediaTTL    time.Duration // retention of READY blobs
-	PendingTTL  time.Duration // how long a declared-but-not-uploaded blob lives
+	// InboundMediaMaxBytes caps what is downloaded from the provider for an inbound attachment (default 25 MiB; a negative
+	// value turns inbound media off: attachments are reported as REJECTED/unsupported). InboundMediaTTL is how long the
+	// stored bytes stay downloadable (default 7 days).
+	InboundMediaMaxBytes int64
+	InboundMediaTTL      time.Duration
+	PendingTTL           time.Duration // how long a declared-but-not-uploaded blob lives
 
 	DedupTTL      time.Duration
 	DedupInflight time.Duration
@@ -41,6 +46,25 @@ type Config struct {
 	DefaultRate messaging.RatePolicy
 }
 
+// EffectiveInboundMaxBytes is the inbound attachment cap with the default applied (0 when inbound media is turned off).
+func (c Config) EffectiveInboundMaxBytes() int64 {
+	switch {
+	case c.InboundMediaMaxBytes < 0:
+		return 0
+	case c.InboundMediaMaxBytes == 0:
+		return DefaultConfig().InboundMediaMaxBytes
+	}
+	return c.InboundMediaMaxBytes
+}
+
+// EffectiveInboundTTL is the retention of stored inbound attachments with the default applied.
+func (c Config) EffectiveInboundTTL() time.Duration {
+	if c.InboundMediaTTL <= 0 {
+		return DefaultConfig().InboundMediaTTL
+	}
+	return c.InboundMediaTTL
+}
+
 // DefaultConfig returns production-leaning defaults.
 func DefaultConfig() Config {
 	return Config{
@@ -48,6 +72,8 @@ func DefaultConfig() Config {
 		ProviderAliases:        map[string]string{"evolution": "evolution-v2"},
 		MediaPolicy:            media.DefaultPolicy(),
 		MediaTTL:               24 * time.Hour,
+		InboundMediaMaxBytes:   25 << 20,
+		InboundMediaTTL:        7 * 24 * time.Hour,
 		PendingTTL:             30 * time.Minute,
 		DedupTTL:               24 * time.Hour,
 		DedupInflight:          30 * time.Second,

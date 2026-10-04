@@ -106,6 +106,7 @@ func New(ctx context.Context, cfg config.Config, service string) (*Runtime, erro
 	acfg.MediaPolicy.MaxBytes = cfg.MediaMaxBytes
 	acfg.MediaTTL = cfg.MediaTTL
 	acfg.PendingTTL = cfg.MediaPendingTTL
+	acfg.InboundMediaMaxBytes, acfg.InboundMediaTTL = cfg.InboundMediaMaxBytes, cfg.InboundMediaTTL
 	acfg.MigrationVerifyTimeout = cfg.MigrationVerifyTimeout
 	acfg.DefaultRate = messaging.RatePolicy{MinInterval: cfg.RateMinInterval, Burst: cfg.RateBurst, MaxPerMinute: cfg.RateMaxPerMinute,
 		MaxConcurrent: cfg.RateMaxConcurrent, Cooldown: cfg.RateCooldown}

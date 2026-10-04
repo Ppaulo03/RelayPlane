@@ -52,6 +52,10 @@ type Config struct {
 	MediaMaxBytes       int64
 	MediaTTL            time.Duration
 	MediaPendingTTL     time.Duration // an upload must finish within this window
+	// InboundMediaMaxBytes caps an inbound attachment (0 = default 25 MiB, negative = inbound media off); InboundMediaTTL is
+	// how long the stored bytes stay downloadable.
+	InboundMediaMaxBytes int64
+	InboundMediaTTL      time.Duration
 
 	AdminAPIKey    string
 	WebhookSecret  string
@@ -105,6 +109,7 @@ func Load() (Config, error) {
 		BlobBucket: get("BLOB_STORE_BUCKET", "relayplane-media"), BlobAccessKey: os.Getenv("BLOB_STORE_ACCESS_KEY"), BlobSecretKey: os.Getenv("BLOB_STORE_SECRET_KEY"),
 		BlobUseSSL: getBool("BLOB_STORE_USE_SSL", false), BlobPublicUseSSL: getBool("BLOB_STORE_PUBLIC_USE_SSL", false), BlobLifecycleDays: getInt("BLOB_STORE_LIFECYCLE_DAYS", 7),
 		MediaInlineMaxBytes: getInt("MEDIA_INLINE_MAX_BYTES", 262144), MediaMaxBytes: int64(getInt("MEDIA_MAX_BYTES", 100<<20)), MediaTTL: getDur("MEDIA_DEFAULT_TTL", 24*time.Hour), MediaPendingTTL: getDur("MEDIA_PENDING_TTL", 30*time.Minute),
+		InboundMediaMaxBytes: int64(getInt("INBOUND_MEDIA_MAX_BYTES", 25<<20)), InboundMediaTTL: getDur("INBOUND_MEDIA_TTL", 7*24*time.Hour),
 		AdminAPIKey: os.Getenv("ADMIN_API_KEY"), WebhookSecret: os.Getenv("WEBHOOK_SECRET"), WebhookBaseURL: os.Getenv("WEBHOOK_BASE_URL"),
 		DefaultProvider: get("DEFAULT_PROVIDER", "evolution-v2"),
 		RateMinInterval: getDur("RATE_MIN_INTERVAL", time.Second), RateBurst: getInt("RATE_BURST", 1), RateMaxPerMinute: getInt("RATE_MAX_PER_MINUTE", 30),

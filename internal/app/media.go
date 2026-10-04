@@ -128,6 +128,22 @@ func (s *MediaService) Get(ctx context.Context, tenantID, id string) (*media.Blo
 	return s.load(ctx, tenantID, id)
 }
 
+// Open returns the metadata and a reader of the stored bytes of a READY, unexpired blob of the tenant.
+func (s *MediaService) Open(ctx context.Context, tenantID, id string) (*media.Blob, io.ReadCloser, error) {
+	b, err := s.load(ctx, tenantID, id)
+	if err != nil {
+		return nil, nil, err
+	}
+	if b.Status != media.BlobReady || !b.ExpiresAt.After(s.d.now()) {
+		return nil, nil, errs.ErrNotFound
+	}
+	r, err := s.d.Blob.Get(ctx, b.ObjectKey)
+	if err != nil {
+		return nil, nil, err
+	}
+	return b, r, nil
+}
+
 // Delete removes the object and marks the metadata deleted.
 func (s *MediaService) Delete(ctx context.Context, tenantID, id string) error {
 	b, err := s.load(ctx, tenantID, id)

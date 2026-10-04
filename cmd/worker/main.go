@@ -54,7 +54,10 @@ func run() error {
 
 	rt.Log.Info("worker started", "version", version, "partitions", cfg.CommandPartitions)
 	var wg sync.WaitGroup
-	wg.Add(5)
+	ingest := &worker.MediaIngestor{Repos: d.Repos, Providers: d.Providers, Blob: d.Blob, Bus: d.Bus, Metrics: rt.Metrics, Log: rt.Log,
+		MaxBytes: d.Cfg.EffectiveInboundMaxBytes(), TTL: d.Cfg.EffectiveInboundTTL(), Policy: d.Cfg.MediaPolicy}
+	wg.Add(6)
+	go func() { defer wg.Done(); ingest.Run(ctx) }()
 	go func() { defer wg.Done(); _ = rt.Queue.Consume(ctx, out.Handle) }()
 	go func() { defer wg.Done(); _ = rt.Bus.Subscribe(ctx, "projector", proj.Handle) }()
 	go func() { defer wg.Done(); _ = rt.Bus.Subscribe(ctx, "webhook-fanout", rt.FanOut.Handle) }()
@@ -66,6 +69,10 @@ func run() error {
 		for {
 			if depth, err := rt.Queue.Depth(ctx); err == nil {
 				rt.Metrics.OutboundQueueDepth.Set(float64(depth))
+			}
+			if c, err := d.Repos.InboundMedia.Counts(ctx, time.Now()); err == nil {
+				rt.Metrics.InboundMediaPending.WithLabelValues("download").Set(float64(c.Download))
+				rt.Metrics.InboundMediaPending.WithLabelValues("publish").Set(float64(c.Publish))
 			}
 			out.Limiter.Forget(10 * time.Minute)
 			select {

@@ -55,9 +55,10 @@ type Env struct {
 	Tenant2    string
 
 	// Webhooks: the tenant-facing event delivery pipeline with a controllable receiver in place of the network.
-	Receiver   *Receiver
-	FanOut     *delivery.FanOut
-	Dispatcher *delivery.Dispatcher
+	Receiver    *Receiver
+	FanOut      *delivery.FanOut
+	Dispatcher  *delivery.Dispatcher
+	MediaIngest *worker.MediaIngestor
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -184,6 +185,10 @@ func NewEnv(t *testing.T) *Env {
 		Retry: subscription.RetryPolicy{Schedule: []time.Duration{20 * time.Millisecond, 20 * time.Millisecond, 20 * time.Millisecond, 20 * time.Millisecond, 20 * time.Millisecond, 20 * time.Millisecond}},
 		Poll:  5 * time.Millisecond, Breaker: delivery.NewBreaker(1000, time.Millisecond, time.Millisecond)}
 
+	e.MediaIngest = &worker.MediaIngestor{Repos: e.Repos, Providers: reg, Blob: e.Blob, Bus: e.Bus, Metrics: e.Metrics, Log: log,
+		MaxBytes: cfg.EffectiveInboundMaxBytes(), TTL: cfg.EffectiveInboundTTL(), Policy: cfg.MediaPolicy,
+		Poll: 5 * time.Millisecond, MaxAttempts: 4, Backoff: func(int) time.Duration { return 5 * time.Millisecond }}
+
 	e.ctx, e.cancel = context.WithCancel(context.Background())
 	t.Cleanup(func() {
 		e.cancel()
@@ -248,6 +253,12 @@ func (e *Env) StartOutbox() {
 			}
 		}
 	}()
+}
+
+// StartMedia runs the inbound attachment resolver (what the worker binary does).
+func (e *Env) StartMedia() {
+	e.wg.Add(1)
+	go func() { defer e.wg.Done(); e.MediaIngest.Run(e.ctx) }()
 }
 
 // StartProjector launches the event projector consumer.

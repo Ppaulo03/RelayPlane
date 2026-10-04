@@ -22,7 +22,7 @@ Gateway `http://127.0.0.1:18080` · simulador do node-01 `http://127.0.0.1:18081
 | Chamada | Efeito |
 |---|---|
 | `POST /_sim/instances/{id}/scan` | o usuário lê o QR: a instância fica `CONNECTED` |
-| `POST /_sim/instances/{id}/inbound` `{from, text, type, reply_to, group, push_name, timestamp}` | o usuário escreve; `reply_to` é o id de provedor da mensagem citada, ou `"last_sent"` para citar a última mensagem que o RelayPlane enviou. `type`: `text`, `image`, `audio`, `video`, `document` |
+| `POST /_sim/instances/{id}/inbound` `{from, text, type, reply_to, group, push_name, timestamp}` | o usuário escreve; `reply_to` é o id de provedor da mensagem citada, ou `"last_sent"` para citar a última mensagem que o RelayPlane enviou. `type`: `text`, `image`, `audio`, `video`, `document`. Para anexos: `content` (base64, o que o download devolve), `mimetype`, `filename`, `seconds`, `declared_size` (o tamanho que a mensagem anuncia, para simular um arquivo enorme sem guardá-lo) e `fail_downloads` (os N primeiros downloads falham como um anexo que o WhatsApp já descartou) |
 | `POST /_sim/instances/{id}/receipt` `{message_id, status}` | `delivered`, `read` ou `failed` (`message_id` aceita `"last_sent"`); com `SIM_AUTO_RECEIPTS=true` (padrão do sandbox) toda mensagem aceita vira `delivered` sozinha |
 | `POST /_sim/instances/{id}/disconnect` `{logged_out}` | o socket cai (ou o usuário desloga o aparelho) |
 | `GET /_sim/instances/{id}/sent` | tudo que o RelayPlane enviou ao node |

@@ -30,6 +30,14 @@ cria uma entrega por assinatura (`UNIQUE(subscription_id, event_id)`: reentrega 
 * **Idempotência de envio:** a janela em que a mesma `Idempotency-Key` devolve a mesma mensagem é `IDEMPOTENCY_TTL` (padrão **24 h**, mínimo 1 min). Um cliente que reenvia depois disso cria **outra** mensagem.
 * **Criação idempotente:** `POST /subscriptions` aceita `Idempotency-Key`; repetir a chamada (um script de deploy que roda duas vezes) devolve a MESMA subscription
   (`200` + `Idempotent-Replayed: true`) **sem o segredo**; se ele foi perdido, use `rotate-secret`. A mesma chave com outro corpo é `422`.
+* **Anexos recebidos:** a mensagem com mídia é gravada na fila `inbound_media` (no lugar de ir direto ao bus) e o `worker` a resolve: pede os bytes ao node
+  (`/chat/getBase64FromMediaMessage`, que recebe a própria mensagem, então o node **não** precisa guardar mensagens), grava no object store, registra o `blob_metadata`
+  (`READY`, retenção `INBOUND_MEDIA_TTL`, padrão 7 dias) e só então publica o `message.received` com `media`. Cada passo é idempotente e a linha é a fonte da verdade:
+  um worker que cai deixa a lease expirar (3 min) e outro continua; com o bus fora do ar só a publicação se repete. Tentativas: nó indisponível até 6 (5 s, 15 s, 1 min, 5 min, 15 min),
+  nó que responde mas não consegue baixar 3; depois o evento sai com `FAILED`. `INBOUND_MEDIA_MAX_BYTES` (padrão 25 MiB; negativo desliga) limita o que é baixado:
+  o tamanho **anunciado** acima do limite é recusado sem baixar nada. A resposta da Evolution traz o arquivo em base64 dentro do JSON, então cada download ocupa na memória
+  do worker cerca de 3x o tamanho do arquivo; dimensione `INBOUND_MEDIA_MAX_BYTES` com isso em mente (4 downloads em paralelo). Métricas: `relayplane_inbound_media_total{outcome}`,
+  `relayplane_inbound_media_pending{stage}`. Download pelo tenant: `GET /api/v1/media/{id}/content`.
 * **Filtro de grupos:** `exclude_groups: true` descarta `message.received` de conversas em grupo para aquela subscription.
 * **Trace:** o webhook leva o header `traceparent`. Os eventos de status (`message.outbound_status`) carregam o trace do `POST /messages/send` que criou a mensagem
   (o consumidor liga seu trace ao do envio); eventos que nascem no provedor (mensagem recebida) levam o trace da própria entrega.

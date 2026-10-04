@@ -21,6 +21,10 @@ type MediaLimits struct {
 	MaxBytes       int64    `json:"max_bytes"`
 	InlineMaxBytes int      `json:"inline_max_bytes"`
 	AllowedTypes   []string `json:"allowed_types"`
+	// InboundMaxBytes is the largest attachment RelayPlane downloads for an inbound message (a larger one is reported as
+	// REJECTED/too_large); InboundTTLSeconds is how long it stays downloadable. InboundMaxBytes is 0 when inbound media is off.
+	InboundMaxBytes   int64 `json:"inbound_max_bytes"`
+	InboundTTLSeconds int64 `json:"inbound_ttl_seconds"`
 }
 
 // RateLimits is the default outbound pacing per instance (tenant and instance policies may tighten it).
@@ -53,7 +57,8 @@ func (a *App) Limits() Limits {
 	}
 	l := Limits{
 		MaxTextLength: c.MaxTextLength,
-		Media:         MediaLimits{MaxBytes: c.MediaPolicy.MaxBytes, InlineMaxBytes: c.MediaPolicy.InlineMaxBytes, AllowedTypes: append([]string{}, c.MediaPolicy.AllowedTypes...)},
+		Media: MediaLimits{MaxBytes: c.MediaPolicy.MaxBytes, InlineMaxBytes: c.MediaPolicy.InlineMaxBytes, AllowedTypes: append([]string{}, c.MediaPolicy.AllowedTypes...),
+			InboundMaxBytes: c.EffectiveInboundMaxBytes(), InboundTTLSeconds: int64(c.EffectiveInboundTTL().Seconds())},
 		Rate: RateLimits{MinIntervalMillis: c.DefaultRate.MinInterval.Milliseconds(), Burst: c.DefaultRate.Burst, MaxPerMinute: c.DefaultRate.MaxPerMinute,
 			MaxConcurrent: c.DefaultRate.MaxConcurrent},
 		Subscriptions: SubLimits{MaxPerTenant: sub.MaxPerTenant, RetryMaxAttempts: retry.MaxAttempts(), RetryHorizonSeconds: horizon},
