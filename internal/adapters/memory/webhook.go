@@ -32,6 +32,18 @@ type FakeWebhookEv struct {
 	State             string          `json:"state"`
 	Timestamp         time.Time       `json:"timestamp"`
 	Payload           json.RawMessage `json:"payload"`
+	// Media makes a message.received an attachment-bearing message: the description goes into the payload, Ref is the
+	// provider-side download reference (see FakeMediaRef).
+	Media *FakeWebhookMedia `json:"media,omitempty"`
+}
+
+// FakeWebhookMedia is the attachment of a FakeWebhookEv.
+type FakeWebhookMedia struct {
+	Kind     string          `json:"kind"`
+	MimeType string          `json:"mime_type"`
+	Size     int64           `json:"size"`
+	Filename string          `json:"filename"`
+	Ref      json.RawMessage `json:"ref"`
 }
 
 func (f FakeWebhook) Provider() string { return f.ProviderKey }
@@ -63,8 +75,16 @@ func (f FakeWebhook) Normalize(r ports.InboundRequest) ([]events.Inbound, error)
 		if len(e.Payload) > 0 {
 			payload = e.Payload
 		}
-		out = append(out, events.Inbound{InstanceID: e.InstanceID, Type: e.Type, ProviderMessageID: e.ProviderMessageID,
-			State: e.State, Timestamp: e.Timestamp, Payload: payload})
+		in := events.Inbound{InstanceID: e.InstanceID, Type: e.Type, ProviderMessageID: e.ProviderMessageID,
+			State: e.State, Timestamp: e.Timestamp, Payload: payload}
+		if e.Media != nil && e.Type == events.MessageReceived {
+			var pl events.MessageReceivedPayload
+			_ = json.Unmarshal(e.Payload, &pl)
+			desc := events.MessageMedia{Kind: e.Media.Kind, MimeType: e.Media.MimeType, Size: e.Media.Size, Filename: e.Media.Filename}
+			pl.Media = &desc
+			in.Payload, in.Media = pl, &events.InboundMedia{Media: desc, Ref: e.Media.Ref}
+		}
+		out = append(out, in)
 	}
 	return out, nil
 }

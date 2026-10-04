@@ -79,6 +79,11 @@ func TestRealWebhooksNormalize(t *testing.T) {
 				t.Fatalf("want one %s, got %+v", c.typ, got)
 			}
 			// what the adapter produced from a REAL payload must also satisfy the published tenant event contract
+			if pl, ok := got[0].Payload.(events.MessageReceivedPayload); ok && pl.Media != nil {
+				// what the control plane adds once the attachment is resolved
+				pl.Media.MediaID, pl.Media.Status = "med_golden", events.MediaReady
+				got[0].Payload = pl
+			}
 			wire, err := json.Marshal(events.Event{EventID: "evt_golden", EventType: got[0].Type, Provider: "evolution-v2", TenantID: "t1",
 				InstanceID: got[0].InstanceID, Timestamp: got[0].Timestamp, Payload: got[0].Payload, SchemaVersion: events.SchemaVersion, Sequence: 1})
 			if err != nil {
@@ -97,6 +102,19 @@ func TestRealWebhooksNormalize(t *testing.T) {
 				}
 				if c.group && (!strings.HasSuffix(pl.ChatID, "@g.us") || pl.SenderLID == "" || !strings.HasPrefix(pl.From, "55")) {
 					t.Errorf("group sender not resolved: %+v", pl)
+				}
+				// attachments: described in the payload, the (key-bearing) download reference only on the internal side
+				isMedia := map[string]bool{"image": true, "audio": true, "video": true, "document": true, "sticker": true}[c.kind]
+				if isMedia != (pl.Media != nil) || isMedia != (got[0].Media != nil) {
+					t.Fatalf("media descriptor: payload=%+v internal=%+v", pl.Media, got[0].Media)
+				}
+				if isMedia {
+					if pl.Media.Kind != c.kind || pl.Media.MimeType == "" || pl.Media.Size <= 0 || len(got[0].Media.Ref) == 0 {
+						t.Errorf("incomplete media description: %+v", pl.Media)
+					}
+					if strings.Contains(string(wire), "mediaKey") || strings.Contains(string(wire), "directPath") {
+						t.Errorf("the download reference leaked into the tenant event: %s", wire)
+					}
 				}
 				if !c.group && pl.ChatID != "" {
 					t.Errorf("chat_id is for groups only: %+v", pl)

@@ -10,6 +10,7 @@ package simulator
 import (
 	"bytes"
 	"crypto/rand"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -56,6 +57,8 @@ type Simulator struct {
 	sends, duplicates, reordered int
 	seen                         map[string]int
 	lastText                     map[string]string
+	attachments                  map[string]*attachment // by provider message id
+	downloads                    int
 }
 
 type webhookConfig struct {
@@ -93,7 +96,7 @@ func New(cfg Config) *Simulator {
 	if cfg.HTTP == nil {
 		cfg.HTTP = &http.Client{Timeout: 10 * time.Second}
 	}
-	return &Simulator{cfg: cfg, instances: map[string]*instanceState{}, seen: map[string]int{}, lastText: map[string]string{}}
+	return &Simulator{cfg: cfg, instances: map[string]*instanceState{}, seen: map[string]int{}, lastText: map[string]string{}, attachments: map[string]*attachment{}}
 }
 
 func (s *Simulator) newID(prefix string) string {
@@ -284,10 +287,45 @@ func (s *Simulator) instanceRoute(w http.ResponseWriter, r *http.Request, route,
 		writeJSON(w, 200, map[string]any{"status": "SUCCESS", "error": false})
 	case "message/sendText", "message/sendMedia", "message/sendWhatsAppAudio":
 		s.send(w, r, inst, route)
+	case "chat/getBase64FromMediaMessage":
+		s.download(w, r)
 	default:
 		apiErr(w, 404, "route not found")
 	}
 }
+
+// download answers Evolution's getBase64FromMediaMessage: the request carries the message (the node keeps none), the
+// answer is the decrypted content in base64.
+func (s *Simulator) download(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		Message struct {
+			Key         struct{ ID string } `json:"key"`
+			MessageType string              `json:"messageType"`
+			Message     map[string]any      `json:"message"`
+		} `json:"message"`
+	}
+	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&in); err != nil || in.Message.Message == nil {
+		apiErr(w, 400, "invalid media request")
+		return
+	}
+	s.mu.Lock()
+	s.downloads++
+	a, ok := s.attachments[in.Message.Key.ID]
+	if ok && a.failures > 0 {
+		a.failures--
+		ok = false
+	}
+	s.mu.Unlock()
+	if !ok {
+		apiErr(w, 400, "Error: Failed to download media (404): the attachment is no longer available")
+		return
+	}
+	writeJSON(w, 200, map[string]any{"mediaType": in.Message.MessageType, "fileName": a.filename, "mimetype": a.mime,
+		"size": map[string]any{"fileLength": len(a.content)}, "base64": base64.StdEncoding.EncodeToString(a.content), "buffer": nil})
+}
+
+// MediaDownloads is how many times the node was asked for an attachment (tests).
+func (s *Simulator) MediaDownloads() int { s.mu.Lock(); defer s.mu.Unlock(); return s.downloads }
 
 func (s *Simulator) send(w http.ResponseWriter, r *http.Request, inst *instanceState, route string) {
 	s.mu.Lock()
@@ -424,6 +462,19 @@ type Inbound struct {
 	Filename string `json:"filename"`
 	Seconds  int    `json:"seconds"`
 	URL      string `json:"url"`
+	// Content is what a download of the attachment returns (default: a few bytes). DeclaredSize overrides the size the
+	// message announces (fileLength), to play a huge attachment without holding it. FailDownloads makes the first N
+	// downloads of this attachment fail as an attachment that WhatsApp no longer has.
+	Content       []byte `json:"content"`
+	DeclaredSize  int64  `json:"declared_size"`
+	FailDownloads int    `json:"fail_downloads"`
+}
+
+type attachment struct {
+	content  []byte
+	mime     string
+	filename string
+	failures int
 }
 
 // InboundResult is what the simulator reports back.
@@ -491,7 +542,21 @@ func (s *Simulator) Receive(name string, in Inbound) (InboundResult, error) {
 		if mt == "" {
 			mt = map[string]string{"image": "image/jpeg", "video": "video/mp4", "audio": "audio/ogg; codecs=opus", "document": "application/pdf"}[in.Type]
 		}
-		body := map[string]any{"mimetype": mt, "url": in.URL}
+		content := in.Content
+		if len(content) == 0 {
+			content = []byte("simulated " + in.Type + " content")
+		}
+		size := in.DeclaredSize
+		if size <= 0 {
+			size = int64(len(content))
+		}
+		s.mu.Lock()
+		s.attachments[in.ID] = &attachment{content: content, mime: mt, filename: in.Filename, failures: in.FailDownloads}
+		s.mu.Unlock()
+		// the shapes Evolution really sends: fileLength is a protobuf Long, mediaKey a serialised byte buffer
+		body := map[string]any{"mimetype": mt, "url": in.URL, "directPath": "/v/t62.sim/" + in.ID,
+			"fileLength": map[string]any{"low": size & 0xffffffff, "high": size >> 32, "unsigned": true},
+			"mediaKey":   map[string]any{"0": 1, "1": 2, "2": 3}, "fileSha256": "c2ltdWxhdGVk"}
 		if in.Text != "" {
 			body["caption"] = in.Text
 		}
