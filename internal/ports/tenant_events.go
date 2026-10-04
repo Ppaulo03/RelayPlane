@@ -75,6 +75,8 @@ type DeliveryRepository interface {
 	// EraseContact deletes every delivery of the tenant whose event is about the contact (payload.from == number), whatever
 	// its status. A subscription that had not received those events yet will see gaps in its sequence.
 	EraseContact(ctx context.Context, tenantID, number string) (int64, error)
+	// DeleteByEvent deletes the deliveries created for one event (an erasure that arrived while it was being fanned out).
+	DeleteByEvent(ctx context.Context, eventID string) (int64, error)
 	// Counts feeds the gauges: deliveries per status, and the age of the oldest PENDING one.
 	Counts(ctx context.Context, now time.Time) (DeliveryCounts, error)
 }

@@ -17,4 +17,6 @@ type Repositories struct {
 	Deliveries    DeliveryRepository
 	// InboundMedia is the durable work queue that resolves the attachments of inbound messages before they are delivered.
 	InboundMedia InboundMediaRepository
+	// Erasures remembers which contacts were erased and when, so that what was in flight at that moment cannot bring them back.
+	Erasures ErasureRepository
 }

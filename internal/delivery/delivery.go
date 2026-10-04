@@ -41,6 +41,13 @@ func (f *FanOut) Handle(ctx context.Context, ev events.Event) error {
 	if !subscription.TenantFacing(ev.EventType) || ev.TenantID == "" {
 		return nil
 	}
+	// the contact was erased after this message was accepted: the event was already on its way, it must not bring the data back
+	if gone, err := f.Repos.Erasures.Erased(ctx, ev); err != nil {
+		return err
+	} else if gone {
+		f.Log.InfoContext(ctx, "event of an erased contact dropped before delivery", "event_id", ev.EventID)
+		return nil
+	}
 	subs, err := f.Repos.Subscriptions.ListActive(ctx, ev.TenantID)
 	if err != nil {
 		return err
@@ -60,8 +67,18 @@ func (f *FanOut) Handle(ctx context.Context, ev events.Event) error {
 	if len(ds) == 0 {
 		return nil
 	}
-	_, err = f.Repos.Deliveries.Enqueue(ctx, ds)
-	return err
+	if _, err = f.Repos.Deliveries.Enqueue(ctx, ds); err != nil {
+		return err
+	}
+	// write first, ask after: an erasure that landed while the deliveries were being created marked the contact BEFORE it deleted, so
+	// either it deleted them or this check sees the mark
+	if gone, err := f.Repos.Erasures.Erased(ctx, ev); err != nil {
+		return err
+	} else if gone {
+		_, err := f.Repos.Deliveries.DeleteByEvent(ctx, ev.EventID)
+		return err
+	}
+	return nil
 }
 
 // Dispatcher claims due deliveries and POSTs them.
@@ -194,7 +211,7 @@ func (d *Dispatcher) process(ctx context.Context, dl subscription.Delivery) {
 	}
 
 	wire := dl.Event
-	wire.SchemaVersion, wire.Sequence, wire.ObservedAt = events.SchemaVersion, dl.Sequence, nil // internal fields never leave
+	wire.SchemaVersion, wire.Sequence, wire.ObservedAt, wire.AcceptedAt = events.SchemaVersion, dl.Sequence, nil, nil // internal fields never leave
 	body, err := json.Marshal(wire)
 	if err != nil {
 		_ = d.Repos.Deliveries.MarkDead(rctx, dl.ID, "event not serializable: "+err.Error())

@@ -60,6 +60,7 @@ func (s *Store) Repositories() ports.Repositories {
 		Operations: opRepo{s}, Messages: msgRepo{s}, Blobs: blobRepo{s},
 		Idempotency: idemRepo{s}, Dedup: dedupRepo{s},
 		Events: eventsRepo{s}, Subscriptions: subsRepo{s}, Deliveries: deliveriesRepo{s}, InboundMedia: inboundMediaRepo{s},
+		Erasures: erasureRepo{s},
 	}
 }
 
@@ -130,7 +131,7 @@ func (s *Store) Reset(ctx context.Context) error {
 	// victim is always this statement, so trying again once they are done is safe.
 	for attempt := 0; attempt < 10; attempt++ {
 		_, err = s.pool.Exec(ctx, `TRUNCATE outbound_messages, operations, instance_assignments, instances,
-			api_keys, provider_nodes, idempotency_keys, event_deduplication, blob_metadata, event_outbox, webhook_deliveries, delivery_sequences, inbound_media,
+			api_keys, provider_nodes, idempotency_keys, event_deduplication, blob_metadata, event_outbox, webhook_deliveries, delivery_sequences, inbound_media, contact_erasures,
 			subscriptions, tenants CASCADE`)
 		if _, code := constraint(err); err == nil || code != "40P01" {
 			return err
