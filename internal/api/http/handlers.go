@@ -267,6 +267,30 @@ func (s *Server) sendMessage(w nethttp.ResponseWriter, r *nethttp.Request, p Pri
 	writeJSON(w, nethttp.StatusAccepted, res)
 }
 
+// listMessages lists the caller's messages in a status, e.g. GET /api/v1/messages?status=UNKNOWN&instance_id=...&limit=50
+func (s *Server) listMessages(w nethttp.ResponseWriter, r *nethttp.Request, p Principal) {
+	q := r.URL.Query()
+	limit := 100
+	if v := q.Get("limit"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n < 1 {
+			writeError(w, r, s.Log, errs.Wrap(errs.ErrInvalidArgument, "limit must be a positive integer"))
+			return
+		}
+		limit = n
+	}
+	ms, err := s.App.Messages.List(r.Context(), p.TenantID, messaging.Status(q.Get("status")), q.Get("instance_id"), limit)
+	if err != nil {
+		writeError(w, r, s.Log, err)
+		return
+	}
+	out := make([]messageView, 0, len(ms))
+	for _, m := range ms {
+		out = append(out, viewMessage(m))
+	}
+	writeJSON(w, 200, map[string]any{"messages": out})
+}
+
 func (s *Server) getMessage(w nethttp.ResponseWriter, r *nethttp.Request, p Principal) {
 	m, err := s.App.Messages.Get(r.Context(), p.TenantID, r.PathValue("id"))
 	if err != nil {

@@ -154,6 +154,13 @@ type MessageRepository interface {
 	// a recipient and content. It returns how many it did.
 	ScrubTerminalBefore(ctx context.Context, before, at time.Time, limit int) (int64, error)
 
+	// ListByStatus returns the messages of a tenant in a status, oldest first (by instance, then sequence), optionally of one
+	// instance. It is how an operator or an agent finds what is waiting for a decision (UNKNOWN) or what failed.
+	ListByStatus(ctx context.Context, tenantID string, status messaging.Status, instanceID string, limit int) ([]messaging.Message, error)
+	// UnknownStats counts the UNKNOWN messages of the whole platform and the age of the oldest one, by the store's own clock:
+	// each is an instance whose later messages may be held back.
+	UnknownStats(ctx context.Context) (count int64, oldest time.Duration, err error)
+
 	// ListOutbox returns the undispatched outbox entries of one instance in sequence order.
 	ListOutbox(ctx context.Context, instanceID string, limit int) ([]messaging.OutboxEntry, error)
 	// ListInstancesWithPendingOutbox returns instances that have undispatched entries.

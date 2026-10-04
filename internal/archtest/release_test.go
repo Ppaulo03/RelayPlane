@@ -80,3 +80,36 @@ func TestStagingIsTheProductionConfigurationFromPinnedImages(t *testing.T) {
 		t.Error("staging must not relax the production webhook guards")
 	}
 }
+
+// A node is a stateful singleton: its database holds the WhatsApp sessions. Every pod of the StatefulSet must therefore get its OWN
+// database, derived from its stable name, never one shared URI (two processes on one session break it, and a replacement pod keeps
+// its name, hence its database, hence its sessions).
+func TestEvolutionStatefulSetGivesEachPodItsOwnDatabase(t *testing.T) {
+	s := readRepoFile(t, "deploy", "kubernetes", "relayplane.yaml")
+	i := strings.Index(s, "kind: StatefulSet")
+	if i < 0 {
+		t.Fatal("no StatefulSet for the provider nodes")
+	}
+	sts := s[i:]
+	if !regexp.MustCompile(`name: DATABASE_CONNECTION_URI, value: "[^"]*\$\(POD_NAME\)[^"]*"`).MatchString(sts) {
+		t.Error("DATABASE_CONNECTION_URI must be derived from $(POD_NAME): one database per node")
+	}
+	if regexp.MustCompile(`name: DATABASE_CONNECTION_URI, valueFrom`).MatchString(sts) {
+		t.Error("DATABASE_CONNECTION_URI must not come whole from a Secret: every pod would share one database")
+	}
+	if !strings.Contains(sts, "fieldPath: metadata.name") {
+		t.Error("POD_NAME must come from the pod's own name")
+	}
+}
+
+// The runbooks the alerts and docs point to must exist.
+func TestRunbooksExist(t *testing.T) {
+	for _, f := range []string{"UNKNOWN-MESSAGES.md", "NODE-REPLACEMENT.md"} {
+		if len(readRepoFile(t, "docs", "runbooks", f)) < 500 {
+			t.Errorf("runbook %s is empty", f)
+		}
+	}
+	if !strings.Contains(readRepoFile(t, "deploy", "prometheus", "alerts.yml"), "docs/runbooks/UNKNOWN-MESSAGES.md") {
+		t.Error("the UNKNOWN alert must point to its runbook")
+	}
+}

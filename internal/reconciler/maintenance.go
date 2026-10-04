@@ -49,6 +49,7 @@ func (r *Reconciler) Maintenance(ctx context.Context) {
 		r.Log.WarnContext(ctx, "delivered webhook purge failed", "error", err)
 	}
 	app.RecordDeliveryGauges(ctx, d)
+	app.RecordUnknownGauges(ctx, d)
 	now := time.Now()
 	if _, err := d.Repos.Idempotency.DeleteExpired(ctx, now); err != nil {
 		r.Log.WarnContext(ctx, "idempotency expiry failed", "error", err)

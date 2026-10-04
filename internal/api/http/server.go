@@ -112,6 +112,7 @@ func (s *Server) Handler() nethttp.Handler {
 	mux.HandleFunc("POST /api/v1/messages/send", tenant(s.sendMessage))
 	mux.HandleFunc("POST /api/v1/messages/read", tenant(s.markRead))
 	mux.HandleFunc("POST /api/v1/instances/{id}/presence", tenant(s.sendPresence))
+	mux.HandleFunc("GET /api/v1/messages", tenant(s.listMessages))
 	mux.HandleFunc("GET /api/v1/messages/{id}", tenant(s.getMessage))
 	mux.HandleFunc("POST /api/v1/messages/{id}/resolve", tenant(s.resolveMessage))
 	mux.HandleFunc("GET /api/v1/operations/{id}", tenant(s.getOperation))

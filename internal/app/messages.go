@@ -218,6 +218,34 @@ func clipQuote(s string) string {
 	return s
 }
 
+// List returns the tenant's messages in a status (oldest first), optionally of one instance: the way to find the UNKNOWN messages
+// that wait for a decision.
+func (s *MessageService) List(ctx context.Context, tenantID string, status messaging.Status, instanceID string, limit int) ([]messaging.Message, error) {
+	switch status {
+	case messaging.StatusQueued, messaging.StatusDispatching, messaging.StatusAccepted, messaging.StatusDelivered, messaging.StatusRead,
+		messaging.StatusFailed, messaging.StatusUnknown:
+	default:
+		return nil, fmt.Errorf("%w: status must be one of QUEUED, DISPATCHING, ACCEPTED, DELIVERED, READ, FAILED, UNKNOWN", errs.ErrInvalidArgument)
+	}
+	if instanceID != "" {
+		if _, err := s.d.loadForTenant(ctx, tenantID, instanceID); err != nil {
+			return nil, err
+		}
+	}
+	return s.d.Repos.Messages.ListByStatus(ctx, tenantID, status, instanceID, limit)
+}
+
+// RecordUnknownGauges publishes how many messages wait for a decision and for how long: an UNKNOWN holds back the later messages of
+// its instance until somebody resolves it (or UNKNOWN_BARRIER_TIMEOUT passes).
+func RecordUnknownGauges(ctx context.Context, d Deps) {
+	n, oldest, err := d.Repos.Messages.UnknownStats(ctx)
+	if err != nil {
+		return
+	}
+	d.Metrics.UnknownMessages.Set(float64(n))
+	d.Metrics.UnknownOldest.Set(oldest.Seconds())
+}
+
 // Get returns a message owned by tenantID.
 func (s *MessageService) Get(ctx context.Context, tenantID, id string) (*messaging.Message, error) {
 	m, err := s.d.Repos.Messages.Get(ctx, id)
