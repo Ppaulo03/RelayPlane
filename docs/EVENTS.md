@@ -72,6 +72,32 @@ Recibo cru do provedor (`sent`, `delivered`, `read`, `failed`) por `provider_mes
 ### `instance.status_changed`
 Mudança de estado da sessão (`CONNECTED`, `LOGGED_OUT`, …). `LOGGED_OUT` pede novo pareamento.
 
+## Receita: uma confirmação que não pode ser desfeita por baixo
+
+O agente envia um prompt citável ("Confirma amanhã às 15h?"), guarda o `provider_message_id` dele (de `message.outbound_status`) e só aceita a resposta
+quando **todas** as condições valem: ela cita o prompt (`reply_to_provider_message_id` igual ao id guardado), o remetente é quem foi perguntado e, **depois**
+dela, a pessoa não apagou nem editou nada.
+
+```python
+from relayplane import Event
+
+def verdict(event: Event, prompt_id: str, answers: dict[str, str]) -> str | None:
+    p = event.payload
+    if event.event_type == "message.received":
+        if p.get("reply_to_provider_message_id") == prompt_id and p["type"] == "text":
+            answers[p["provider_message_id"]] = p["text"]          # a candidate answer, still revocable
+            return "answered"
+        if p["type"] == "secretEncrypted":                         # an edit whose new text we cannot read:
+            answers.clear()                                        # whatever was said before no longer stands
+            return "ask_again"
+    if event.event_type == "message.deleted" and p["provider_message_id"] in answers:
+        del answers[p["provider_message_id"]]                      # the person took it back
+        return "ask_again"
+    return None
+```
+
+Isso só vale para eventos processados **em ordem de `sequence`** (use o `SequenceTracker`) e depois de um pequeno debounce, porque mensagens do mesmo segundo podem chegar trocadas.
+
 ## Evolução do contrato
 
 * Campo **opcional** novo: entra no schema e nos exemplos, `schema_version` continua igual. O schema proíbe campos não declarados justamente para que

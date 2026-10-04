@@ -61,10 +61,13 @@ sandbox-down:
 test-sandbox:
 	sh deploy/docker/sandbox.sh test
 
+# the p95 delivery lag of outbound status events (first attempts) must stay below this (measured: ~1.1 s under chaos at 285 msg/s)
+LOAD_MAX_EVENT_LAG_P95 ?= 2s
+
 # multi-process load: real gateway + N workers + reconciler containers, provider nodes replaced by cmd/loadstub.
 # e.g. make test-load-stack WORKERS=6 INSTANCES=60 MESSAGES=6000 CHAOS_KILL=1   (see deploy/docker/load.sh)
 test-load-stack:
-	WORKERS=$(WORKERS) INSTANCES=$(INSTANCES) MESSAGES=$(MESSAGES) CHAOS_KILL=$(CHAOS_KILL) sh deploy/docker/load.sh
+	WORKERS=$(WORKERS) INSTANCES=$(INSTANCES) MESSAGES=$(MESSAGES) CHAOS_KILL=$(CHAOS_KILL) LOAD_MAX_EVENT_LAG_P95=$(LOAD_MAX_EVENT_LAG_P95) sh deploy/docker/load.sh
 
 # the race detector needs cgo; run it in the pinned golang image
 test-race:

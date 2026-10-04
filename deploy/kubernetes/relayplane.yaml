@@ -31,6 +31,7 @@ data:
   RETENTION_MESSAGES: 2160h
   RETENTION_DEAD_DELIVERIES: 720h
   WEBHOOK_MAX_IN_FLIGHT_PER_SUBSCRIPTION: "8"
+  OUTBOX_INTERVAL: 250ms
   # tenant webhooks: https + public destinations only in production (APP_ENV=production)
   WEBHOOKS_MAX_PER_TENANT: "10"
   # id/endpoint/capacity per node; api_key values come from the Secret (PROVIDER_NODES is assembled by your secret tooling)

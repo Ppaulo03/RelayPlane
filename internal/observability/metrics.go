@@ -30,12 +30,13 @@ type Metrics struct {
 	ReconciliationFail    prometheus.Counter
 	ReconciliationDrift   prometheus.Counter
 	RateLimitWait         prometheus.Histogram
-	BlobBytes             *prometheus.CounterVec // by op (put|get)
-	RetentionApplied      *prometheus.CounterVec // records changed by retention (messages|dead_deliveries)
-	RateLimited           prometheus.Counter     // API requests refused because the tenant spent its budget
-	InboundMedia          *prometheus.CounterVec // inbound attachments by outcome (ready|too_large|type_not_allowed|unsupported|expired|download_failed|retry)
-	InboundMediaPending   *prometheus.GaugeVec   // jobs waiting by stage (download|publish)
-	BlobCleanupTotal      *prometheus.CounterVec // by reason
+	BlobBytes             *prometheus.CounterVec   // by op (put|get)
+	EventDeliveryLag      *prometheus.HistogramVec // seconds from "RelayPlane knows" to the consumer's 2xx, by event type and attempt
+	RetentionApplied      *prometheus.CounterVec   // records changed by retention (messages|dead_deliveries)
+	RateLimited           prometheus.Counter       // API requests refused because the tenant spent its budget
+	InboundMedia          *prometheus.CounterVec   // inbound attachments by outcome (ready|too_large|type_not_allowed|unsupported|expired|download_failed|retry)
+	InboundMediaPending   *prometheus.GaugeVec     // jobs waiting by stage (download|publish)
+	BlobCleanupTotal      *prometheus.CounterVec   // by reason
 	ProviderLatency       *prometheus.HistogramVec
 	HTTPRequests          *prometheus.CounterVec
 	HTTPLatency           *prometheus.HistogramVec
@@ -81,6 +82,9 @@ func NewMetrics() *Metrics {
 	m.ReconciliationFail = prometheus.NewCounter(prometheus.CounterOpts{Name: "relayplane_reconciliation_failure_total", Help: "Reconciliation passes that failed."})
 	m.ReconciliationDrift = prometheus.NewCounter(prometheus.CounterOpts{Name: "relayplane_reconciliation_drift_total", Help: "Instances found with desired != observed."})
 	m.RateLimitWait = prometheus.NewHistogram(prometheus.HistogramOpts{Name: "relayplane_rate_limit_wait_seconds", Help: "Time sends were delayed by rate limiting.", Buckets: prometheus.ExponentialBuckets(0.05, 2, 12)})
+	m.EventDeliveryLag = prometheus.NewHistogramVec(prometheus.HistogramOpts{Name: "relayplane_event_delivery_lag_seconds",
+		Help:    "Seconds from the moment RelayPlane learned of an event to the consumer's 2xx answer. attempt=first is the healthy-path latency (target p95 < 2s); attempt=retry includes the backoff.",
+		Buckets: []float64{0.025, 0.05, 0.1, 0.25, 0.5, 1, 2, 5, 10, 30, 60, 300}}, []string{"event_type", "attempt"})
 	m.RetentionApplied = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "relayplane_retention_applied_total", Help: "Records anonymized or deleted by retention."}, []string{"kind"})
 	m.RateLimited = prometheus.NewCounter(prometheus.CounterOpts{Name: "relayplane_api_rate_limited_total", Help: "API requests refused with 429."})
 	m.InboundMedia = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "relayplane_inbound_media_total", Help: "Inbound attachments by outcome."}, []string{"outcome"})
@@ -112,7 +116,7 @@ func NewMetrics() *Metrics {
 		m.InstancesTotal, m.InstancesConnected, m.ProviderNodesTotal, m.ProviderNodeHealth, m.OutboundQueueDepth,
 		m.OutboundRetryTotal, m.OutboundDLQTotal, m.OutboundMessages, m.InboundEventsTotal, m.InboundDuplicates,
 		m.OwnershipViolation, m.StaleCommandTotal, m.EpochMismatchTotal, m.ReconciliationTotal, m.ReconciliationFail,
-		m.ReconciliationDrift, m.RateLimitWait, m.BlobBytes, m.RetentionApplied, m.RateLimited, m.InboundMedia, m.InboundMediaPending, m.BlobCleanupTotal, m.ProviderLatency, m.HTTPRequests,
+		m.ReconciliationDrift, m.RateLimitWait, m.BlobBytes, m.EventDeliveryLag, m.RetentionApplied, m.RateLimited, m.InboundMedia, m.InboundMediaPending, m.BlobCleanupTotal, m.ProviderLatency, m.HTTPRequests,
 		m.HTTPLatency, m.MigrationBlockedTotal, m.BarrierDeferrals, m.OutboxPublished,
 	} {
 		f(c)

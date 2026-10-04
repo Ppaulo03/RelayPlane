@@ -7,6 +7,7 @@ import (
 	"math/rand"
 	"net"
 	"net/http"
+	"sort"
 	"strconv"
 	"sync"
 	"time"
@@ -28,6 +29,7 @@ type webhookSink struct {
 	statuses   map[string]map[string]struct{} // message id -> statuses seen
 	badSig     int
 	failed     int
+	lags       []time.Duration // first-attempt outbound status events: arrival minus the moment the status changed
 }
 
 func startSink(listen string, failRate float64) (*webhookSink, error) {
@@ -81,8 +83,9 @@ func (s *webhookSink) handle(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	var ev struct {
-		EventID   string `json:"event_id"`
-		EventType string `json:"event_type"`
+		EventID   string    `json:"event_id"`
+		EventType string    `json:"event_type"`
+		Timestamp time.Time `json:"timestamp"`
 		Payload   struct {
 			MessageID string `json:"message_id"`
 			Status    string `json:"status"`
@@ -96,6 +99,16 @@ func (s *webhookSink) handle(w http.ResponseWriter, r *http.Request) {
 	s.deliveries++
 	s.events[ev.EventID] = struct{}{}
 	if ev.EventType == "message.outbound_status" {
+		// the delivery lag a consumer sees on the healthy path: the first attempt that succeeded (a retried event carries
+		// the backoff, which is not what the p95 target is about). Skew between this host and the database clock is
+		// clamped to zero.
+		if r.Header.Get(subscription.HeaderAttempt) == "1" && !ev.Timestamp.IsZero() {
+			lag := time.Since(ev.Timestamp)
+			if lag < 0 {
+				lag = 0
+			}
+			s.lags = append(s.lags, lag)
+		}
 		if s.statuses[ev.Payload.MessageID] == nil {
 			s.statuses[ev.Payload.MessageID] = map[string]struct{}{}
 		}
@@ -132,3 +145,16 @@ func (s *webhookSink) summary() string {
 }
 
 func (s *webhookSink) badSignatures() int { s.mu.Lock(); defer s.mu.Unlock(); return s.badSig }
+
+// lagReport returns the sample count and the p50/p95/p99 of the event delivery lag.
+func (s *webhookSink) lagReport() (n int, p50, p95, p99 time.Duration) {
+	s.mu.Lock()
+	lags := append([]time.Duration(nil), s.lags...)
+	s.mu.Unlock()
+	if len(lags) == 0 {
+		return 0, 0, 0, 0
+	}
+	sort.Slice(lags, func(i, j int) bool { return lags[i] < lags[j] })
+	at := func(q float64) time.Duration { return lags[min(len(lags)-1, int(q*float64(len(lags))))] }
+	return len(lags), at(0.50), at(0.95), at(0.99)
+}

@@ -91,6 +91,31 @@ paths:
       tags: [instances]
       responses:
         '200': {description: OK, content: {application/json: {schema: {$ref: '#/components/schemas/OperationRef'}}}}
+  /api/v1/instances/{id}/presence:
+    parameters: [{$ref: '#/components/parameters/Id'}]
+    post:
+      tags: [instances]
+      summary: Show "typing…" or "recording audio…" to a contact
+      description: >
+        Answers 202 at once; the node keeps the state for duration_ms (default 3000, at most 25000) and pauses by itself, so a
+        forgotten "composing" never stays on. "paused" stops it early. Best effort: a failure is only logged. The instance must be
+        CONNECTED (409 otherwise); at most 4 running per instance (429).
+      requestBody: {required: true, content: {application/json: {schema: {type: object, required: [to, state], properties: {to: {type: string}, state: {type: string, enum: [composing, recording, paused]}, duration_ms: {type: integer}}}}}}
+      responses:
+        '202': {description: Accepted}
+        '400': {$ref: '#/components/responses/Error'}
+        '409': {$ref: '#/components/responses/Error'}
+        '429': {$ref: '#/components/responses/Error'}
+  /api/v1/messages/read:
+    post:
+      tags: [messages]
+      summary: Mark messages the contact sent as read (blue ticks)
+      description: 1 to 50 provider message ids of one chat (from message.received). Synchronous. Meant for direct chats.
+      requestBody: {required: true, content: {application/json: {schema: {type: object, required: [instance_id, chat, provider_message_ids], properties: {instance_id: {type: string}, chat: {type: string}, provider_message_ids: {type: array, items: {type: string}}}}}}}
+      responses:
+        '200': {description: Marked, content: {application/json: {schema: {type: object, properties: {read: {type: integer}}}}}}
+        '400': {$ref: '#/components/responses/Error'}
+        '409': {$ref: '#/components/responses/Error'}
   /api/v1/instances/{id}/logout:
     parameters: [{$ref: '#/components/parameters/Id'}]
     post:
@@ -447,7 +472,7 @@ components:
         payload:
           type: object
           description: text -> text; media types -> media_id of an uploaded object (no inline binary)
-          properties: {text: {type: string}, media_id: {type: string}, caption: {type: string}, filename: {type: string}}
+          properties: {text: {type: string}, media_id: {type: string}, caption: {type: string}, filename: {type: string}, reply_to: {$ref: '#/components/schemas/ReplyTo'}}
           additionalProperties: false
       additionalProperties: false
     SendResponse:
@@ -477,6 +502,18 @@ components:
         created_at: {type: string, format: date-time}
         secret: {type: string, description: "whsec_... shown only on creation and rotation"}
         previous_secret_valid_until: {type: string, format: date-time}
+    ReplyTo:
+      type: object
+      description: >
+        The message a reply quotes (the grey box above it). Give EITHER provider_message_id (typically the id of the message the
+        user wrote, from message.received) with its text for the preview, OR message_id (one of YOUR messages: RelayPlane fills
+        in the rest, and it must have been ACCEPTED already). The node keeps no history, so without text the quote is an empty
+        box; the preview is clipped to 1024 characters.
+      properties:
+        provider_message_id: {type: string, maxLength: 128}
+        text: {type: string}
+        from_me: {type: boolean, description: "The quoted message is one we sent (when given by provider_message_id)"}
+        message_id: {type: string}
     ApiKey:
       type: object
       properties:

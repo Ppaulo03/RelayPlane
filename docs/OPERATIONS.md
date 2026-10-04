@@ -57,6 +57,19 @@ cria uma entrega por assinatura (`UNIQUE(subscription_id, event_id)`: reentrega 
   em `EVENT_BUS_RETENTION`), a cópia do comando de uma mensagem que está nas mãos do provedor no instante do pedido (some quando ela resolve), o estado do próprio WhatsApp/Evolution,
   os logs (não carregam texto nem o número) e os backups do banco. Uma subscription que ainda não recebera eventos apagados verá **buracos em `sequence`**: depois de um apagamento
   isso é esperado.
+* **Latência de entrega (R12):** `relayplane_event_delivery_lag_seconds{event_type,attempt}` é o tempo entre o RelayPlane **saber** do evento e o `2xx` do consumidor
+  (mensagem recebida: da aceitação do webhook do provedor, ou do fim do download se tiver anexo; status de envio: da mudança de status). `attempt="first"` é o caminho saudável e
+  tem **meta de p95 < 2 s**; `attempt="retry"` inclui o backoff e não entra na meta. Medido na carga multiprocesso com kill de workers e 10 % de falha injetada no consumidor
+  (285 msg/s aceitas): **p50 ≈ 180 ms, p95 ≈ 1,1 s, p99 ≈ 1,2 s**; o CI falha acima de 2 s (`LOAD_MAX_EVENT_LAG_P95`). O intervalo de publicação do outbox de eventos passou de 1 s para
+  `OUTBOX_INTERVAL` (padrão 250 ms), que é o maior componente da latência dos status. A origem dos status é o relógio do **banco**: um desvio entre banco e workers entra como erro de medida
+  (lag negativo conta como zero), então mantenha NTP nos dois.
+* **Presença e leitura (R07):** `POST /instances/{id}/presence {to, state: composing|recording|paused, duration_ms}` mostra "digitando…" / "gravando áudio…" (202 na hora; o node segura o estado por
+  `duration_ms`, padrão 3 s, máx. 25 s, e **pausa sozinho**; no máximo 4 em curso por instância) e `POST /messages/read {instance_id, chat, provider_message_ids}` marca mensagens como lidas (síncrono, 1 a 50).
+  As duas exigem a instância `CONNECTED` e vão direto ao provedor (não passam pela fila de envio: são efêmeras e não têm ordem em relação às mensagens). A leitura serve a conversas diretas: a Evolution
+  descarta o `participant` de mensagens de grupo.
+* **Resposta citada (R08):** `payload.reply_to` no `POST /messages/send` cita uma mensagem: por `provider_message_id` (a mensagem do usuário, com o `text` dela para a prévia) ou por `message_id` (uma mensagem
+  nossa, já `ACCEPTED`; o RelayPlane preenche id do provedor, texto e `from_me`). **Atenção:** o node não guarda histórico; com só o id ele envia a resposta **sem a citação, em silêncio**, por isso a prévia
+  viaja na requisição (cortada em 1024 caracteres; sem texto, a citação sai como caixa vazia). O texto da prévia é parte do payload e portanto some com a retenção e com o apagamento por pessoa.
 * **Filtro de grupos:** `exclude_groups: true` descarta `message.received` de conversas em grupo para aquela subscription.
 * **Trace:** o webhook leva o header `traceparent`. Os eventos de status (`message.outbound_status`) carregam o trace do `POST /messages/send` que criou a mensagem
   (o consumidor liga seu trace ao do envio); eventos que nascem no provedor (mensagem recebida) levam o trace da própria entrega.

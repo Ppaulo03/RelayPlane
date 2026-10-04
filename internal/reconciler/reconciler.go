@@ -43,7 +43,7 @@ func DefaultConfig() Config {
 	return Config{
 		Interval: 10 * time.Second, InstanceInterval: 30 * time.Second, BatchSize: 100,
 		CallTimeout: 15 * time.Second, NodeOfflineAfter: time.Minute,
-		StuckQueuedAfter: 2 * time.Minute, OutboxInterval: time.Second, OrphanGrace: time.Hour, DeliveredRetention: 7 * 24 * time.Hour, Retention: app.DefaultRetention(), Policy: reconciliation.DefaultPolicy(),
+		StuckQueuedAfter: 2 * time.Minute, OutboxInterval: 250 * time.Millisecond, OrphanGrace: time.Hour, DeliveredRetention: 7 * 24 * time.Hour, Retention: app.DefaultRetention(), Policy: reconciliation.DefaultPolicy(),
 	}
 }
 
@@ -83,7 +83,7 @@ func (r *Reconciler) Run(ctx context.Context) error {
 }
 
 // runOutbox publishes the transactional outbox continuously (default every
-// second): the safety net behind the gateway's eager dispatch.
+// 250 ms: it bounds the lag of outbound status events): the safety net behind the gateway's eager dispatch.
 func (r *Reconciler) runOutbox(ctx context.Context) {
 	interval := r.Cfg.OutboxInterval
 	if interval <= 0 {

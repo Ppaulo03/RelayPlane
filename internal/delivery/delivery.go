@@ -192,7 +192,7 @@ func (d *Dispatcher) process(ctx context.Context, dl subscription.Delivery) {
 	}
 
 	wire := dl.Event
-	wire.SchemaVersion, wire.Sequence = events.SchemaVersion, dl.Sequence
+	wire.SchemaVersion, wire.Sequence, wire.ObservedAt = events.SchemaVersion, dl.Sequence, nil // internal fields never leave
 	body, err := json.Marshal(wire)
 	if err != nil {
 		_ = d.Repos.Deliveries.MarkDead(rctx, dl.ID, "event not serializable: "+err.Error())
@@ -231,6 +231,17 @@ func (d *Dispatcher) process(ctx context.Context, dl subscription.Delivery) {
 			return
 		}
 		d.Metrics.WebhookDeliveries.WithLabelValues("delivered").Inc()
+		attempt := "retry"
+		if dl.Attempts == 0 {
+			attempt = "first"
+		}
+		// the origin of an outbound status is the database clock: a few hundred milliseconds of skew against this host must
+		// not make the sample disappear, so a "negative" lag counts as zero (the skew is the measurement error)
+		lag := d.now().Sub(dl.Event.LagOrigin(dl.CreatedAt))
+		if lag < 0 {
+			lag = 0
+		}
+		d.Metrics.EventDeliveryLag.WithLabelValues(string(dl.EventType), attempt).Observe(lag.Seconds())
 	case errors.Is(serr, errs.ErrDestinationBlocked):
 		// permanent: no retry can make a forbidden destination acceptable
 		_ = d.Repos.Deliveries.MarkDead(rctx, dl.ID, serr.Error())

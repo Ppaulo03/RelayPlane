@@ -58,6 +58,23 @@ type Event struct {
 	// reorder what a retry reordered and notice what it never received (a delivery that went to the DLQ leaves a gap).
 	SchemaVersion int   `json:"schema_version,omitempty"`
 	Sequence      int64 `json:"sequence,omitempty"`
+	// ObservedAt is INTERNAL (never sent to a tenant): when RelayPlane learned of the fact, the start of the delivery lag
+	// measured by relayplane_event_delivery_lag_seconds. Events that carry the provider's own time in Timestamp
+	// (message.received) need it; for the others Timestamp is already that moment.
+	ObservedAt *time.Time `json:"observed_at,omitempty"`
+}
+
+// LagOrigin is the moment from which the delivery lag of an event is counted: when RelayPlane observed it.
+func (e Event) LagOrigin(fallback time.Time) time.Time {
+	switch {
+	case e.ObservedAt != nil:
+		return *e.ObservedAt
+	case e.EventType == MessageReceived || e.EventType == MessageStatus || e.EventType == MessageDeleted:
+		return fallback // Timestamp is the provider's: it says nothing about when WE learned of it
+	case !e.Timestamp.IsZero():
+		return e.Timestamp
+	}
+	return fallback
 }
 
 // SchemaVersion is the version of the tenant-facing event envelope and payloads (docs/events/*.json). It changes only

@@ -78,3 +78,38 @@ def test_media_of_a_message_is_typed():
     assert refused.media and not refused.media.ready and refused.media.reason == "too_large"
     plain = Event.from_dict(json.loads((EXAMPLES / "message.received.json").read_text(encoding="utf-8")))
     assert plain.media is None
+
+
+# the recipe documented in docs/EVENTS.md ("uma confirmação que não pode ser desfeita por baixo"): it must really work
+def verdict(event: Event, prompt_id: str, answers: dict) -> "str | None":
+    p = event.payload
+    if event.event_type == "message.received":
+        if p.get("reply_to_provider_message_id") == prompt_id and p["type"] == "text":
+            answers[p["provider_message_id"]] = p["text"]
+            return "answered"
+        if p["type"] == "secretEncrypted":
+            answers.clear()
+            return "ask_again"
+    if event.event_type == "message.deleted" and p["provider_message_id"] in answers:
+        del answers[p["provider_message_id"]]
+        return "ask_again"
+    return None
+
+
+def _ev(seq, typ, payload):
+    return Event(event_id=f"e{seq}", event_type=typ, sequence=seq, schema_version=1, provider="p", tenant_id="t", instance_id="i",
+                 timestamp="2026-10-03T00:00:00Z", payload=payload)
+
+
+def test_confirmation_recipe_survives_a_revocation():
+    answers: dict = {}
+    yes = _ev(1, "message.received", {"provider_message_id": "U1", "reply_to_provider_message_id": "PROMPT", "type": "text", "text": "sim", "from": "55"})
+    assert verdict(yes, "PROMPT", answers) == "answered" and answers == {"U1": "sim"}
+    assert verdict(_ev(2, "message.deleted", {"provider_message_id": "U1"}), "PROMPT", answers) == "ask_again" and answers == {}
+    # an answer that does not quote the prompt is not an answer to it
+    other = _ev(3, "message.received", {"provider_message_id": "U2", "type": "text", "text": "sim", "from": "55"})
+    assert verdict(other, "PROMPT", answers) is None and answers == {}
+    # an edit of an earlier answer voids it
+    verdict(yes, "PROMPT", answers)
+    assert verdict(_ev(4, "message.received", {"provider_message_id": "U3", "type": "secretEncrypted", "from": "55"}), "PROMPT", answers) == "ask_again"
+    assert answers == {}

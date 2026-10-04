@@ -779,6 +779,10 @@ func (s *Simulator) control(w http.ResponseWriter, r *http.Request, p []string) 
 			s.InjectFaults(in.Next...)
 			w.WriteHeader(http.StatusNoContent)
 		}
+	case len(p) == 3 && p[0] == "instances" && p[2] == "presences" && r.Method == http.MethodGet:
+		writeJSON(w, 200, map[string]any{"presences": s.Presences(p[1])})
+	case len(p) == 3 && p[0] == "instances" && p[2] == "reads" && r.Method == http.MethodGet:
+		writeJSON(w, 200, map[string]any{"reads": s.Reads(p[1])})
 	case len(p) == 3 && p[0] == "instances" && p[2] == "sent" && r.Method == http.MethodGet:
 		writeJSON(w, 200, map[string]any{"sent": s.SentMessages(p[1])})
 	case len(p) == 3 && p[0] == "instances" && p[2] == "scan" && r.Method == http.MethodPost:

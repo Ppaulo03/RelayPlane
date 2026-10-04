@@ -25,7 +25,8 @@ Gateway `http://127.0.0.1:18080` · simulador do node-01 `http://127.0.0.1:18081
 | `POST /_sim/instances/{id}/inbound` `{from, text, type, reply_to, group, push_name, timestamp}` | o usuário escreve; `reply_to` é o id de provedor da mensagem citada, ou `"last_sent"` para citar a última mensagem que o RelayPlane enviou. `type`: `text`, `image`, `audio`, `video`, `document`. Para anexos: `content` (base64, o que o download devolve), `mimetype`, `filename`, `seconds`, `declared_size` (o tamanho que a mensagem anuncia, para simular um arquivo enorme sem guardá-lo) e `fail_downloads` (os N primeiros downloads falham como um anexo que o WhatsApp já descartou) |
 | `POST /_sim/instances/{id}/receipt` `{message_id, status}` | `delivered`, `read` ou `failed` (`message_id` aceita `"last_sent"`); com `SIM_AUTO_RECEIPTS=true` (padrão do sandbox) toda mensagem aceita vira `delivered` sozinha |
 | `POST /_sim/instances/{id}/disconnect` `{logged_out}` | o socket cai (ou o usuário desloga o aparelho) |
-| `GET /_sim/instances/{id}/sent` | tudo que o RelayPlane enviou ao node |
+| `GET /_sim/instances/{id}/sent` | tudo que o RelayPlane enviou ao node, inclusive a citação (`quoted_id`, `quoted_text`, `quoted_from_me`; `quote_dropped` quando o node teria enviado a resposta SEM citar, como o real faz quando só recebe o id) |
+| `GET /_sim/instances/{id}/presences`, `GET /_sim/instances/{id}/reads` | os "digitando…" e as leituras que o RelayPlane pediu ao node |
 | `POST /_sim/faults` `{next: [...]}` | falhas nas próximas chamadas à API do node: `unavailable`, `auth`, `not_found`, `server_error`, `ambiguous` |
 | `GET /_sim/instances`, `POST /_sim/reset` | inspeção e limpeza |
 
