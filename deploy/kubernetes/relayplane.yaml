@@ -31,6 +31,7 @@ data:
   # personal content: finished messages lose recipient and text after 90 days, the webhook DLQ is deleted after 30 (0 keeps forever)
   RETENTION_MESSAGES: 2160h
   RETENTION_DEAD_DELIVERIES: 720h
+  RETENTION_PENDING_DELIVERIES: 720h   # deliveries still waiting (e.g. a subscription left paused) are deleted after this long
   WEBHOOK_MAX_IN_FLIGHT_PER_SUBSCRIPTION: "32"
   OUTBOX_INTERVAL: 250ms
   # tenant webhooks: https + public destinations only in production (APP_ENV=production)

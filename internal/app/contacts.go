@@ -119,11 +119,13 @@ type RetentionPolicy struct {
 	Messages time.Duration
 	// DeadDeliveries: dead-lettered webhook deliveries (they hold the user's text) are deleted after this long.
 	DeadDeliveries time.Duration
+	// PendingDeliveries: deliveries still waiting (typically of a subscription left paused) are deleted after this long.
+	PendingDeliveries time.Duration
 }
 
 // DefaultRetention is what the platform does without configuration: 90 days of message content, 30 days of DLQ.
 func DefaultRetention() RetentionPolicy {
-	return RetentionPolicy{Messages: 90 * 24 * time.Hour, DeadDeliveries: 30 * 24 * time.Hour}
+	return RetentionPolicy{Messages: 90 * 24 * time.Hour, DeadDeliveries: 30 * 24 * time.Hour, PendingDeliveries: 30 * 24 * time.Hour}
 }
 
 // Apply runs one pass of the policy and returns how many records it changed.
@@ -145,6 +147,13 @@ func (s *RetentionService) Apply(ctx context.Context, p RetentionPolicy, batch i
 		if dead, err = s.d.Repos.Deliveries.PurgeDead(ctx, now.Add(-p.DeadDeliveries)); err != nil {
 			return messages, dead, err
 		}
+	}
+	if p.PendingDeliveries > 0 {
+		stale, err := s.d.Repos.Deliveries.PurgePending(ctx, now.Add(-p.PendingDeliveries))
+		if err != nil {
+			return messages, dead, err
+		}
+		dead += stale
 	}
 	return messages, dead, nil
 }
