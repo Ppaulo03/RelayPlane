@@ -79,12 +79,17 @@ type Server struct {
 	Log       *slog.Logger
 	Ready     []ReadyCheck
 	MaxUpload int64 // bytes accepted by PUT /media/{id}/content
+	// TenantRate limits the requests of each tenant (zero value: unlimited).
+	TenantRate RateConfig
+
+	limiter *tenantLimiter
 }
 
 const maxJSONBody = 1 << 20
 
 // Handler builds the router.
 func (s *Server) Handler() nethttp.Handler {
+	s.limiter = newTenantLimiter(s.TenantRate, nil)
 	mux := nethttp.NewServeMux()
 	tenant := func(h func(nethttp.ResponseWriter, *nethttp.Request, Principal)) nethttp.HandlerFunc {
 		return s.authed(RoleTenant, h)
@@ -115,6 +120,8 @@ func (s *Server) Handler() nethttp.Handler {
 	mux.HandleFunc("GET /api/v1/subscriptions/{id}", tenant(s.getSubscription))
 	mux.HandleFunc("DELETE /api/v1/subscriptions/{id}", tenant(s.deleteSubscription))
 	mux.HandleFunc("POST /api/v1/subscriptions/{id}/rotate-secret", tenant(s.rotateSubscriptionSecret))
+	mux.HandleFunc("POST /api/v1/subscriptions/{id}/pause", tenant(s.pauseSubscription))
+	mux.HandleFunc("POST /api/v1/subscriptions/{id}/resume", tenant(s.resumeSubscription))
 	mux.HandleFunc("GET /api/v1/subscriptions/{id}/deliveries", tenant(s.listDeliveries))
 	mux.HandleFunc("POST /api/v1/deliveries/{id}/redeliver", tenant(s.redeliver))
 
@@ -213,6 +220,9 @@ func (s *Server) authed(role Role, h func(nethttp.ResponseWriter, *nethttp.Reque
 		}
 		if p.Role != role {
 			writeError(w, r, s.Log, errs.ErrForbidden)
+			return
+		}
+		if !s.limit(w, r, p) {
 			return
 		}
 		ctx := observability.With(r.Context(), observability.KeyTenantID, p.TenantID)

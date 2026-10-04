@@ -45,7 +45,8 @@ func run() error {
 		return err
 	}
 	api := &apihttp.Server{App: rt.App, Metrics: rt.Metrics, Log: rt.Log, Ready: rt.ReadyChecks(), MaxUpload: cfg.MediaMaxBytes,
-		Auth: apihttp.KeyAuthenticator{Tenants: rt.App.Tenants, AdminKey: cfg.AdminAPIKey}}
+		TenantRate: apihttp.RateConfig{PerSecond: cfg.APIRatePerSecond, Burst: cfg.APIRateBurst},
+		Auth:       apihttp.KeyAuthenticator{Tenants: rt.App.Tenants, AdminKey: cfg.AdminAPIKey}}
 	srv := &http.Server{Addr: ":" + cfg.HTTPPort, Handler: api.Handler(), ReadHeaderTimeout: 10 * time.Second, IdleTimeout: 120 * time.Second}
 	errc := make(chan error, 1)
 	go func() { errc <- srv.ListenAndServe() }()

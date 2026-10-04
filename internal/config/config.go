@@ -55,7 +55,10 @@ type Config struct {
 	// InboundMediaMaxBytes caps an inbound attachment (0 = default 25 MiB, negative = inbound media off); InboundMediaTTL is
 	// how long the stored bytes stay downloadable.
 	InboundMediaMaxBytes int64
-	InboundMediaTTL      time.Duration
+	// APIRatePerSecond / APIRateBurst: each tenant's request budget per gateway replica (0 per second = unlimited).
+	APIRatePerSecond float64
+	APIRateBurst     int
+	InboundMediaTTL  time.Duration
 
 	AdminAPIKey    string
 	WebhookSecret  string
@@ -95,6 +98,7 @@ type Config struct {
 	WebhooksAllowPrivate      bool // loopback/private destinations (default: development only)
 	WebhookDeliveryTimeout    time.Duration
 	WebhookDeliveryWorkers    int
+	WebhookMaxInFlightPerSub  int
 	WebhookDeliveredRetention time.Duration
 }
 
@@ -110,6 +114,7 @@ func Load() (Config, error) {
 		BlobUseSSL: getBool("BLOB_STORE_USE_SSL", false), BlobPublicUseSSL: getBool("BLOB_STORE_PUBLIC_USE_SSL", false), BlobLifecycleDays: getInt("BLOB_STORE_LIFECYCLE_DAYS", 7),
 		MediaInlineMaxBytes: getInt("MEDIA_INLINE_MAX_BYTES", 262144), MediaMaxBytes: int64(getInt("MEDIA_MAX_BYTES", 100<<20)), MediaTTL: getDur("MEDIA_DEFAULT_TTL", 24*time.Hour), MediaPendingTTL: getDur("MEDIA_PENDING_TTL", 30*time.Minute),
 		InboundMediaMaxBytes: int64(getInt("INBOUND_MEDIA_MAX_BYTES", 25<<20)), InboundMediaTTL: getDur("INBOUND_MEDIA_TTL", 7*24*time.Hour),
+		APIRatePerSecond: float64(getInt("API_RATE_PER_SECOND", 50)), APIRateBurst: getInt("API_RATE_BURST", 100),
 		AdminAPIKey: os.Getenv("ADMIN_API_KEY"), WebhookSecret: os.Getenv("WEBHOOK_SECRET"), WebhookBaseURL: os.Getenv("WEBHOOK_BASE_URL"),
 		DefaultProvider: get("DEFAULT_PROVIDER", "evolution-v2"),
 		RateMinInterval: getDur("RATE_MIN_INTERVAL", time.Second), RateBurst: getInt("RATE_BURST", 1), RateMaxPerMinute: getInt("RATE_MAX_PER_MINUTE", 30),
@@ -122,7 +127,7 @@ func Load() (Config, error) {
 		SubscriptionSecret:     os.Getenv("SUBSCRIPTION_SECRET"),
 		WebhooksMaxPerTenant:   getInt("WEBHOOKS_MAX_PER_TENANT", 10),
 		WebhookDeliveryTimeout: getDur("WEBHOOK_DELIVERY_TIMEOUT", 5*time.Second),
-		WebhookDeliveryWorkers: getInt("WEBHOOK_DELIVERY_WORKERS", 8),
+		WebhookDeliveryWorkers: getInt("WEBHOOK_DELIVERY_WORKERS", 8), WebhookMaxInFlightPerSub: getInt("WEBHOOK_MAX_IN_FLIGHT_PER_SUBSCRIPTION", 8),
 
 		WebhookDeliveredRetention: getDur("WEBHOOK_DELIVERED_RETENTION", 7*24*time.Hour),
 	}

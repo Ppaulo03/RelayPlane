@@ -257,6 +257,14 @@ class SubscriptionsAPI:
         sub = Subscription.from_dict(out)
         return dataclasses.replace(sub, replayed=_replayed(resp))
 
+    async def pause(self, subscription_id: str) -> None:
+        """Hold deliveries (your own backpressure, e.g. while you deploy): events keep being queued, none is sent until ``resume``."""
+        await self._h.request("POST", f"/api/v1/subscriptions/{subscription_id}/pause")
+
+    async def resume(self, subscription_id: str) -> None:
+        """Send what accumulated while paused, in sequence order."""
+        await self._h.request("POST", f"/api/v1/subscriptions/{subscription_id}/resume")
+
     async def list(self) -> list[Subscription]:
         out, _ = await self._h.request("GET", "/api/v1/subscriptions")
         return [Subscription.from_dict(s) for s in out.get("subscriptions", [])]

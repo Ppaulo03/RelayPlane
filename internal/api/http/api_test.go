@@ -13,6 +13,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	apihttp "github.com/relayplane/relayplane/internal/api/http"
 	"github.com/relayplane/relayplane/internal/core/instance"
@@ -610,4 +611,87 @@ func (h *harness) tenantOf(key string) string {
 		h.t.Fatal(err)
 	}
 	return t.ID
+}
+
+// A tenant that spends its request budget is told to slow down (429 + Retry-After) while others keep working; the
+// budget comes back with time.
+func TestTenantRateLimit(t *testing.T) {
+	e := systemtest.NewEnv(t)
+	_, k1, _ := e.App.Tenants.Create(context.Background(), "noisy")
+	_, k2, _ := e.App.Tenants.Create(context.Background(), "quiet")
+	api := &apihttp.Server{App: e.App, Metrics: e.Metrics, Log: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Auth:       apihttp.KeyAuthenticator{Tenants: e.App.Tenants, AdminKey: "admin-key"},
+		TenantRate: apihttp.RateConfig{PerSecond: 2, Burst: 3}}
+	srv := httptest.NewServer(api.Handler())
+	defer srv.Close()
+	get := func(key string) *nethttp.Response {
+		req, _ := nethttp.NewRequest("GET", srv.URL+"/api/v1/limits", nil)
+		req.Header.Set("Authorization", "Bearer "+key)
+		resp, err := nethttp.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		return resp
+	}
+	for i := 0; i < 3; i++ {
+		if r := get(k1); r.StatusCode != 200 {
+			t.Fatalf("request %d inside the burst: %d", i+1, r.StatusCode)
+		}
+	}
+	r := get(k1)
+	if r.StatusCode != 429 || r.Header.Get("Retry-After") == "" || r.Header.Get("RateLimit-Remaining") != "0" {
+		t.Fatalf("over the budget: %d %v", r.StatusCode, r.Header)
+	}
+	if r := get(k2); r.StatusCode != 200 {
+		t.Errorf("another tenant is not affected by a noisy one: %d", r.StatusCode)
+	}
+	if r := get("wrong-key"); r.StatusCode != 401 {
+		t.Errorf("unauthenticated requests are not tenant traffic: %d", r.StatusCode)
+	}
+	time.Sleep(700 * time.Millisecond) // 2 tokens per second: one is back
+	if r := get(k1); r.StatusCode != 200 {
+		t.Errorf("the budget refills: %d", r.StatusCode)
+	}
+}
+
+func TestTenantLimiterIsOffByDefault(t *testing.T) {
+	h := newHarness(t)
+	for i := 0; i < 200; i++ {
+		if c, _, _ := h.call("GET", "/api/v1/limits", h.key1, ""); c != 200 {
+			t.Fatalf("an unconfigured limiter must not limit: request %d got %d", i+1, c)
+		}
+	}
+}
+
+func TestSubscriptionPauseResumeAndBacklogOverHTTP(t *testing.T) {
+	h := newHarness(t)
+	c, sub, _ := h.call("POST", "/api/v1/subscriptions", h.key1, `{"url":"http://agent.local/hook"}`)
+	if c != 201 {
+		t.Fatalf("%d %v", c, sub)
+	}
+	id := sub["id"].(string)
+	if sub["paused"] != false {
+		t.Errorf("born running: %v", sub)
+	}
+	if c, _, _ := h.call("POST", "/api/v1/subscriptions/"+id+"/pause", h.key1, ""); c != 204 {
+		t.Fatalf("pause: %d", c)
+	}
+	_, got, _ := h.call("GET", "/api/v1/subscriptions/"+id, h.key1, "")
+	bl, _ := got["backlog"].(map[string]any)
+	if got["paused"] != true || bl == nil || bl["pending"] != float64(0) {
+		t.Errorf("paused subscription with its backlog: %v", got)
+	}
+	if c, _, _ := h.call("POST", "/api/v1/subscriptions/"+id+"/pause", h.key2, ""); c != 404 {
+		t.Errorf("another tenant: %d", c)
+	}
+	if c, _, _ := h.call("POST", "/api/v1/subscriptions/"+id+"/resume", h.key1, ""); c != 204 {
+		t.Fatalf("resume: %d", c)
+	}
+	if _, got, _ = h.call("GET", "/api/v1/subscriptions/"+id, h.key1, ""); got["paused"] != false {
+		t.Errorf("resumed: %v", got)
+	}
+	if c, _, _ := h.call("POST", "/api/v1/subscriptions/sub_nope/pause", h.key1, ""); c != 404 {
+		t.Errorf("unknown: %d", c)
+	}
 }

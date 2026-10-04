@@ -30,6 +30,8 @@ type SubscriptionRepository interface {
 	ListByTenant(ctx context.Context, tenantID string) ([]subscription.Subscription, error)
 	// ListActive returns the active subscriptions of a tenant (fan-out).
 	ListActive(ctx context.Context, tenantID string) ([]subscription.Subscription, error)
+	// SetPaused pauses or resumes the subscription: while paused its deliveries accumulate and none is sent.
+	SetPaused(ctx context.Context, tenantID, id string, paused bool) error
 	// RotateSecret increments the secret version and returns the new one.
 	RotateSecret(ctx context.Context, tenantID, id string, at time.Time) (version int, err error)
 	// Delete removes the subscription and its deliveries.
@@ -45,6 +47,11 @@ type DeliveryRepository interface {
 	// ClaimDue leases up to `limit` PENDING deliveries whose next_attempt_at has passed, oldest first, excluding any
 	// delivery whose (subscription, instance) already has another delivery in flight (best-effort ordering).
 	ClaimDue(ctx context.Context, now time.Time, lease time.Duration, limit int) ([]subscription.Delivery, error)
+	// ClaimDueWith is ClaimDue with a ceiling of perSubscription deliveries in flight for any one subscription (0: no
+	// ceiling), so one slow consumer cannot occupy the whole dispatcher. Deliveries of paused subscriptions are never claimed.
+	ClaimDueWith(ctx context.Context, now time.Time, lease time.Duration, limit, perSubscription int) ([]subscription.Delivery, error)
+	// Backlog reports, per subscription of the tenant, the deliveries still waiting and the age of the oldest.
+	Backlog(ctx context.Context, tenantID string, now time.Time) (map[string]Backlog, error)
 	MarkDelivered(ctx context.Context, id string, at time.Time) error
 	// MarkRetry records a failed attempt (attempts+1) and schedules the next one.
 	MarkRetry(ctx context.Context, id string, next time.Time, lastErr string) error
@@ -59,6 +66,12 @@ type DeliveryRepository interface {
 	PurgeDelivered(ctx context.Context, before time.Time) (int64, error)
 	// Counts feeds the gauges: deliveries per status, and the age of the oldest PENDING one.
 	Counts(ctx context.Context, now time.Time) (DeliveryCounts, error)
+}
+
+// Backlog is what one subscription has waiting to be delivered.
+type Backlog struct {
+	Pending       int64
+	OldestPending time.Duration
 }
 
 // DeliveryCounts is a snapshot for metrics/alerts.
