@@ -7,6 +7,12 @@ on:
   workflow_dispatch:
   push:
     tags: ["evolution-*"]
+  # a release builds the same image through this workflow, so there is exactly one way to produce it
+  workflow_call:
+    outputs:
+      image:
+        description: Immutable reference of the published image (repository@sha256:...)
+        value: ${{ jobs.image.outputs.image }}
 
 permissions:
   contents: read
@@ -20,6 +26,8 @@ jobs:
       packages: write
     env:
       TAG: 2.3.7-baileys-rc13
+    outputs:
+      image: ${{ steps.pin.outputs.image }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - id: name
@@ -42,6 +50,15 @@ jobs:
           severity: CRITICAL
           exit-code: "1"
           ignore-unfixed: true
+      # visibility, not a gate: the stock Evolution tree has many HIGH findings in its own dependencies (axios, brace-expansion...)
+      # that this repository cannot fix without forking it; they are listed so they are never a surprise
+      - uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: candidate:scan
+          severity: HIGH
+          exit-code: "0"
+          ignore-unfixed: true
+          format: table
       - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
           registry: ghcr.io
@@ -54,7 +71,9 @@ jobs:
           push: true
           tags: ${{ steps.name.outputs.image }}:${{ env.TAG }}
       - name: digest to pin
+        id: pin
         run: |
+          echo "image=${{ steps.name.outputs.image }}@${{ steps.push.outputs.digest }}" >> "$GITHUB_OUTPUT"
           {
             echo "### Evolution image published"
             echo

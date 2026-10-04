@@ -1,0 +1,24 @@
+# Staging = the production configuration, started from the images a release built. Nothing is built here: every service
+# runs an immutable reference (repository@sha256:...) taken from the release (see docs/RELEASE.md).
+#
+#   docker compose --env-file .env.staging --env-file deploy/staging/images.env \
+#     -f docker-compose.yml -f deploy/staging/compose.staging.yml up -d --no-build
+#
+# APP_ENV=production (from .env.staging) is what makes the difference: https and public destinations only for tenant
+# webhooks, secrets of at least 16 characters, no development overrides. Do NOT set WEBHOOKS_ALLOW_* here.
+services:
+  gateway:
+    image: ${GATEWAY_IMAGE:?images.env}
+    build: !reset null
+  worker:
+    image: ${WORKER_IMAGE:?images.env}
+    build: !reset null
+  reconciler:
+    image: ${RECONCILER_IMAGE:?images.env}
+    build: !reset null
+  evolution-node-01:
+    image: ${EVOLUTION_IMAGE:?images.env}
+    build: !reset null
+  evolution-node-02:
+    image: ${EVOLUTION_IMAGE:?images.env}
+    build: !reset null

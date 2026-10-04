@@ -1,6 +1,7 @@
 # Base Kubernetes manifests (no Helm). Secrets and PostgreSQL/Redis/S3 are expected to exist
-# (managed services or separate charts). Images are pinned by digest: replace the relayplane/* images
-# with your registry path and the digest produced by your build.
+# (managed services or separate charts). This file is a TEMPLATE: the images below are placeholders. A release (docs/RELEASE.md,
+# .github/workflows/release.yml) renders it with cmd/render-release into relayplane-<version>.yaml, in which every image is pinned by
+# digest; the renderer refuses to produce a manifest with a placeholder or an unpinned image. Deploy the rendered file, not this one.
 #
 # Provider nodes are stateful singletons -> StatefulSet (stable identity: evolution-v2-0, -1, ...).
 # Gateway / worker / reconciler are stateless -> Deployments.
