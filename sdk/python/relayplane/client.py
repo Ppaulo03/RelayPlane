@@ -12,7 +12,7 @@ from typing import Any, Union
 import httpx
 
 from .errors import from_response
-from .models import (CreatedInstance, Instance, Media, Message, Operation, OperationRef, Limits, Pairing, SentMessage, Subscription, WebhookDelivery)
+from .models import (ApiKey, CreatedInstance, Instance, Media, Message, Operation, OperationRef, Limits, Pairing, SentMessage, Subscription, WebhookDelivery)
 
 DEFAULT_TIMEOUT = 30.0
 
@@ -201,6 +201,28 @@ class MediaAPI:
         await self._h.request("DELETE", f"/api/v1/media/{media_id}")
 
 
+class ApiKeysAPI:
+    """Your own API keys. Rotating without downtime: ``create`` a new key, deploy it, then ``revoke`` the old one
+    (both authenticate in between). The last usable key cannot be revoked."""
+
+    def __init__(self, http: _Http):
+        self._h = http
+
+    async def create(self, name: str, *, expires_in_seconds: int | None = None) -> ApiKey:
+        body: dict[str, Any] = {"name": name}
+        if expires_in_seconds:
+            body["expires_in_seconds"] = expires_in_seconds
+        out, _ = await self._h.request("POST", "/api/v1/api-keys", json=body)
+        return ApiKey.from_dict(out)
+
+    async def list(self) -> list[ApiKey]:
+        out, _ = await self._h.request("GET", "/api/v1/api-keys")
+        return [ApiKey.from_dict(k) for k in out["api_keys"]]
+
+    async def revoke(self, key_id: str) -> None:
+        await self._h.request("DELETE", f"/api/v1/api-keys/{key_id}")
+
+
 class LimitsAPI:
     """What this deployment guarantees; assert it at startup instead of hard-coding assumptions."""
 
@@ -273,6 +295,7 @@ class RelayPlaneClient:
         self.media = MediaAPI(self._http)
         self.subscriptions = SubscriptionsAPI(self._http)
         self.limits = LimitsAPI(self._http)
+        self.api_keys = ApiKeysAPI(self._http)
 
     async def __aenter__(self) -> "RelayPlaneClient":
         return self

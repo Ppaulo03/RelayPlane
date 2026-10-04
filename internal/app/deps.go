@@ -206,6 +206,7 @@ type App struct {
 	Inbound    *InboundService
 	Nodes      *NodeService
 	Tenants    *TenantService
+	APIKeys    *APIKeyService
 	// EventOutbox moves tenant-facing events from the database outbox to the event bus.
 	EventOutbox   *EventOutboxService
 	Subscriptions *SubscriptionService
@@ -228,6 +229,7 @@ func New(d Deps) *App {
 	a.Inbound = &InboundService{d: d}
 	a.Nodes = &NodeService{d: d}
 	a.Tenants = &TenantService{d: d}
+	a.APIKeys = &APIKeyService{d: d}
 	a.EventOutbox = &EventOutboxService{d: d}
 	a.Subscriptions = &SubscriptionService{d: d}
 	return a

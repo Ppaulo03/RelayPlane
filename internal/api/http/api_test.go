@@ -517,3 +517,97 @@ func TestMessageViewExposesProviderIDAndAcceptanceTime(t *testing.T) {
 		t.Error("another tenant must not see it")
 	}
 }
+
+// Rotating a credential without downtime: a second key is issued while the first still works, the old one is revoked
+// from the new one, and from then on only the new one authenticates. A tenant can never revoke its way into a lock-out.
+func TestAPIKeyRotationWithoutDowntime(t *testing.T) {
+	h := newHarness(t)
+	list := func(key string) []any {
+		c, out, _ := h.call("GET", "/api/v1/api-keys", key, "")
+		if c != 200 {
+			t.Fatalf("list: %d %v", c, out)
+		}
+		return out["api_keys"].([]any)
+	}
+	first := list(h.key1)
+	if len(first) != 1 || first[0].(map[string]any)["name"] != "initial" || first[0].(map[string]any)["current"] != true {
+		t.Fatalf("a tenant starts with one key, the one it is using: %v", first)
+	}
+	oldID := first[0].(map[string]any)["id"].(string)
+
+	// 1. issue the new key (the secret is shown once, with no-store)
+	c, created, hdr := h.call("POST", "/api/v1/api-keys", h.key1, `{"name":"agent-prod"}`)
+	if c != 201 || hdr.Get("Cache-Control") != "no-store" {
+		t.Fatalf("create: %d %v %v", c, created, hdr)
+	}
+	newKey, newID := created["api_key"].(string), created["id"].(string)
+	if !strings.HasPrefix(newKey, "rpk_") || created["prefix"] != newKey[:8] || created["name"] != "agent-prod" {
+		t.Errorf("created key: %v", created)
+	}
+	// 2. both work during the transition
+	for _, k := range []string{h.key1, newKey} {
+		if c, _, _ := h.call("GET", "/api/v1/limits", k, ""); c != 200 {
+			t.Errorf("a key must work during the rotation: %d", c)
+		}
+	}
+	// 3. the listing shows who is who, last use, and never a secret
+	ks := list(newKey)
+	if len(ks) != 2 {
+		t.Fatalf("keys: %v", ks)
+	}
+	for _, raw := range ks {
+		k := raw.(map[string]any)
+		if _, leaked := k["api_key"]; leaked || k["key_hash"] != nil {
+			t.Errorf("a listing must never carry secrets: %v", k)
+		}
+		if k["id"] == newID && k["current"] != true || k["id"] == oldID && k["current"] == true {
+			t.Errorf("current key flag: %v", k)
+		}
+		if k["last_used_at"] == nil {
+			t.Errorf("both keys were just used: %v", k)
+		}
+	}
+	// 4. revoke the old one with the new one: it stops at once
+	if c, _, _ := h.call("DELETE", "/api/v1/api-keys/"+oldID, newKey, ""); c != 204 {
+		t.Fatalf("revoke: %d", c)
+	}
+	if c, _, _ := h.call("GET", "/api/v1/limits", h.key1, ""); c != 401 {
+		t.Errorf("a revoked key must be refused: %d", c)
+	}
+	if c, _, _ := h.call("GET", "/api/v1/limits", newKey, ""); c != 200 {
+		t.Errorf("the new key keeps working: %d", c)
+	}
+	// 5. no lock-out: the last usable key cannot be revoked, not even by itself
+	if c, body, _ := h.call("DELETE", "/api/v1/api-keys/"+newID, newKey, ""); c != 409 {
+		t.Errorf("last key: %d %v", c, body)
+	}
+	// 6. isolation and validation
+	if c, _, _ := h.call("DELETE", "/api/v1/api-keys/"+newID, h.key2, ""); c != 404 {
+		t.Errorf("another tenant's key: %d", c)
+	}
+	if c, _, _ := h.call("POST", "/api/v1/api-keys", newKey, `{"name":""}`); c != 400 {
+		t.Errorf("a key needs a name: %d", c)
+	}
+	// 7. the administrator can always give a tenant a way back in
+	c, rescue, _ := h.call("POST", "/api/v1/tenants/"+h.tenantOf(newKey)+"/api-keys", h.admin, `{"name":"rescue","expires_in_seconds":3600}`)
+	if c != 201 || rescue["expires_at"] == nil {
+		t.Fatalf("admin issue: %d %v", c, rescue)
+	}
+	if c, _, _ := h.call("GET", "/api/v1/limits", rescue["api_key"].(string), ""); c != 200 {
+		t.Errorf("rescue key: %d", c)
+	}
+	if c, _, _ := h.call("POST", "/api/v1/tenants/tenant_nope/api-keys", h.admin, `{"name":"x"}`); c != 404 {
+		t.Errorf("unknown tenant: %d", c)
+	}
+	if c, _, _ := h.call("POST", "/api/v1/tenants/"+h.tenantOf(newKey)+"/api-keys", newKey, `{"name":"x"}`); c != 403 {
+		t.Errorf("a tenant cannot mint keys through the admin route: %d", c)
+	}
+}
+
+func (h *harness) tenantOf(key string) string {
+	t, err := h.env.App.Tenants.Authenticate(context.Background(), key)
+	if err != nil {
+		h.t.Fatal(err)
+	}
+	return t.ID
+}
