@@ -1,0 +1,148 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://relayplane.dev/schemas/events/v1/events.schema.json",
+  "title": "RelayPlane tenant event (webhook body), schema_version 1",
+  "description": "The JSON body RelayPlane POSTs to a subscription. Incompatible changes bump schema_version; adding an OPTIONAL field does not (consumers must ignore unknown fields, but this schema forbids them so that every addition is written down here).",
+  "oneOf": [
+    {"$ref": "#/$defs/message_received"},
+    {"$ref": "#/$defs/message_status"},
+    {"$ref": "#/$defs/message_outbound_status"},
+    {"$ref": "#/$defs/message_deleted"},
+    {"$ref": "#/$defs/instance_status_changed"}
+  ],
+  "$defs": {
+    "envelope_properties": {
+      "properties": {
+        "schema_version": {"const": 1, "description": "Version of this contract."},
+        "event_id": {"type": "string", "minLength": 1, "description": "Stable id of the event: the same on every redelivery. Deduplicate on it."},
+        "sequence": {"type": "integer", "minimum": 1, "description": "1, 2, 3... per (subscription, instance), without gaps; a redelivery keeps its number. Reorder by it; a missing number is a delivery you never received (it may be in the dead-letter queue)."},
+        "provider": {"type": "string", "minLength": 1},
+        "tenant_id": {"type": "string", "minLength": 1},
+        "instance_id": {"type": "string", "minLength": 1},
+        "timestamp": {"type": "string", "format": "date-time", "description": "message.received: when the provider stamped the message (second resolution; ties are normal). Other events: when RelayPlane observed the fact."},
+        "source_assignment": {
+          "type": "object",
+          "description": "Which node/epoch produced the event.",
+          "properties": {"node_id": {"type": "string"}, "epoch": {"type": "integer"}},
+          "required": ["node_id", "epoch"],
+          "additionalProperties": false
+        },
+        "traceparent": {"type": "string", "description": "W3C trace context of the request that caused the event (also sent as the traceparent header)."}
+      }
+    },
+    "envelope_required": {
+      "required": ["schema_version", "event_id", "sequence", "event_type", "provider", "tenant_id", "instance_id", "timestamp", "payload"]
+    },
+
+    "message_received": {
+      "type": "object",
+      "allOf": [{"$ref": "#/$defs/envelope_properties"}, {"$ref": "#/$defs/envelope_required"}],
+      "properties": {
+        "event_type": {"const": "message.received"},
+        "payload": {
+          "type": "object",
+          "properties": {
+            "provider_message_id": {"type": "string", "minLength": 1},
+            "reply_to_provider_message_id": {"type": "string", "minLength": 1, "description": "Provider id of the message this one quotes. Present only for quoted replies."},
+            "from": {"type": "string", "minLength": 1, "description": "Sender phone number (digits). Falls back to the LID digits only when the provider reported no phone."},
+            "push_name": {"type": "string"},
+            "type": {"type": "string", "minLength": 1, "description": "text, image, audio, video, document, sticker, secretEncrypted (an edit whose new content is not readable), or another WhatsApp message type."},
+            "text": {"type": "string", "description": "Text, or the caption of a media message."},
+            "group": {"type": "boolean"},
+            "chat_id": {"type": "string", "description": "Group JID (<id>@g.us); present for group messages only."},
+            "sender_lid": {"type": "string", "description": "Opaque WhatsApp LID of the sender, when the provider addressed them that way."}
+          },
+          "required": ["provider_message_id", "from", "type"],
+          "additionalProperties": false
+        }
+      },
+      "required": ["event_type"],
+      "unevaluatedProperties": false
+    },
+
+    "message_status": {
+      "type": "object",
+      "allOf": [{"$ref": "#/$defs/envelope_properties"}, {"$ref": "#/$defs/envelope_required"}],
+      "properties": {
+        "event_type": {"const": "message.status"},
+        "payload": {
+          "type": "object",
+          "description": "Raw provider receipt of a message, keyed by the provider id.",
+          "properties": {
+            "provider_message_id": {"type": "string", "minLength": 1},
+            "status": {"enum": ["sent", "delivered", "read", "failed"]}
+          },
+          "required": ["provider_message_id", "status"],
+          "additionalProperties": false
+        }
+      },
+      "required": ["event_type"],
+      "unevaluatedProperties": false
+    },
+
+    "message_outbound_status": {
+      "type": "object",
+      "allOf": [{"$ref": "#/$defs/envelope_properties"}, {"$ref": "#/$defs/envelope_required"}],
+      "properties": {
+        "event_type": {"const": "message.outbound_status"},
+        "payload": {
+          "type": "object",
+          "description": "Lifecycle of a message YOU sent through RelayPlane, keyed by the RelayPlane message id.",
+          "properties": {
+            "message_id": {"type": "string", "minLength": 1},
+            "status": {"enum": ["ACCEPTED", "DELIVERED", "READ", "FAILED", "UNKNOWN"]},
+            "provider_message_id": {"type": "string", "minLength": 1, "description": "The id a quoted reply will carry in reply_to_provider_message_id."},
+            "sequence_no": {"type": "integer", "minimum": 0, "description": "The message's own per-instance send order (not the delivery sequence)."},
+            "accepted_at": {"type": "string", "format": "date-time"},
+            "error_code": {"type": "string"}
+          },
+          "required": ["message_id", "status", "sequence_no"],
+          "additionalProperties": false
+        }
+      },
+      "required": ["event_type"],
+      "unevaluatedProperties": false
+    },
+
+    "message_deleted": {
+      "type": "object",
+      "allOf": [{"$ref": "#/$defs/envelope_properties"}, {"$ref": "#/$defs/envelope_required"}],
+      "properties": {
+        "event_type": {"const": "message.deleted"},
+        "payload": {
+          "type": "object",
+          "description": "The sender revoked a message (delete for everyone). Whatever it said no longer stands.",
+          "properties": {
+            "provider_message_id": {"type": "string", "minLength": 1, "description": "Id of the revoked message, as delivered in message.received."},
+            "from": {"type": "string"},
+            "group": {"type": "boolean"},
+            "chat_id": {"type": "string"}
+          },
+          "required": ["provider_message_id"],
+          "additionalProperties": false
+        }
+      },
+      "required": ["event_type"],
+      "unevaluatedProperties": false
+    },
+
+    "instance_status_changed": {
+      "type": "object",
+      "allOf": [{"$ref": "#/$defs/envelope_properties"}, {"$ref": "#/$defs/envelope_required"}],
+      "properties": {
+        "event_type": {"const": "instance.status_changed"},
+        "payload": {
+          "type": "object",
+          "properties": {
+            "state": {"enum": ["ALLOCATING", "CREATING", "AWAITING_PAIRING", "CONNECTING", "CONNECTED", "DISCONNECTED", "RECONNECTING", "LOGGED_OUT", "MIGRATING", "DELETING", "DELETED", "FAILED"]},
+            "reason": {"type": "string"}
+          },
+          "required": ["state"],
+          "additionalProperties": false
+        }
+      },
+      "required": ["event_type"],
+      "unevaluatedProperties": false
+    }
+  }
+}

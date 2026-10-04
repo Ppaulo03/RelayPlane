@@ -16,7 +16,7 @@ Portas: gateway `HTTP_PORT` (8080); worker/reconciler expõem `/metrics` e `/hea
 
 O tenant se inscreve com `POST /api/v1/subscriptions {url, event_types?, instance_ids?}` e passa a receber `message.received` (com `reply_to_provider_message_id`,
 e o `timestamp` do envelope é o carimbo do **provedor**), `message.outbound_status` (`ACCEPTED`, `DELIVERED`, `READ`, `FAILED`, `UNKNOWN` das mensagens que ele enviou,
-com `accepted_at` e `sequence_no`), `message.status` e `instance.status_changed`. QR codes e violações de ownership nunca saem da plataforma.
+com `accepted_at` e `sequence_no`), `message.status`, `message.deleted` e `instance.status_changed`. QR codes e violações de ownership nunca saem da plataforma.
 
 **Caminho:** a mudança de status da mensagem grava o evento na tabela `event_outbox` **na mesma transação** → o reconciler publica no bus (a cada ~1 s) → o worker (`webhook-fanout`)
 cria uma entrega por assinatura (`UNIQUE(subscription_id, event_id)`: reentrega do bus nunca duplica) → o dispatcher faz o POST assinado.
@@ -24,7 +24,7 @@ cria uma entrega por assinatura (`UNIQUE(subscription_id, event_id)`: reentrega 
 * **Assinatura:** `X-RelayPlane-Signature: v1=<hex>` = HMAC-SHA256(`<timestamp>.<body>`) com o segredo `whsec_…` (mostrado só na criação e na rotação; derivado de `SUBSCRIPTION_SECRET`/`WEBHOOK_SECRET`, não fica no banco).
   O consumidor deve rejeitar timestamps fora de ~5 min e **deduplicar por `X-RelayPlane-Event-Id`**. `POST …/rotate-secret` emite outro segredo; por 24 h as requisições levam as duas assinaturas.
 * **Garantia:** pelo menos uma vez. Retry com backoff (5 s, 30 s, 2 min, 10 min, 30 min, 1 h, 2 h, 4 h, 8 h; ±20 %) e depois **DLQ** (`GET …/deliveries?status=DEAD`, `POST /deliveries/{id}/redeliver`).
-  Circuit breaker por destino (5 falhas seguidas → pausa de 30 s…5 min, **sem gastar tentativas** dos itens na fila). Ordem: no máximo uma entrega em voo por (assinatura, instância), melhor esforço; o consumidor deve usar o `timestamp` do evento.
+  Circuit breaker por destino (5 falhas seguidas → pausa de 30 s…5 min, **sem gastar tentativas** dos itens na fila). Ordem: no máximo uma entrega em voo por (assinatura, instância), melhor esforço; um retry pode chegar depois de eventos mais novos, então o consumidor **reordena por `sequence`** (`1, 2, 3…` por assinatura e instância, sem buracos; uma reentrega mantém o número) e vê o que faltou. Contrato completo em [`EVENTS`](./EVENTS.md).
 * **Segurança (SSRF):** em produção a URL deve ser `https` e resolver para endereço **público**; o IP é validado **no momento da conexão** (derrota DNS rebinding), redirects nunca são seguidos, não há proxy ambiente e a resposta é lida só até 64 KiB.
   Em desenvolvimento (`APP_ENV≠production`) `http://` e redes privadas são aceitos; force com `WEBHOOKS_ALLOW_PRIVATE_DESTINATIONS` / `WEBHOOKS_ALLOW_INSECURE`.
 * **Idempotência de envio:** a janela em que a mesma `Idempotency-Key` devolve a mesma mensagem é `IDEMPOTENCY_TTL` (padrão **24 h**, mínimo 1 min). Um cliente que reenvia depois disso cria **outra** mensagem.

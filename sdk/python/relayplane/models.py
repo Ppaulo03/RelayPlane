@@ -83,11 +83,13 @@ class WebhookDelivery:
     status: str
     attempts: int
     last_error: str = ""
+    sequence: int = 0
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> "WebhookDelivery":
         return cls(id=d["id"], event_id=d["event_id"], event_type=d.get("event_type", ""), instance_id=d.get("instance_id", ""),
-                   status=d.get("status", ""), attempts=int(d.get("attempts", 0)), last_error=d.get("last_error", ""))
+                   status=d.get("status", ""), attempts=int(d.get("attempts", 0)), last_error=d.get("last_error", ""),
+                   sequence=int(d.get("sequence", 0)))
 
 
 @dataclass(frozen=True)

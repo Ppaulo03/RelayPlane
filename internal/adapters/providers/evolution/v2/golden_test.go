@@ -1,11 +1,13 @@
 package v2_test
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	eventschema "github.com/relayplane/relayplane/docs/events"
 	"github.com/relayplane/relayplane/internal/adapters/providers/evolution/v2"
 	"github.com/relayplane/relayplane/internal/core/events"
 )
@@ -75,6 +77,15 @@ func TestRealWebhooksNormalize(t *testing.T) {
 			}
 			if len(got) != 1 || got[0].Type != c.typ {
 				t.Fatalf("want one %s, got %+v", c.typ, got)
+			}
+			// what the adapter produced from a REAL payload must also satisfy the published tenant event contract
+			wire, err := json.Marshal(events.Event{EventID: "evt_golden", EventType: got[0].Type, Provider: "evolution-v2", TenantID: "t1",
+				InstanceID: got[0].InstanceID, Timestamp: got[0].Timestamp, Payload: got[0].Payload, SchemaVersion: events.SchemaVersion, Sequence: 1})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := eventschema.Validate(wire); err != nil {
+				t.Errorf("breaks the published event schema: %v: %s", err, wire)
 			}
 			switch pl := got[0].Payload.(type) {
 			case events.MessageReceivedPayload:
