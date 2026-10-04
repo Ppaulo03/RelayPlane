@@ -101,7 +101,10 @@ type Delivery struct {
 	EventID        string
 	EventType      events.Type
 	Event          events.Event
-	Status         DeliveryStatus
+	// Sequence is assigned when the delivery is created (Enqueue): 1, 2, 3... per (subscription, instance), gapless.
+	// A redelivery keeps it.
+	Sequence int64
+	Status   DeliveryStatus
 	// Attempts counts recorded failed attempts.
 	Attempts      int
 	NextAttemptAt time.Time

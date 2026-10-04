@@ -187,14 +187,14 @@ func (r subsRepo) CountByTenant(ctx context.Context, tenantID string) (int, erro
 
 type deliveriesRepo struct{ s *Store }
 
-const delCols = `id,subscription_id,tenant_id,instance_id,event_id,event_type,event,status,attempts,next_attempt_at,last_error,created_at,delivered_at`
+const delCols = `id,subscription_id,tenant_id,instance_id,event_id,event_type,event,sequence,status,attempts,next_attempt_at,last_error,created_at,delivered_at`
 
 func scanDelivery(row pgx.Row) (*subscription.Delivery, error) {
 	var d subscription.Delivery
 	var raw []byte
 	var typ, st string
 	var delivered *time.Time
-	if err := row.Scan(&d.ID, &d.SubscriptionID, &d.TenantID, &d.InstanceID, &d.EventID, &typ, &raw, &st, &d.Attempts, &d.NextAttemptAt, &d.LastError, &d.CreatedAt, &delivered); err != nil {
+	if err := row.Scan(&d.ID, &d.SubscriptionID, &d.TenantID, &d.InstanceID, &d.EventID, &typ, &raw, &d.Sequence, &st, &d.Attempts, &d.NextAttemptAt, &d.LastError, &d.CreatedAt, &delivered); err != nil {
 		return nil, notFound(err)
 	}
 	d.EventType, d.Status, d.DeliveredAt = events.Type(typ), subscription.DeliveryStatus(st), zeroIfNil(delivered)
@@ -219,14 +219,28 @@ func (r deliveriesRepo) Enqueue(ctx context.Context, ds []subscription.Delivery)
 			if d.NextAttemptAt.IsZero() {
 				d.NextAttemptAt = d.CreatedAt
 			}
-			tag, err := tx.Exec(ctx, `INSERT INTO webhook_deliveries(id,subscription_id,tenant_id,instance_id,event_id,event_type,event,status,next_attempt_at,created_at)
-				VALUES($1,$2,$3,$4,$5,$6,$7,'PENDING',$8,$9) ON CONFLICT (subscription_id,event_id) DO NOTHING`,
-				d.ID, d.SubscriptionID, d.TenantID, d.InstanceID, d.EventID, string(d.EventType), raw, d.NextAttemptAt, d.CreatedAt)
+			// the counter row is locked for the rest of the transaction: concurrent fan-outs of the same (subscription,
+			// instance) queue up here, so sequences are assigned in commit order and never skip
+			var last int64
+			err = tx.QueryRow(ctx, `INSERT INTO delivery_sequences(subscription_id,instance_id) VALUES($1,$2)
+				ON CONFLICT (subscription_id,instance_id) DO UPDATE SET last = delivery_sequences.last RETURNING last`,
+				d.SubscriptionID, d.InstanceID).Scan(&last)
 			if err != nil {
 				if _, code := constraint(err); code == "23503" {
 					continue // the subscription vanished between fan-out and insert
 				}
 				return err
+			}
+			tag, err := tx.Exec(ctx, `INSERT INTO webhook_deliveries(id,subscription_id,tenant_id,instance_id,event_id,event_type,event,sequence,status,next_attempt_at,created_at)
+				VALUES($1,$2,$3,$4,$5,$6,$7,$8,'PENDING',$9,$10) ON CONFLICT (subscription_id,event_id) DO NOTHING`,
+				d.ID, d.SubscriptionID, d.TenantID, d.InstanceID, d.EventID, string(d.EventType), raw, last+1, d.NextAttemptAt, d.CreatedAt)
+			if err != nil {
+				return err
+			}
+			if tag.RowsAffected() == 1 {
+				if _, err := tx.Exec(ctx, `UPDATE delivery_sequences SET last=$3 WHERE subscription_id=$1 AND instance_id=$2`, d.SubscriptionID, d.InstanceID, last+1); err != nil {
+					return err
+				}
 			}
 			n += int(tag.RowsAffected())
 		}
@@ -248,7 +262,7 @@ WITH heads AS (
           AND NOT EXISTS (SELECT 1 FROM webhook_deliveries o
                            WHERE o.subscription_id=d.subscription_id AND o.instance_id=d.instance_id AND o.id<>d.id
                              AND o.status='PENDING' AND o.lease_until > $1)
-        ORDER BY d.subscription_id, d.instance_id, d.created_at, d.id
+        ORDER BY d.subscription_id, d.instance_id, d.sequence, d.created_at, d.id
     ) first ORDER BY created_at, id LIMIT $3
 ), locked AS (
     SELECT w.id FROM webhook_deliveries w JOIN heads h ON h.id=w.id ORDER BY h.created_at, h.id FOR UPDATE OF w SKIP LOCKED

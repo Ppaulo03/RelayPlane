@@ -41,6 +41,7 @@ type Store struct {
 	eventOutbox []*outboxEvent
 	subs        map[string]*subscription.Subscription
 	deliveries  map[string]*deliveryRow
+	deliverySeq map[string]int64 // "subscription|instance" -> last sequence
 
 	// BeforeCommit lets failure tests inject a fault into multi-step writes
 	// (simulating a transaction rollback). Return an error to abort.
@@ -69,6 +70,7 @@ func NewStore() *Store {
 		dedup:       map[string]dedupRow{},
 		subs:        map[string]*subscription.Subscription{},
 		deliveries:  map[string]*deliveryRow{},
+		deliverySeq: map[string]int64{},
 		nextSeq:     map[string]int64{},
 	}
 }
@@ -1056,4 +1058,11 @@ func (r dedupRepo) DeleteExpired(_ context.Context, now time.Time) (int64, error
 		}
 	}
 	return n, nil
+}
+
+// nextDeliverySeq returns the next delivery sequence of (subscription, instance). The caller holds s.mu.
+func (s *Store) nextDeliverySeq(subscriptionID, instanceID string) int64 {
+	k := subscriptionID + "|" + instanceID
+	s.deliverySeq[k]++
+	return s.deliverySeq[k]
 }

@@ -39,6 +39,7 @@ type deliveryView struct {
 	EventID       string     `json:"event_id"`
 	EventType     string     `json:"event_type"`
 	InstanceID    string     `json:"instance_id"`
+	Sequence      int64      `json:"sequence"`
 	Status        string     `json:"status"`
 	Attempts      int        `json:"attempts"`
 	NextAttemptAt time.Time  `json:"next_attempt_at"`
@@ -48,7 +49,7 @@ type deliveryView struct {
 }
 
 func viewDelivery(d subscription.Delivery) deliveryView {
-	v := deliveryView{ID: d.ID, EventID: d.EventID, EventType: string(d.EventType), InstanceID: d.InstanceID, Status: string(d.Status),
+	v := deliveryView{ID: d.ID, EventID: d.EventID, EventType: string(d.EventType), InstanceID: d.InstanceID, Sequence: d.Sequence, Status: string(d.Status),
 		Attempts: d.Attempts, NextAttemptAt: d.NextAttemptAt, LastError: d.LastError, CreatedAt: d.CreatedAt}
 	if !d.DeliveredAt.IsZero() {
 		t := d.DeliveredAt

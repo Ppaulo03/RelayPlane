@@ -53,7 +53,16 @@ type Event struct {
 	// (outbound status events carry the trace of the send); webhooks forward it as the traceparent header.
 	TraceParent string `json:"traceparent,omitempty"`
 	Payload     any    `json:"payload"`
+	// SchemaVersion and Sequence are set only on the copy that is POSTed to a tenant's webhook (see SchemaVersion).
+	// Sequence numbers the deliveries of ONE subscription for ONE instance 1, 2, 3, ... without gaps, so a consumer can
+	// reorder what a retry reordered and notice what it never received (a delivery that went to the DLQ leaves a gap).
+	SchemaVersion int   `json:"schema_version,omitempty"`
+	Sequence      int64 `json:"sequence,omitempty"`
 }
+
+// SchemaVersion is the version of the tenant-facing event envelope and payloads (docs/events/*.json). It changes only
+// for incompatible changes; adding an optional field does not.
+const SchemaVersion = 1
 
 // IsGroupMessage reports whether ev is a message.received from a group chat. The payload is a typed struct when the
 // event was just produced and a decoded JSON object after it crossed the bus, so both shapes are handled.

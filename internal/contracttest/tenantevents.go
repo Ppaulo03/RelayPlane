@@ -344,6 +344,75 @@ func deliveriesContract(t *testing.T, f RepoFactory) {
 	}
 }
 
+// A consumer reorders and detects losses with the delivery sequence: per (subscription, instance), 1, 2, 3 without gaps.
+func deliverySequenceContract(t *testing.T, f RepoFactory) {
+	fx, ctx := newFixture(t, f), context.Background()
+	fx.tenant(t, "t1")
+	for _, s := range []subscription.Subscription{newSub("sub_1", "t1"), newSub("sub_2", "t1")} {
+		if err := fx.r.Subscriptions.Create(ctx, s); err != nil {
+			t.Fatal(err)
+		}
+	}
+	now := time.Now().UTC().Truncate(time.Millisecond)
+	seqOf := func(sub string) map[string]int64 {
+		t.Helper()
+		out := map[string]int64{}
+		for _, st := range []subscription.DeliveryStatus{subscription.DeliveryPending, subscription.DeliveryDelivered, subscription.DeliveryDead} {
+			ds, err := fx.r.Deliveries.List(ctx, "t1", sub, st, 100)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, d := range ds {
+				out[d.EventID] = d.Sequence
+			}
+		}
+		return out
+	}
+
+	if _, err := fx.r.Deliveries.Enqueue(ctx, []subscription.Delivery{
+		newDelivery("a1", "sub_1", "t1", "inst_1", "e1", now),
+		newDelivery("a2", "sub_1", "t1", "inst_1", "e2", now.Add(time.Millisecond)),
+		newDelivery("a3", "sub_1", "t1", "inst_2", "e3", now.Add(2*time.Millisecond)),
+		newDelivery("a4", "sub_2", "t1", "inst_1", "e1", now.Add(3*time.Millisecond)),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// a redelivery from the bus is a duplicate: it creates nothing and CONSUMES NO SEQUENCE NUMBER (no gap)
+	if n, _ := fx.r.Deliveries.Enqueue(ctx, []subscription.Delivery{newDelivery("a1b", "sub_1", "t1", "inst_1", "e1", now)}); n != 0 {
+		t.Fatalf("duplicate created a delivery: %d", n)
+	}
+	if _, err := fx.r.Deliveries.Enqueue(ctx, []subscription.Delivery{newDelivery("a5", "sub_1", "t1", "inst_1", "e4", now.Add(4*time.Millisecond))}); err != nil {
+		t.Fatal(err)
+	}
+	s1, s2 := seqOf("sub_1"), seqOf("sub_2")
+	if s1["e1"] != 1 || s1["e2"] != 2 || s1["e4"] != 3 {
+		t.Errorf("sub_1/inst_1 must be 1,2,3 without gaps: %v", s1)
+	}
+	if s1["e3"] != 1 {
+		t.Errorf("another instance counts on its own: %v", s1)
+	}
+	if s2["e1"] != 1 {
+		t.Errorf("another subscription counts on its own: %v", s2)
+	}
+
+	// the sequence survives a DLQ and a redelivery: the consumer sees the SAME number again
+	if err := fx.r.Deliveries.MarkDead(ctx, "a2", "http 500"); err != nil {
+		t.Fatal(err)
+	}
+	if err := fx.r.Deliveries.Requeue(ctx, "t1", "a2", now.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if seqOf("sub_1")["e2"] != 2 {
+		t.Errorf("a redelivery keeps its sequence: %v", seqOf("sub_1"))
+	}
+	claimed, _ := fx.r.Deliveries.ClaimDue(ctx, now.Add(time.Hour), time.Minute, 10)
+	for _, d := range claimed {
+		if d.EventID == "e2" && d.Sequence != 2 {
+			t.Errorf("claimed delivery lost its sequence: %+v", d)
+		}
+	}
+}
+
 func containsID(ds []subscription.Delivery, id string) bool {
 	for _, d := range ds {
 		if d.ID == id {

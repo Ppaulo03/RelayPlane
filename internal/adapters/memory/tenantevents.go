@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/relayplane/relayplane/internal/core/errs"
@@ -172,6 +173,11 @@ func (r subsRepo) Delete(_ context.Context, tenantID, id string) error {
 		return errs.ErrNotFound
 	}
 	delete(r.s.subs, id)
+	for k := range r.s.deliverySeq {
+		if strings.HasPrefix(k, id+"|") {
+			delete(r.s.deliverySeq, k)
+		}
+	}
 	for did, d := range r.s.deliveries {
 		if d.SubscriptionID == id {
 			delete(r.s.deliveries, did)
@@ -214,6 +220,7 @@ func (r deliveriesRepo) Enqueue(_ context.Context, ds []subscription.Delivery) (
 			continue
 		}
 		d.Status = subscription.DeliveryPending
+		d.Sequence = r.s.nextDeliverySeq(d.SubscriptionID, d.InstanceID)
 		if d.CreatedAt.IsZero() {
 			d.CreatedAt = r.s.Now()
 		}
