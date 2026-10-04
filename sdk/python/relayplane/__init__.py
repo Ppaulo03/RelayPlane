@@ -12,4 +12,4 @@ __all__ = [
     "CreatedInstance", "Instance", "Media", "Message", "Operation", "OperationRef", "Pairing", "SentMessage", "Subscription", "WebhookDelivery", "Limits",
     "WebhookSignatureError", "verify_request", "verify_signature", "ApiKey", "ReplyTo", "Event", "MessageMedia", "SequenceTracker",
 ]
-__version__ = "0.10.0"
+from ._version import __version__  # noqa: E402  (the single place the version is written; pyproject reads the same number, a test checks it)

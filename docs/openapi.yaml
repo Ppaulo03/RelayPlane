@@ -268,15 +268,6 @@ paths:
       requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/UploadRequest'}}}}
       responses:
         '201': {description: Created, content: {application/json: {schema: {$ref: '#/components/schemas/UploadTicket'}}}}
-  /api/v1/media/{id}/content:
-    parameters: [{$ref: '#/components/parameters/Id'}]
-    put:
-      tags: [media]
-      summary: Stream the content through the gateway (the declared size is enforced while streaming; SHA-256 is verified)
-      requestBody: {required: true, content: {application/octet-stream: {schema: {type: string, format: binary}}}}
-      responses:
-        '200': {description: READY, content: {application/json: {schema: {$ref: '#/components/schemas/Media'}}}}
-        '400': {$ref: '#/components/responses/Error'}
   /api/v1/media/{id}:
     parameters: [{$ref: '#/components/parameters/Id'}]
     get:
@@ -301,9 +292,11 @@ paths:
         '404': {$ref: '#/components/responses/Error'}
     put:
       tags: [media]
-      summary: Upload the content of a declared media
+      summary: Stream the content through the gateway (the declared size is enforced while streaming; SHA-256 is verified)
+      requestBody: {required: true, content: {application/octet-stream: {schema: {type: string, format: binary}}}}
       responses:
-        '200': {description: OK, content: {application/json: {schema: {$ref: '#/components/schemas/Media'}}}}
+        '200': {description: READY, content: {application/json: {schema: {$ref: '#/components/schemas/Media'}}}}
+        '400': {$ref: '#/components/responses/Error'}
   /api/v1/api-keys:
     post:
       tags: [tenant]

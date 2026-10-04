@@ -59,9 +59,11 @@ type Config struct {
 	// RetentionMessages / RetentionDeadDeliveries: how long personal content stays (0 keeps it indefinitely).
 	RetentionMessages       time.Duration
 	RetentionDeadDeliveries time.Duration
-	APIRatePerSecond        float64
-	APIRateBurst            int
-	InboundMediaTTL         time.Duration
+	// RetentionPendingDeliveries: deliveries still waiting (a subscription left paused) are deleted after this long (0 keeps them).
+	RetentionPendingDeliveries time.Duration
+	APIRatePerSecond           float64
+	APIRateBurst               int
+	InboundMediaTTL            time.Duration
 
 	AdminAPIKey    string
 	WebhookSecret  string
@@ -118,7 +120,7 @@ func Load() (Config, error) {
 		BlobUseSSL: getBool("BLOB_STORE_USE_SSL", false), BlobPublicUseSSL: getBool("BLOB_STORE_PUBLIC_USE_SSL", false), BlobLifecycleDays: getInt("BLOB_STORE_LIFECYCLE_DAYS", 7),
 		MediaInlineMaxBytes: getInt("MEDIA_INLINE_MAX_BYTES", 262144), MediaMaxBytes: int64(getInt("MEDIA_MAX_BYTES", 100<<20)), MediaTTL: getDur("MEDIA_DEFAULT_TTL", 24*time.Hour), MediaPendingTTL: getDur("MEDIA_PENDING_TTL", 30*time.Minute),
 		InboundMediaMaxBytes: int64(getInt("INBOUND_MEDIA_MAX_BYTES", 25<<20)), InboundMediaTTL: getDur("INBOUND_MEDIA_TTL", 7*24*time.Hour),
-		RetentionMessages: getDur("RETENTION_MESSAGES", 90*24*time.Hour), RetentionDeadDeliveries: getDur("RETENTION_DEAD_DELIVERIES", 30*24*time.Hour),
+		RetentionMessages: getDur("RETENTION_MESSAGES", 90*24*time.Hour), RetentionDeadDeliveries: getDur("RETENTION_DEAD_DELIVERIES", 30*24*time.Hour), RetentionPendingDeliveries: getDur("RETENTION_PENDING_DELIVERIES", 30*24*time.Hour),
 		APIRatePerSecond: float64(getInt("API_RATE_PER_SECOND", 50)), APIRateBurst: getInt("API_RATE_BURST", 100),
 		AdminAPIKey: os.Getenv("ADMIN_API_KEY"), WebhookSecret: os.Getenv("WEBHOOK_SECRET"), WebhookBaseURL: os.Getenv("WEBHOOK_BASE_URL"),
 		DefaultProvider: get("DEFAULT_PROVIDER", "evolution-v2"),

@@ -62,7 +62,7 @@ func (r msgRepo) ScrubTerminalBefore(ctx context.Context, before, at time.Time, 
 		rows, err := tx.Query(ctx, `
 UPDATE outbound_messages SET recipient='', payload='{}'::jsonb, error_message='', erased_at=$2
 WHERE id IN (SELECT id FROM outbound_messages WHERE erased_at IS NULL AND created_at < $1
-             AND status IN ('ACCEPTED','DELIVERED','READ','FAILED') ORDER BY created_at LIMIT $3 FOR UPDATE SKIP LOCKED)
+             AND status IN ('ACCEPTED','DELIVERED','READ','FAILED','UNKNOWN') ORDER BY created_at LIMIT $3 FOR UPDATE SKIP LOCKED)
 RETURNING id`, before, at, limit)
 		if err != nil {
 			return err
@@ -110,6 +110,11 @@ func (r blobRepo) ListBySubject(ctx context.Context, tenantID, subject string) (
 
 func (r deliveriesRepo) PurgeDead(ctx context.Context, before time.Time) (int64, error) {
 	tag, err := r.s.pool.Exec(ctx, `DELETE FROM webhook_deliveries WHERE status='DEAD' AND created_at < $1`, before)
+	return tag.RowsAffected(), err
+}
+
+func (r deliveriesRepo) PurgePending(ctx context.Context, before time.Time) (int64, error) {
+	tag, err := r.s.pool.Exec(ctx, `DELETE FROM webhook_deliveries WHERE status='PENDING' AND created_at < $1`, before)
 	return tag.RowsAffected(), err
 }
 

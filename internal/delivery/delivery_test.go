@@ -394,3 +394,64 @@ func TestDeliveryForwardsTheEventTraceparent(t *testing.T) {
 		t.Errorf("a traceparent, when present, must be well formed: %q", p)
 	}
 }
+
+// Pausing means nothing is sent: a delivery that was already claimed when the subscription was paused, and is still waiting for its turn,
+// goes back instead of being POSTed.
+func TestPauseAfterClaimStopsTheDeliveriesStillWaitingTheirTurn(t *testing.T) {
+	e := newEnv(t)
+	e.disp.Concurrency = 1 // one POST at a time: the second delivery is claimed with the first and waits
+	e.sub(t, "sub_a", "t1", "https://a.example.com/h")
+	_ = e.fan.Handle(bg, event("evt_1", "t1", "inst_1"))
+	_ = e.fan.Handle(bg, event("evt_2", "t1", "inst_2"))
+	e.sender.reply = func(n int, _ ports.WebhookRequest) (int, error) {
+		if n == 1 { // the operator pauses while the first POST is going out
+			if err := e.repos.Subscriptions.SetPaused(bg, "t1", "sub_a", true); err != nil {
+				t.Error(err)
+			}
+		}
+		return 200, nil
+	}
+	if _, err := e.disp.RunOnce(bg); err != nil {
+		t.Fatal(err)
+	}
+	if e.sender.count() != 1 {
+		t.Fatalf("the delivery claimed before the pause must not be sent: %d POSTs", e.sender.count())
+	}
+	if n := len(e.deliveries(t, "t1", "sub_a", subscription.DeliveryPending)); n != 1 {
+		t.Fatalf("it waits: %d pending", n)
+	}
+	// resumed, it goes out
+	if err := e.repos.Subscriptions.SetPaused(bg, "t1", "sub_a", false); err != nil {
+		t.Fatal(err)
+	}
+	e.sender.reply = nil
+	if _, err := e.disp.RunOnce(bg); err != nil {
+		t.Fatal(err)
+	}
+	if e.sender.count() != 2 {
+		t.Errorf("after the resume the held delivery is sent: %d", e.sender.count())
+	}
+}
+
+// The circuit belongs to the subscription: another tenant that points at the same host is not shielded (or punished) by it.
+func TestCircuitBreakerIsPerSubscriptionNotPerHost(t *testing.T) {
+	e := newEnv(t) // opens after 3 consecutive failures
+	const shared = "https://automation.example.com/hook"
+	e.sub(t, "sub_a", "t1", shared)
+	e.sub(t, "sub_b", "t2", shared)
+	e.sender.reply = func(_ int, r ports.WebhookRequest) (int, error) {
+		if strings.Contains(string(r.Body), `"tenant_id":"t1"`) {
+			return 503, nil // only tenant 1's endpoint logic is broken
+		}
+		return 200, nil
+	}
+	for i := 1; i <= 4; i++ {
+		_ = e.fan.Handle(bg, event(fmt.Sprintf("a_%d", i), "t1", fmt.Sprintf("ia_%d", i)))
+	}
+	_, _ = e.disp.RunOnce(bg) // t1's circuit opens
+	_ = e.fan.Handle(bg, event("b_1", "t2", "ib_1"))
+	_, _ = e.disp.RunOnce(bg)
+	if got := e.deliveries(t, "t2", "sub_b", subscription.DeliveryDelivered); len(got) != 1 {
+		t.Fatalf("tenant 2 must be served although tenant 1's circuit on the same host is open: %d delivered", len(got))
+	}
+}
