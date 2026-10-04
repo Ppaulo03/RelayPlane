@@ -12,7 +12,7 @@ from typing import Any, Union
 import httpx
 
 from .errors import from_response
-from .models import (ApiKey, CreatedInstance, Instance, Media, Message, Operation, OperationRef, Limits, Pairing, SentMessage, Subscription, WebhookDelivery)
+from .models import (ApiKey, ReplyTo, CreatedInstance, Instance, Media, Message, Operation, OperationRef, Limits, Pairing, SentMessage, Subscription, WebhookDelivery)
 
 DEFAULT_TIMEOUT = 30.0
 
@@ -85,6 +85,15 @@ class InstancesAPI:
         body, _ = await self._h.request("GET", f"/api/v1/instances/{instance_id}/pairing-code")
         return Pairing(None, body.get("pairing_code"), body.get("expires_at", ""))
 
+    async def send_presence(self, instance_id: str, to: str, state: str = "composing", *, duration_ms: int | None = None) -> None:
+        """Show "typing…" (``composing``) or "recording audio…" (``recording``) to a contact for ``duration_ms`` (default 3 s, at most
+        25 s); the state ends by itself, so there is nothing to clean up. ``paused`` stops it early. Best effort: it returns at once
+        (202) and a failure is only logged on the server. The instance must be CONNECTED."""
+        body: dict[str, Any] = {"to": to, "state": state}
+        if duration_ms:
+            body["duration_ms"] = duration_ms
+        await self._h.request("POST", f"/api/v1/instances/{instance_id}/presence", json=body)
+
     async def reconnect(self, instance_id: str) -> OperationRef:
         body, _ = await self._h.request("POST", f"/api/v1/instances/{instance_id}/reconnect")
         return OperationRef(body["operation_id"], body["status"], body.get("error_code", ""))
@@ -102,18 +111,33 @@ class MessagesAPI:
     def __init__(self, http: _Http):
         self._h = http
 
-    async def send_text(self, instance_id: str, to: str, text: str, *, idempotency_key: str | None = None) -> SentMessage:
-        return await self._send({"instance_id": instance_id, "to": to, "type": "text", "payload": {"text": text}}, idempotency_key)
+    @staticmethod
+    def _quote(reply_to: "ReplyTo | None") -> dict[str, Any]:
+        return {"reply_to": reply_to.as_dict()} if reply_to else {}
 
-    async def send_media(self, instance_id: str, to: str, media_id: str, *, type: str = "document",
-                         caption: str = "", filename: str = "", idempotency_key: str | None = None) -> SentMessage:
+    async def send_text(self, instance_id: str, to: str, text: str, *, reply_to: "ReplyTo | None" = None,
+                        idempotency_key: str | None = None) -> SentMessage:
+        """``reply_to`` quotes a message (see ``ReplyTo``): the grey box above your reply, which is what makes a "yes" unmistakably
+        an answer to that message."""
+        return await self._send({"instance_id": instance_id, "to": to, "type": "text", "payload": {"text": text, **self._quote(reply_to)}},
+                                idempotency_key)
+
+    async def send_media(self, instance_id: str, to: str, media_id: str, *, type: str = "document", caption: str = "", filename: str = "",
+                         reply_to: "ReplyTo | None" = None, idempotency_key: str | None = None) -> SentMessage:
         """Send an uploaded object (claim check). Never pass file bytes here."""
-        payload: dict[str, Any] = {"media_id": media_id}
+        payload: dict[str, Any] = {"media_id": media_id, **self._quote(reply_to)}
         if caption:
             payload["caption"] = caption
         if filename:
             payload["filename"] = filename
         return await self._send({"instance_id": instance_id, "to": to, "type": type, "payload": payload}, idempotency_key)
+
+    async def mark_read(self, instance_id: str, chat: str, provider_message_ids: list[str]) -> int:
+        """Mark messages the contact sent as read (they see the blue ticks). Pass the ``provider_message_id`` of each
+        ``message.received``; up to 50 per call. Meant for direct chats. Returns how many were marked."""
+        out, _ = await self._h.request("POST", "/api/v1/messages/read",
+                                       json={"instance_id": instance_id, "chat": chat, "provider_message_ids": provider_message_ids})
+        return int(out["read"])
 
     async def _send(self, body: dict[str, Any], key: str | None) -> SentMessage:
         out, resp = await self._h.request("POST", "/api/v1/messages/send", json=body, idempotency_key=key)

@@ -59,6 +59,8 @@ type Simulator struct {
 	lastText                     map[string]string
 	attachments                  map[string]*attachment // by provider message id
 	downloads                    int
+	presences                    []Presence
+	reads                        []ReadMark
 }
 
 type webhookConfig struct {
@@ -75,6 +77,12 @@ type Sent struct {
 	Text     string    `json:"text,omitempty"`
 	MediaURL string    `json:"media_url,omitempty"`
 	At       time.Time `json:"at"`
+	// Quote: the message this one quotes. A real node only quotes when the request carries the quoted MESSAGE (it keeps no
+	// history to look it up in); a bare id is silently ignored and QuoteDropped says so.
+	QuotedID     string `json:"quoted_id,omitempty"`
+	QuotedText   string `json:"quoted_text,omitempty"`
+	QuotedFromMe bool   `json:"quoted_from_me,omitempty"`
+	QuoteDropped bool   `json:"quote_dropped,omitempty"`
 }
 
 type instanceState struct {
@@ -289,6 +297,10 @@ func (s *Simulator) instanceRoute(w http.ResponseWriter, r *http.Request, route,
 		s.send(w, r, inst, route)
 	case "chat/getBase64FromMediaMessage":
 		s.download(w, r)
+	case "chat/sendPresence":
+		s.presence(w, r, inst)
+	case "chat/markMessageAsRead":
+		s.markRead(w, r, inst)
 	default:
 		apiErr(w, 404, "route not found")
 	}
@@ -324,6 +336,99 @@ func (s *Simulator) download(w http.ResponseWriter, r *http.Request) {
 		"size": map[string]any{"fileLength": len(a.content)}, "base64": base64.StdEncoding.EncodeToString(a.content), "buffer": nil})
 }
 
+// Presence is one "typing…" the simulator was asked to show.
+type Presence struct {
+	Instance string `json:"instance"`
+	To       string `json:"to"`
+	State    string `json:"state"`
+	DelayMS  int64  `json:"delay_ms"`
+}
+
+// ReadMark is one message RelayPlane marked as read.
+type ReadMark struct {
+	Instance string `json:"instance"`
+	Chat     string `json:"chat"`
+	ID       string `json:"id"`
+	FromMe   bool   `json:"from_me"`
+}
+
+// presence answers Evolution's sendPresence: number, presence and delay are all required (the real node 400s without them).
+func (s *Simulator) presence(w http.ResponseWriter, r *http.Request, inst *instanceState) {
+	var in struct {
+		Number   string   `json:"number"`
+		Presence string   `json:"presence"`
+		Delay    *float64 `json:"delay"`
+	}
+	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&in); err != nil || in.Number == "" || in.Delay == nil ||
+		!map[string]bool{"unavailable": true, "available": true, "composing": true, "recording": true, "paused": true}[in.Presence] {
+		apiErr(w, 400, "invalid presence request: number, presence and delay are required")
+		return
+	}
+	if inst.state != "open" {
+		apiErr(w, 400, "Connection Closed")
+		return
+	}
+	s.mu.Lock()
+	s.presences = append(s.presences, Presence{Instance: inst.name, To: in.Number, State: in.Presence, DelayMS: int64(*in.Delay)})
+	s.mu.Unlock()
+	writeJSON(w, 201, map[string]any{"presence": in.Presence})
+}
+
+func (s *Simulator) markRead(w http.ResponseWriter, r *http.Request, inst *instanceState) {
+	var in struct {
+		ReadMessages []struct {
+			ID        string `json:"id"`
+			FromMe    *bool  `json:"fromMe"`
+			RemoteJid string `json:"remoteJid"`
+		} `json:"readMessages"`
+	}
+	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&in); err != nil || len(in.ReadMessages) == 0 {
+		apiErr(w, 400, "readMessages is required")
+		return
+	}
+	for _, m := range in.ReadMessages {
+		if m.ID == "" || m.FromMe == nil || m.RemoteJid == "" {
+			apiErr(w, 400, "each read message needs id, fromMe and remoteJid")
+			return
+		}
+	}
+	if inst.state != "open" {
+		apiErr(w, 400, "Connection Closed")
+		return
+	}
+	s.mu.Lock()
+	for _, m := range in.ReadMessages {
+		s.reads = append(s.reads, ReadMark{Instance: inst.name, Chat: m.RemoteJid, ID: m.ID, FromMe: *m.FromMe})
+	}
+	s.mu.Unlock()
+	writeJSON(w, 201, map[string]any{"message": "Read messages", "read": "success"})
+}
+
+// Presences and Reads return what the node was asked to show/mark (tests).
+func (s *Simulator) Presences(name string) []Presence {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var out []Presence
+	for _, p := range s.presences {
+		if p.Instance == name {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+func (s *Simulator) Reads(name string) []ReadMark {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var out []ReadMark
+	for _, m := range s.reads {
+		if m.Instance == name {
+			out = append(out, m)
+		}
+	}
+	return out
+}
+
 // MediaDownloads is how many times the node was asked for an attachment (tests).
 func (s *Simulator) MediaDownloads() int { s.mu.Lock(); defer s.mu.Unlock(); return s.downloads }
 
@@ -350,6 +455,17 @@ func (s *Simulator) send(w http.ResponseWriter, r *http.Request, inst *instanceS
 	}
 	id := s.newID("3EB0")
 	rec := Sent{ID: id, Instance: inst.name, To: str("number"), Type: typ, Text: text, MediaURL: media, At: s.cfg.Now().UTC()}
+	if q, ok := body["quoted"].(map[string]any); ok {
+		key, _ := q["key"].(map[string]any)
+		qid, _ := key["id"].(string)
+		fromMe, _ := key["fromMe"].(bool)
+		if msg, ok := q["message"].(map[string]any); ok && qid != "" {
+			qtext, _ := msg["conversation"].(string)
+			rec.QuotedID, rec.QuotedText, rec.QuotedFromMe = qid, qtext, fromMe
+		} else {
+			rec.QuoteDropped = true
+		}
+	}
 	s.mu.Lock()
 	inst.sent = append(inst.sent, rec)
 	s.sends++

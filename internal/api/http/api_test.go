@@ -720,3 +720,45 @@ func TestContactErasureOverHTTP(t *testing.T) {
 		t.Errorf("an administrator is not a tenant: %d", c)
 	}
 }
+
+func TestPresenceAndReadOverHTTP(t *testing.T) {
+	h := newHarness(t)
+	_, inst, _ := h.call("POST", "/api/v1/instances", h.key1, `{"name":"a"}`)
+	id := inst["id"].(string)
+	h.env.Connect(id)
+
+	if c, body, _ := h.call("POST", "/api/v1/instances/"+id+"/presence", h.key1, `{"to":"5562988887777","state":"composing","duration_ms":2000}`); c != 202 || body["accepted"] != true {
+		t.Fatalf("presence: %d %v", c, body)
+	}
+	if c, _, _ := h.call("POST", "/api/v1/instances/"+id+"/presence", h.key1, `{"to":"5562988887777","state":"juggling"}`); c != 400 {
+		t.Errorf("bad state: %d", c)
+	}
+	if c, _, _ := h.call("POST", "/api/v1/instances/"+id+"/presence", h.key2, `{"to":"5562988887777","state":"composing"}`); c != 404 {
+		t.Errorf("another tenant: %d", c)
+	}
+	if c, body, _ := h.call("POST", "/api/v1/messages/read", h.key1, `{"instance_id":"`+id+`","chat":"5562988887777","provider_message_ids":["WA-1","WA-2"]}`); c != 200 || body["read"] != float64(2) {
+		t.Fatalf("read: %d %v", c, body)
+	}
+	if c, _, _ := h.call("POST", "/api/v1/messages/read", h.key1, `{"instance_id":"`+id+`","chat":"5562988887777","provider_message_ids":[]}`); c != 400 {
+		t.Errorf("empty read: %d", c)
+	}
+	if c, _, _ := h.call("POST", "/api/v1/messages/read", h.key2, `{"instance_id":"`+id+`","chat":"5562988887777","provider_message_ids":["WA-1"]}`); c != 404 {
+		t.Errorf("another tenant: %d", c)
+	}
+}
+
+func TestSendWithAQuotedReplyOverHTTP(t *testing.T) {
+	h := newHarness(t)
+	_, inst, _ := h.call("POST", "/api/v1/instances", h.key1, `{"name":"a"}`)
+	id := inst["id"].(string)
+	h.env.Connect(id)
+	c, body, _ := h.call("POST", "/api/v1/messages/send", h.key1,
+		`{"instance_id":"`+id+`","to":"5562999999999","type":"text","payload":{"text":"Confirma?","reply_to":{"provider_message_id":"3EB0USER","text":"quero agendar"}}}`)
+	if c != 202 {
+		t.Fatalf("quoted send: %d %v", c, body)
+	}
+	if c, _, _ := h.call("POST", "/api/v1/messages/send", h.key1,
+		`{"instance_id":"`+id+`","to":"5562999999999","type":"text","payload":{"text":"x","reply_to":{"provider_message_id":"a","message_id":"b"}}}`); c != 400 {
+		t.Errorf("both ids: %d", c)
+	}
+}

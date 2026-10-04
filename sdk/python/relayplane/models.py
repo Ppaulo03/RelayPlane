@@ -173,6 +173,37 @@ class SentMessage:
 
 
 @dataclass(frozen=True)
+class ReplyTo:
+    """The message a reply quotes. Quote what the user wrote with ``ReplyTo.to_user_message(provider_message_id, text)`` (the
+    id and text come from the ``message.received`` event) or one of YOUR OWN messages with ``ReplyTo.to_own_message(message_id)``.
+
+    The WhatsApp node keeps no history, so the preview text must travel with the request: without it the quote is empty."""
+
+    provider_message_id: str = ""
+    text: str = ""
+    message_id: str = ""
+
+    @classmethod
+    def to_user_message(cls, provider_message_id: str, text: str = "") -> "ReplyTo":
+        return cls(provider_message_id=provider_message_id, text=text)
+
+    @classmethod
+    def to_own_message(cls, message_id: str) -> "ReplyTo":
+        """The message must have been ACCEPTED already (it needs the provider's id to be quoted)."""
+        return cls(message_id=message_id)
+
+    def as_dict(self) -> dict[str, Any]:
+        if bool(self.provider_message_id) == bool(self.message_id):
+            raise ValueError("ReplyTo needs exactly one of provider_message_id or message_id")
+        if self.message_id:
+            return {"message_id": self.message_id}
+        d: dict[str, Any] = {"provider_message_id": self.provider_message_id}
+        if self.text:
+            d["text"] = self.text
+        return d
+
+
+@dataclass(frozen=True)
 class ApiKey:
     """An API key of your tenant. ``secret`` is set only on the object returned by ``create`` (it is never shown again)."""
 
