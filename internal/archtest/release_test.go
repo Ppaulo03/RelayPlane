@@ -17,29 +17,45 @@ func readRepoFile(t *testing.T, rel ...string) string {
 	return string(b)
 }
 
-// Every image the release publishes goes through a scan first: trivy must come before the step with `push: true`, in each
-// job that has one.
+// Every image the release publishes is built ONCE, and the build that is scanned is the build that is published. That is only true when
+// no workflow builds again for the push: the single place that publishes is the composite action, which scans an OCI archive and pushes
+// those same bytes.
 func TestReleaseWorkflowScansEveryImageBeforePushingIt(t *testing.T) {
-	s := readRepoFile(t, ".github", "workflows", "release.yml")
-	jobs := regexp.MustCompile(`(?m)^  [a-z][a-z-]*:\n`).Split(s, -1)
-	pushing := 0
-	for _, j := range jobs {
-		push := strings.Index(j, "push: true")
-		if push < 0 {
-			continue
+	root := repoRoot(t)
+	files, _ := filepath.Glob(filepath.Join(root, ".github", "workflows", "*.yml"))
+	users := 0
+	for _, f := range files {
+		b, err := os.ReadFile(f)
+		if err != nil {
+			t.Fatal(err)
 		}
-		pushing++
-		if scan := strings.Index(j, "trivy-action"); scan < 0 || scan > push {
-			t.Errorf("a job that pushes an image must scan it (trivy) before the push step:\n%.300s", j)
+		s := string(b)
+		if regexp.MustCompile(`(?m)^\s*push:\s*true`).MatchString(s) || strings.Contains(s, "load: true") {
+			t.Errorf("%s: images are published only by .github/actions/build-scan-push (a second build for the push would publish something that was never scanned)", filepath.Base(f))
 		}
-		if !strings.Contains(j, "provenance:") || !strings.Contains(j, "sbom: true") {
-			t.Error("published images carry build provenance and an SBOM")
+		if strings.Contains(s, "./.github/actions/build-scan-push") {
+			users++
 		}
 	}
-	if pushing == 0 {
-		t.Error("the release workflow publishes nothing: it has no `push: true`")
+	if users < 2 {
+		t.Errorf("the release (gateway, worker, reconciler) and the Evolution workflow must both publish through the composite action, found %d users", users)
 	}
-	if !strings.Contains(s, "./.github/workflows/evolution-image.yml") {
+
+	a := readRepoFile(t, ".github", "actions", "build-scan-push", "action.yml")
+	build, scan, push := strings.Index(a, "type=oci,dest="), strings.Index(a, "trivy-action"), strings.Index(a, `"$crane" push`)
+	if build < 0 || scan < 0 || push < 0 || !(build < scan && scan < push) {
+		t.Errorf("the action must build to an archive, scan it, and only then push (build=%d scan=%d push=%d)", build, scan, push)
+	}
+	if !strings.Contains(a, "provenance:") || !strings.Contains(a, "sbom: true") {
+		t.Error("published images carry build provenance and an SBOM")
+	}
+	if !strings.Contains(a, `"$published" != "$SCANNED"`) {
+		t.Error("the action must check that the registry holds the digest that was scanned")
+	}
+	if !strings.Contains(a, "exit-code: \"1\"") || !strings.Contains(a, "input: ${{ runner.temp }}/oci") {
+		t.Error("the scan must fail the job and must look at the archive that is pushed")
+	}
+	if !strings.Contains(readRepoFile(t, ".github", "workflows", "release.yml"), "./.github/workflows/evolution-image.yml") {
 		t.Error("the Evolution image must be produced by its own workflow (one way to build it), called from the release")
 	}
 }
