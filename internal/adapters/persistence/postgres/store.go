@@ -125,8 +125,18 @@ func (s *Store) Migrate(ctx context.Context) error {
 
 // Reset truncates every table (tests only).
 func (s *Store) Reset(ctx context.Context) error {
-	_, err := s.pool.Exec(ctx, `TRUNCATE outbound_messages, operations, instance_assignments, instances,
-		provider_nodes, idempotency_keys, event_deduplication, blob_metadata, event_outbox, webhook_deliveries, subscriptions, tenants CASCADE`)
+	var err error
+	// the previous test's goroutines may still be finishing a statement: TRUNCATE then deadlocks with them (40P01). The
+	// victim is always this statement, so trying again once they are done is safe.
+	for attempt := 0; attempt < 10; attempt++ {
+		_, err = s.pool.Exec(ctx, `TRUNCATE outbound_messages, operations, instance_assignments, instances,
+			provider_nodes, idempotency_keys, event_deduplication, blob_metadata, event_outbox, webhook_deliveries, delivery_sequences,
+			subscriptions, tenants CASCADE`)
+		if _, code := constraint(err); err == nil || code != "40P01" {
+			return err
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
 	return err
 }
 
