@@ -267,6 +267,63 @@ paths:
       summary: Upload the content of a declared media
       responses:
         '200': {description: OK, content: {application/json: {schema: {$ref: '#/components/schemas/Media'}}}}
+  /api/v1/api-keys:
+    post:
+      tags: [tenant]
+      summary: Issue another API key for your tenant (rotation without downtime)
+      description: The secret (api_key) is shown once. At most 10 active keys; an optional expires_in_seconds.
+      requestBody: {required: true, content: {application/json: {schema: {type: object, required: [name], properties: {name: {type: string, maxLength: 64}, expires_in_seconds: {type: integer}}}}}}
+      responses:
+        '201': {description: Created, content: {application/json: {schema: {$ref: '#/components/schemas/ApiKey'}}}}
+        '409': {$ref: '#/components/responses/Error'}
+    get:
+      tags: [tenant]
+      summary: List your API keys (never the secrets)
+      responses:
+        '200': {description: OK, content: {application/json: {schema: {type: object, properties: {api_keys: {type: array, items: {$ref: '#/components/schemas/ApiKey'}}}}}}}
+  /api/v1/api-keys/{id}:
+    parameters: [{$ref: '#/components/parameters/Id'}]
+    delete:
+      tags: [tenant]
+      summary: Revoke a key at once
+      description: The last usable key cannot be revoked (409); create another one first.
+      responses:
+        '204': {description: Revoked}
+        '404': {$ref: '#/components/responses/Error'}
+        '409': {$ref: '#/components/responses/Error'}
+  /api/v1/tenants/{id}/api-keys:
+    parameters: [{$ref: '#/components/parameters/Id'}]
+    post:
+      tags: [admin]
+      summary: Issue an API key for a tenant that lost its keys
+      responses:
+        '201': {description: Created, content: {application/json: {schema: {$ref: '#/components/schemas/ApiKey'}}}}
+  /api/v1/contacts/{number}/data:
+    parameters: [{name: number, in: path, required: true, schema: {type: string}, description: Phone number in any spelling}]
+    delete:
+      tags: [tenant]
+      summary: Erase what is kept about one person (LGPD/GDPR), for your tenant
+      description: >
+        Anonymizes the messages you sent them (recipient and content), deletes the events that mention them (delivered,
+        pending, dead-lettered) and the files they sent. Idempotent. Not reached: transient broker streams, the
+        provider's own state, logs, backups (see OPERATIONS).
+      responses:
+        '200': {description: What was removed, content: {application/json: {schema: {type: object, properties: {messages_anonymized: {type: integer}, messages_cancelled: {type: integer}, events_deleted: {type: integer}, attachments_deleted: {type: integer}, erased_at: {type: string, format: date-time}}}}}}
+        '400': {$ref: '#/components/responses/Error'}
+  /api/v1/subscriptions/{id}/pause:
+    parameters: [{$ref: '#/components/parameters/Id'}]
+    post:
+      tags: [subscriptions]
+      summary: Hold deliveries (events keep being queued; nothing is lost)
+      responses:
+        '204': {description: Paused}
+  /api/v1/subscriptions/{id}/resume:
+    parameters: [{$ref: '#/components/parameters/Id'}]
+    post:
+      tags: [subscriptions]
+      summary: Send what accumulated while paused, in sequence order
+      responses:
+        '204': {description: Resumed}
   /api/v1/nodes:
     get:
       tags: [admin]
@@ -420,6 +477,18 @@ components:
         created_at: {type: string, format: date-time}
         secret: {type: string, description: "whsec_... shown only on creation and rotation"}
         previous_secret_valid_until: {type: string, format: date-time}
+    ApiKey:
+      type: object
+      properties:
+        id: {type: string}
+        name: {type: string}
+        prefix: {type: string, description: "First characters of the key, to recognise it"}
+        api_key: {type: string, description: "The secret. Only in the answer that creates the key."}
+        created_at: {type: string, format: date-time}
+        expires_at: {type: string, format: date-time}
+        last_used_at: {type: string, format: date-time}
+        revoked_at: {type: string, format: date-time}
+        current: {type: boolean, description: "The key that authenticated this request (listing)"}
     WebhookDelivery:
       type: object
       properties:

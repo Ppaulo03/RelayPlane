@@ -24,6 +24,7 @@ são validados contra ele no CI, junto com o que o código realmente emite e com
 * **Reordenar.** Um retry pode chegar depois de eventos mais novos da mesma instância. Ordene por `sequence`, não por chegada nem por `timestamp`.
 * **Detectar o que faltou.** Um número que nunca chega é uma entrega que você não recebeu: pode estar no DLQ
   (`GET /subscriptions/{id}/deliveries?status=DEAD`, `POST /deliveries/{id}/redeliver`; a reentrega volta com o **mesmo** `sequence`).
+* **Buracos esperados:** (a) depois de um **apagamento por pessoa** (`DELETE /contacts/{número}/data`) e (b) quando a **retenção da DLQ** apaga uma entrega que você nunca recebeu.
 * **A numeração é por assinatura.** Com `event_types` ou `exclude_groups` você simplesmente não recebe alguns eventos e a sua sequência continua sem buracos.
 * O SDK Python traz `Event` e `SequenceTracker` (reordena, descarta reentregas, informa `missing()`, permite `skip_gap()` depois do seu próprio
   tempo limite e guarda o estado para sobreviver a reinício).
