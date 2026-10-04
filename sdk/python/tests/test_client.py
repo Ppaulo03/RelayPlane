@@ -264,3 +264,13 @@ async def test_typing_indicator_and_read_receipts():
     assert seen[0] == ("/api/v1/instances/inst_1/presence", {"to": "5562988887777", "state": "recording", "duration_ms": 4000})
     assert seen[1][1] == {"to": "5562988887777", "state": "composing"}
     assert seen[2] == ("/api/v1/messages/read", {"instance_id": "inst_1", "chat": "5562988887777", "provider_message_ids": ["WA-1", "WA-2"]})
+
+
+async def test_list_messages_by_status():
+    def handler(req: httpx.Request) -> httpx.Response:
+        assert req.url.path == "/api/v1/messages" and req.url.params["status"] == "UNKNOWN" and req.url.params["instance_id"] == "inst_1"
+        return httpx.Response(200, json={"messages": [{"id": "msg_1", "status": "UNKNOWN", "error_code": "AMBIGUOUS_DISPATCH", "sequence": 4}]})
+
+    async with client(handler) as rp:
+        ms = await rp.messages.list("UNKNOWN", instance_id="inst_1")
+    assert [m.id for m in ms] == ["msg_1"] and ms[0].status == "UNKNOWN"

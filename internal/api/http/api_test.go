@@ -762,3 +762,26 @@ func TestSendWithAQuotedReplyOverHTTP(t *testing.T) {
 		t.Errorf("both ids: %d", c)
 	}
 }
+
+func TestListMessagesByStatusOverHTTP(t *testing.T) {
+	h := newHarness(t)
+	_, inst, _ := h.call("POST", "/api/v1/instances", h.key1, `{"name":"a"}`)
+	id := inst["id"].(string)
+	h.env.Connect(id)
+	c, body, _ := h.call("GET", "/api/v1/messages?status=UNKNOWN&instance_id="+id, h.key1, "")
+	if c != 200 || body["messages"] == nil {
+		t.Fatalf("list: %d %v", c, body)
+	}
+	if c, _, _ := h.call("GET", "/api/v1/messages?status=NOPE", h.key1, ""); c != 400 {
+		t.Errorf("bad status: %d", c)
+	}
+	if c, _, _ := h.call("GET", "/api/v1/messages?status=UNKNOWN&limit=zero", h.key1, ""); c != 400 {
+		t.Errorf("bad limit: %d", c)
+	}
+	if c, _, _ := h.call("GET", "/api/v1/messages?status=UNKNOWN&instance_id="+id, h.key2, ""); c != 404 {
+		t.Errorf("another tenant's instance: %d", c)
+	}
+	if c, _, _ := h.call("GET", "/api/v1/messages?status=UNKNOWN", "", ""); c != 401 {
+		t.Errorf("unauthenticated: %d", c)
+	}
+}

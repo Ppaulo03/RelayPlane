@@ -144,6 +144,18 @@ paths:
       requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/RatePolicy'}}}}
       responses:
         '200': {description: OK, content: {application/json: {schema: {$ref: '#/components/schemas/RatePolicy'}}}}
+  /api/v1/messages:
+    get:
+      tags: [messages]
+      summary: List your messages in a status (oldest first), e.g. the UNKNOWN ones that wait for a decision
+      parameters:
+        - {name: status, in: query, required: true, schema: {type: string, enum: [QUEUED, DISPATCHING, ACCEPTED, DELIVERED, READ, FAILED, UNKNOWN]}}
+        - {name: instance_id, in: query, schema: {type: string}}
+        - {name: limit, in: query, schema: {type: integer, minimum: 1, maximum: 200, default: 100}}
+      responses:
+        '200': {description: OK, content: {application/json: {schema: {type: object, properties: {messages: {type: array, items: {$ref: '#/components/schemas/Message'}}}}}}}
+        '400': {$ref: '#/components/responses/Error'}
+        '404': {$ref: '#/components/responses/Error'}
   /api/v1/messages/send:
     post:
       tags: [messages]

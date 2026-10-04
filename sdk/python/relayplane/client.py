@@ -143,6 +143,13 @@ class MessagesAPI:
         out, resp = await self._h.request("POST", "/api/v1/messages/send", json=body, idempotency_key=key)
         return SentMessage(out["message_id"], out["status"], _replayed(resp))
 
+    async def list(self, status: str, *, instance_id: str | None = None, limit: int = 100) -> list[Message]:
+        """Your messages in a status, oldest first (by instance, then sequence). ``list("UNKNOWN")`` is how you find the sends whose
+        outcome is ambiguous and wait for ``resolve``; each one holds back the later messages of its instance."""
+        params = f"?status={status}&limit={limit}" + (f"&instance_id={instance_id}" if instance_id else "")
+        body, _ = await self._h.request("GET", "/api/v1/messages" + params)
+        return [Message.from_dict(m) for m in body["messages"]]
+
     async def get(self, message_id: str) -> Message:
         body, _ = await self._h.request("GET", f"/api/v1/messages/{message_id}")
         return Message.from_dict(body)

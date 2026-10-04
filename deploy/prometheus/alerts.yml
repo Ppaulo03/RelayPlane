@@ -21,6 +21,11 @@ groups:
         expr: increase(relayplane_reconciliation_failure_total[10m]) > 5
         labels: {severity: warn}
         annotations: {summary: "Reconciliation passes are failing"}
+      - alert: RelayPlaneUnknownMessageWaiting
+        expr: relayplane_unknown_oldest_seconds > 300
+        for: 1m
+        labels: {severity: page}
+        annotations: {summary: "an UNKNOWN message has waited for a decision for over 5 minutes: it holds back the later messages of its instance (docs/runbooks/UNKNOWN-MESSAGES.md)"}
       - alert: RelayPlaneNodeUnhealthy
         expr: relayplane_provider_node_health == 0
         for: 2m
