@@ -54,8 +54,11 @@ cria uma entrega por assinatura (`UNIQUE(subscription_id, event_id)`: reentrega 
   (7 dias) e anexos recebidos em `INBOUND_MEDIA_TTL` (7 dias). `0` mantém para sempre. Métrica `relayplane_retention_applied_total{kind}`.
   **Apagamento por pessoa:** `DELETE /api/v1/contacts/{número}/data` (qualquer grafia: `+55 (62) 99999-9999`) apaga, **para o tenant que pediu**: destinatário e conteúdo das mensagens que ele
   enviou àquela pessoa (e cancela as que ainda não saíram), os eventos que a mencionam (entregues, pendentes e da DLQ) e os arquivos que ela enviou (objeto e metadados). É idempotente e
-  devolve contagens, nunca o número. **O que isso não alcança** (e deve constar na sua política): as streams transitórias do Redis (comandos e eventos em trânsito, aparadas por tamanho
-  em `EVENT_BUS_RETENTION`), a cópia do comando de uma mensagem que está nas mãos do provedor no instante do pedido (some quando ela resolve), o estado do próprio WhatsApp/Evolution,
+  devolve contagens, nunca o número. **O que estava em voo não volta:** o apagamento deixa uma **marca** (`contact_erasures`, só um hash do número, guardada por 30 dias): um evento aceito *antes* do pedido que ainda estava
+  no Redis, no outbox ou no fan-out, ou um anexo que estava sendo baixado, é descartado por quem o segura (e o arquivo já gravado é removido) em vez de recriar o dado depois do pedido. Uma mensagem que a
+  pessoa manda **depois** do pedido é dado novo e é entregue normalmente. A marca vale pelo relógio dos serviços (aceite e pedido): mantenha-os sincronizados (NTP).
+  **O que isso não alcança** (e deve constar na sua política): as entradas já gravadas nas streams transitórias do Redis (comandos e eventos em trânsito, aparadas por tamanho
+  em `EVENT_BUS_RETENTION`; elas são descartadas ao serem consumidas, mas ficam no Redis até lá), a cópia do comando de uma mensagem que está nas mãos do provedor no instante do pedido (some quando ela resolve), o estado do próprio WhatsApp/Evolution,
   os logs (não carregam texto nem o número) e os backups do banco. Uma subscription que ainda não recebera eventos apagados verá **buracos em `sequence`**: depois de um apagamento
   isso é esperado.
 * **Latência de entrega (R12):** `relayplane_event_delivery_lag_seconds{event_type,attempt}` é o tempo entre o RelayPlane **saber** do evento e o `2xx` do consumidor
