@@ -113,3 +113,34 @@ func TestRunbooksExist(t *testing.T) {
 		t.Error("the UNKNOWN alert must point to its runbook")
 	}
 }
+
+// The OpenAPI contract is the base of generated clients: a path (or a method of a path) written twice is silently resolved by most parsers
+// by keeping the last one, so half of the contract disappears without a warning.
+func TestOpenAPIHasNoDuplicateKeys(t *testing.T) {
+	lines := strings.Split(strings.ReplaceAll(readRepoFile(t, "docs", "openapi.yaml"), "\r\n", "\n"), "\n")
+	path := regexp.MustCompile(`^  (/[^\s:]*):\s*$`)
+	method := regexp.MustCompile(`^    (get|put|post|delete|patch|head|options):`)
+	paths := map[string]bool{}
+	var cur string
+	seen := map[string]bool{}
+	for n, l := range lines {
+		if m := path.FindStringSubmatch(l); m != nil {
+			cur = m[1]
+			seen = map[string]bool{}
+			if paths[cur] {
+				t.Errorf("line %d: path %s is defined twice", n+1, cur)
+			}
+			paths[cur] = true
+			continue
+		}
+		if m := method.FindStringSubmatch(l); m != nil && cur != "" {
+			if seen[m[1]] {
+				t.Errorf("line %d: %s %s is defined twice", n+1, strings.ToUpper(m[1]), cur)
+			}
+			seen[m[1]] = true
+		}
+	}
+	if len(paths) < 30 {
+		t.Errorf("the parser found only %d paths: this check is not looking at the contract", len(paths))
+	}
+}
