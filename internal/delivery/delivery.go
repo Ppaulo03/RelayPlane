@@ -14,7 +14,6 @@ import (
 	"fmt"
 	"log/slog"
 	"math/rand"
-	"net/url"
 	"strconv"
 	"sync"
 	"time"
@@ -201,7 +200,14 @@ func (d *Dispatcher) process(ctx context.Context, dl subscription.Delivery) {
 		d.Metrics.WebhookDeliveries.WithLabelValues("dead").Inc()
 		return
 	}
-	host := hostOf(sub.URL)
+	// the subscription may have been paused after this delivery was claimed: pausing means NOTHING is sent. Give the lease back and wait
+	if sub.Paused {
+		_ = d.Repos.Deliveries.Postpone(rctx, dl.ID, d.now())
+		d.Metrics.WebhookDeliveries.WithLabelValues("postponed").Inc()
+		return
+	}
+	// the circuit is per SUBSCRIPTION: two tenants that happen to use the same host (a shared automation service) must not trip each other
+	host := sub.ID
 	now := d.now()
 	if until, open := d.Breaker.Check(host, now); open {
 		// the destination is known to be failing: wait without spending the delivery's retry budget
@@ -295,14 +301,6 @@ func failureText(status int, err error) string {
 		return "transport error: " + t
 	}
 	return fmt.Sprintf("http %d", status)
-}
-
-func hostOf(raw string) string {
-	u, err := url.Parse(raw)
-	if err != nil {
-		return raw
-	}
-	return u.Host
 }
 
 // ---- circuit breaker ----
