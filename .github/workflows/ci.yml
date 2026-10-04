@@ -80,3 +80,24 @@ jobs:
         with:
           python-version: "3.12"
       - run: make sdk-test PYTHON=python
+
+  staging:
+    name: staging smoke (production configuration, real Evolution node)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+      - run: pip install -e sdk/python
+      # the same Dockerfiles a release builds, started with APP_ENV=production and the real (patched) Evolution image: what the
+      # simulator-based sandbox cannot show (production guards, migrations from scratch, the node answering through the adapter)
+      - run: sh deploy/staging/staging.sh build-local
+      - run: sh deploy/staging/staging.sh up
+      - run: sh deploy/staging/staging.sh smoke
+      - if: failure()
+        run: sh deploy/staging/staging.sh logs gateway worker reconciler 2>&1 | head -200 || true
+        timeout-minutes: 2
+      - if: always()
+        run: sh deploy/staging/staging.sh down -v

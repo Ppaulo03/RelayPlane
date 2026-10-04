@@ -8,3 +8,5 @@ __pycache__/
 .env.sandbox
 .env.spike
 captures/
+.env.staging
+deploy/staging/images.env
