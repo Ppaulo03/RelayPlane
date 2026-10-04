@@ -10,21 +10,43 @@ import (
 )
 
 type subscriptionView struct {
-	ID            string    `json:"id"`
-	URL           string    `json:"url"`
-	EventTypes    []string  `json:"event_types"`
-	InstanceIDs   []string  `json:"instance_ids"`
-	ExcludeGroups bool      `json:"exclude_groups"`
-	Active        bool      `json:"active"`
-	CreatedAt     time.Time `json:"created_at"`
+	ID            string   `json:"id"`
+	URL           string   `json:"url"`
+	EventTypes    []string `json:"event_types"`
+	InstanceIDs   []string `json:"instance_ids"`
+	ExcludeGroups bool     `json:"exclude_groups"`
+	Active        bool     `json:"active"`
+	// Paused: deliveries accumulate and none is sent until POST .../resume.
+	Paused bool `json:"paused"`
+	// Backlog is what is waiting to be delivered to this subscription right now.
+	Backlog   backlogView `json:"backlog"`
+	CreatedAt time.Time   `json:"created_at"`
 	// Secret is the signing secret. It is returned only when the subscription is created or its secret rotated.
 	Secret string `json:"secret,omitempty"`
 	// PreviousSecretValidUntil is when the previous secret stops being used to sign (rotation only).
 	PreviousSecretValidUntil *time.Time `json:"previous_secret_valid_until,omitempty"`
 }
 
+type backlogView struct {
+	Pending              int64 `json:"pending"`
+	OldestPendingSeconds int64 `json:"oldest_pending_seconds"`
+}
+
+func (s *Server) withBacklog(r *nethttp.Request, tenantID string, subs ...*subscriptionView) {
+	bl, err := s.App.Subscriptions.Backlog(r.Context(), tenantID)
+	if err != nil {
+		s.Log.WarnContext(r.Context(), "could not read the delivery backlog", "error", err)
+		return
+	}
+	for _, v := range subs {
+		if b, ok := bl[v.ID]; ok {
+			v.Backlog = backlogView{Pending: b.Pending, OldestPendingSeconds: int64(b.OldestPending.Seconds())}
+		}
+	}
+}
+
 func viewSubscription(s subscription.Subscription) subscriptionView {
-	v := subscriptionView{ID: s.ID, URL: s.URL, EventTypes: []string{}, InstanceIDs: s.InstanceIDs, ExcludeGroups: s.ExcludeGroups, Active: s.Active, CreatedAt: s.CreatedAt}
+	v := subscriptionView{ID: s.ID, URL: s.URL, EventTypes: []string{}, InstanceIDs: s.InstanceIDs, ExcludeGroups: s.ExcludeGroups, Active: s.Active, Paused: s.Paused, CreatedAt: s.CreatedAt}
 	for _, t := range s.EventTypes {
 		v.EventTypes = append(v.EventTypes, string(t))
 	}
@@ -95,6 +117,11 @@ func (s *Server) listSubscriptions(w nethttp.ResponseWriter, r *nethttp.Request,
 	for _, sub := range subs {
 		out = append(out, viewSubscription(sub))
 	}
+	ptrs := make([]*subscriptionView, len(out))
+	for i := range out {
+		ptrs[i] = &out[i]
+	}
+	s.withBacklog(r, p.TenantID, ptrs...)
 	writeJSON(w, 200, map[string]any{"subscriptions": out})
 }
 
@@ -104,7 +131,25 @@ func (s *Server) getSubscription(w nethttp.ResponseWriter, r *nethttp.Request, p
 		writeError(w, r, s.Log, err)
 		return
 	}
-	writeJSON(w, 200, viewSubscription(*sub))
+	v := viewSubscription(*sub)
+	s.withBacklog(r, p.TenantID, &v)
+	writeJSON(w, 200, v)
+}
+
+func (s *Server) pauseSubscription(w nethttp.ResponseWriter, r *nethttp.Request, p Principal) {
+	if err := s.App.Subscriptions.Pause(r.Context(), p.TenantID, r.PathValue("id")); err != nil {
+		writeError(w, r, s.Log, err)
+		return
+	}
+	w.WriteHeader(nethttp.StatusNoContent)
+}
+
+func (s *Server) resumeSubscription(w nethttp.ResponseWriter, r *nethttp.Request, p Principal) {
+	if err := s.App.Subscriptions.Resume(r.Context(), p.TenantID, r.PathValue("id")); err != nil {
+		writeError(w, r, s.Log, err)
+		return
+	}
+	w.WriteHeader(nethttp.StatusNoContent)
 }
 
 func (s *Server) deleteSubscription(w nethttp.ResponseWriter, r *nethttp.Request, p Principal) {

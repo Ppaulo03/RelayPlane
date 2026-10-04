@@ -35,12 +35,16 @@ class Subscription:
     # only set on creation / rotation: the signing secret is shown once
     secret: str | None = None
     previous_secret_valid_until: str | None = None
+    paused: bool = False  # deliveries accumulate and none is sent until resume()
+    pending: int = 0  # deliveries waiting to be sent to this subscription
+    oldest_pending_seconds: int = 0
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> "Subscription":
         return cls(id=d["id"], url=d["url"], event_types=tuple(d.get("event_types") or ()), instance_ids=tuple(d.get("instance_ids") or ()),
                    active=bool(d.get("active", True)), exclude_groups=bool(d.get("exclude_groups", False)), created_at=d.get("created_at", ""), secret=d.get("secret"),
-                   previous_secret_valid_until=d.get("previous_secret_valid_until"))
+                   previous_secret_valid_until=d.get("previous_secret_valid_until"), paused=bool(d.get("paused", False)),
+                   pending=int((d.get("backlog") or {}).get("pending", 0)), oldest_pending_seconds=int((d.get("backlog") or {}).get("oldest_pending_seconds", 0)))
 
     def __repr__(self) -> str:  # the secret must never reach a log line
         shown = "<redacted>" if self.secret else None

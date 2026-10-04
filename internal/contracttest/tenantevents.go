@@ -421,3 +421,118 @@ func containsID(ds []subscription.Delivery, id string) bool {
 	}
 	return false
 }
+
+// A consumer's backpressure: paused subscriptions hold their deliveries without losing them, and no subscription can take
+// more than its share of POSTs in flight.
+func deliveryBackpressureContract(t *testing.T, f RepoFactory) {
+	fx, ctx := newFixture(t, f), context.Background()
+	fx.tenant(t, "t1")
+	fx.tenant(t, "t2")
+	for _, s := range []subscription.Subscription{newSub("sub_slow", "t1"), newSub("sub_ok", "t1")} {
+		if err := fx.r.Subscriptions.Create(ctx, s); err != nil {
+			t.Fatal(err)
+		}
+	}
+	now := time.Now().UTC().Truncate(time.Millisecond)
+	var ds []subscription.Delivery
+	for i := 0; i < 6; i++ { // 6 instances: each is its own head, so a subscription could have 6 POSTs in flight
+		ds = append(ds, newDelivery(fmt.Sprintf("s%d", i), "sub_slow", "t1", fmt.Sprintf("inst_%d", i), fmt.Sprintf("e%d", i), now.Add(time.Duration(i)*time.Millisecond)))
+	}
+	ds = append(ds, newDelivery("o1", "sub_ok", "t1", "inst_0", "e0", now.Add(10*time.Millisecond)))
+	if _, err := fx.r.Deliveries.Enqueue(ctx, ds); err != nil {
+		t.Fatal(err)
+	}
+
+	// the ceiling: a slow consumer gets 2 POSTs at a time and the other consumer is not starved behind it
+	got, err := fx.r.Deliveries.ClaimDueWith(ctx, now.Add(time.Second), time.Minute, 20, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	per := map[string]int{}
+	for _, d := range got {
+		per[d.SubscriptionID]++
+	}
+	if per["sub_slow"] != 2 || per["sub_ok"] != 1 {
+		t.Fatalf("a subscription may not exceed its in-flight ceiling: %v", per)
+	}
+	// while those are in flight the ceiling still holds, even for a new claim
+	again, _ := fx.r.Deliveries.ClaimDueWith(ctx, now.Add(2*time.Second), time.Minute, 20, 2)
+	if len(again) != 0 {
+		t.Errorf("the ceiling counts what is already in flight: %d more", len(again))
+	}
+	// finishing one frees a slot
+	if err := fx.r.Deliveries.MarkDelivered(ctx, got[0].ID, now.Add(3*time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if next, _ := fx.r.Deliveries.ClaimDueWith(ctx, now.Add(3*time.Second), time.Minute, 20, 2); len(next) != 1 {
+		t.Errorf("one slot was freed: %d", len(next))
+	}
+
+	// pause: nothing of that subscription is claimed, and nothing is lost
+	if err := fx.r.Subscriptions.SetPaused(ctx, "t1", "sub_slow", true); err != nil {
+		t.Fatal(err)
+	}
+	if s, _ := fx.r.Subscriptions.Get(ctx, "t1", "sub_slow"); !s.Paused {
+		t.Error("paused flag")
+	}
+	if held, _ := fx.r.Deliveries.ClaimDueWith(ctx, now.Add(time.Hour), time.Minute, 20, 0); containsSub(held, "sub_slow") {
+		t.Errorf("a paused subscription must not be claimed: %+v", held)
+	}
+	// and deliveries keep arriving for it, in sequence
+	if n, err := fx.r.Deliveries.Enqueue(ctx, []subscription.Delivery{newDelivery("s9", "sub_slow", "t1", "inst_0", "e9", now.Add(time.Hour))}); err != nil || n != 1 {
+		t.Fatalf("a paused subscription still receives (queues) events: %d %v", n, err)
+	}
+	bl, err := fx.r.Deliveries.Backlog(ctx, "t1", now.Add(2*time.Hour))
+	if err != nil || bl["sub_slow"].Pending < 5 || bl["sub_slow"].OldestPending < time.Hour {
+		t.Errorf("the backlog is visible: %+v %v", bl, err)
+	}
+	if other, _ := fx.r.Deliveries.Backlog(ctx, "t2", now); len(other) != 0 {
+		t.Errorf("a tenant sees only its own backlog: %+v", other)
+	}
+	if err := fx.r.Subscriptions.SetPaused(ctx, "t2", "sub_slow", false); !errors.Is(err, errs.ErrNotFound) {
+		t.Errorf("another tenant cannot touch it: %v", err)
+	}
+
+	// resume: it flows again
+	if err := fx.r.Subscriptions.SetPaused(ctx, "t1", "sub_slow", false); err != nil {
+		t.Fatal(err)
+	}
+	if rest, _ := fx.r.Deliveries.ClaimDueWith(ctx, now.Add(3*time.Hour), time.Minute, 20, 0); !containsSub(rest, "sub_slow") {
+		t.Error("a resumed subscription is delivered again")
+	}
+}
+
+func containsSub(ds []subscription.Delivery, sub string) bool {
+	for _, d := range ds {
+		if d.SubscriptionID == sub {
+			return true
+		}
+	}
+	return false
+}
+
+// Deliveries of one (subscription, instance) leave in sequence order even when they were created in the same instant
+// (a paused subscription that resumes, a burst): the sequence, not the clock, decides.
+func deliveryOrderContract(t *testing.T, f RepoFactory) {
+	fx, ctx := newFixture(t, f), context.Background()
+	fx.tenant(t, "t1")
+	if err := fx.r.Subscriptions.Create(ctx, newSub("sub_1", "t1")); err != nil {
+		t.Fatal(err)
+	}
+	at := time.Now().UTC().Truncate(time.Millisecond) // the very same instant for all of them
+	for i := 1; i <= 5; i++ {
+		if _, err := fx.r.Deliveries.Enqueue(ctx, []subscription.Delivery{newDelivery(fmt.Sprintf("d%d", 6-i), "sub_1", "t1", "inst_1", fmt.Sprintf("e%d", i), at)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// ids were created in reverse (d5 first): only the sequence tells the order
+	for want := int64(1); want <= 5; want++ {
+		got, err := fx.r.Deliveries.ClaimDue(ctx, at.Add(time.Second), time.Minute, 10)
+		if err != nil || len(got) != 1 || got[0].Sequence != want {
+			t.Fatalf("delivery %d must go out %dth: %+v %v", want, want, got, err)
+		}
+		if err := fx.r.Deliveries.MarkDelivered(ctx, got[0].ID, at.Add(time.Second)); err != nil {
+			t.Fatal(err)
+		}
+	}
+}

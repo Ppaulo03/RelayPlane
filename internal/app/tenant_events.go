@@ -11,6 +11,7 @@ import (
 	"github.com/relayplane/relayplane/internal/core/ids"
 	"github.com/relayplane/relayplane/internal/core/subscription"
 	"github.com/relayplane/relayplane/internal/idempotency"
+	"github.com/relayplane/relayplane/internal/ports"
 )
 
 // EventOutboxService publishes the events that were written to the database in the same transaction as the state
@@ -164,6 +165,22 @@ func (s *SubscriptionService) Get(ctx context.Context, tenantID, id string) (*su
 }
 
 // Delete removes a subscription and its pending deliveries.
+// Pause holds the subscription's deliveries: events keep being queued for it (nothing is lost) and none is sent until
+// Resume. It is the consumer's backpressure for the times it cannot keep up or is being deployed.
+func (s *SubscriptionService) Pause(ctx context.Context, tenantID, id string) error {
+	return s.d.Repos.Subscriptions.SetPaused(ctx, tenantID, id, true)
+}
+
+// Resume releases a paused subscription: its accumulated deliveries are sent in sequence order.
+func (s *SubscriptionService) Resume(ctx context.Context, tenantID, id string) error {
+	return s.d.Repos.Subscriptions.SetPaused(ctx, tenantID, id, false)
+}
+
+// Backlog is what each subscription of the tenant has waiting to be delivered.
+func (s *SubscriptionService) Backlog(ctx context.Context, tenantID string) (map[string]ports.Backlog, error) {
+	return s.d.Repos.Deliveries.Backlog(ctx, tenantID, s.d.now())
+}
+
 func (s *SubscriptionService) Delete(ctx context.Context, tenantID, id string) error {
 	return s.d.Repos.Subscriptions.Delete(ctx, tenantID, id)
 }

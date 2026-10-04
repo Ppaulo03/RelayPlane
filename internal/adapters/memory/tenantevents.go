@@ -153,6 +153,17 @@ func (r subsRepo) ListActive(_ context.Context, tenantID string) ([]subscription
 	return r.list(tenantID, true), nil
 }
 
+func (r subsRepo) SetPaused(_ context.Context, tenantID, id string, paused bool) error {
+	r.s.mu.Lock()
+	defer r.s.mu.Unlock()
+	s, ok := r.s.subs[id]
+	if !ok || s.TenantID != tenantID {
+		return errs.ErrNotFound
+	}
+	s.Paused = paused
+	return nil
+}
+
 func (r subsRepo) RotateSecret(_ context.Context, tenantID, id string, at time.Time) (int, error) {
 	r.s.mu.Lock()
 	defer r.s.mu.Unlock()
@@ -233,14 +244,22 @@ func (r deliveriesRepo) Enqueue(_ context.Context, ds []subscription.Delivery) (
 	return n, nil
 }
 
-func (r deliveriesRepo) ClaimDue(_ context.Context, now time.Time, lease time.Duration, limit int) ([]subscription.Delivery, error) {
+func (r deliveriesRepo) ClaimDue(ctx context.Context, now time.Time, lease time.Duration, limit int) ([]subscription.Delivery, error) {
+	return r.ClaimDueWith(ctx, now, lease, limit, 0)
+}
+
+func (r deliveriesRepo) ClaimDueWith(_ context.Context, now time.Time, lease time.Duration, limit, perSubscription int) ([]subscription.Delivery, error) {
 	r.s.mu.Lock()
 	defer r.s.mu.Unlock()
 	var due []*deliveryRow
 	for _, d := range r.s.deliveries {
-		if d.Status == subscription.DeliveryPending && !d.NextAttemptAt.After(now) && !d.leaseUntil.After(now) {
-			due = append(due, d)
+		if d.Status != subscription.DeliveryPending || d.NextAttemptAt.After(now) || d.leaseUntil.After(now) {
+			continue
 		}
+		if sub, ok := r.s.subs[d.SubscriptionID]; ok && sub.Paused {
+			continue // the consumer asked us to hold deliveries
+		}
+		due = append(due, d)
 	}
 	sort.Slice(due, func(i, j int) bool {
 		if !due[i].CreatedAt.Equal(due[j].CreatedAt) {
@@ -249,23 +268,58 @@ func (r deliveriesRepo) ClaimDue(_ context.Context, now time.Time, lease time.Du
 		return due[i].ID < due[j].ID
 	})
 	inFlight := map[string]bool{}
+	perSub := map[string]int{}
 	for _, d := range r.s.deliveries {
 		if d.Status == subscription.DeliveryPending && d.leaseUntil.After(now) {
 			inFlight[d.SubscriptionID+"|"+d.InstanceID] = true
+			perSub[d.SubscriptionID]++
+		}
+	}
+	// within a (subscription, instance) the delivery order is the sequence order, whatever the creation times say
+	head := map[string]*deliveryRow{}
+	for _, d := range due {
+		key := d.SubscriptionID + "|" + d.InstanceID
+		if h, ok := head[key]; !ok || d.Sequence < h.Sequence {
+			head[key] = d
 		}
 	}
 	var out []subscription.Delivery
 	for _, d := range due {
 		key := d.SubscriptionID + "|" + d.InstanceID
+		if head[key] != d {
+			continue
+		}
 		if inFlight[key] {
 			continue // best-effort ordering: one delivery per (subscription, instance) at a time
+		}
+		if perSubscription > 0 && perSub[d.SubscriptionID] >= perSubscription {
+			continue // this consumer already has its share of POSTs in flight
 		}
 		if limit > 0 && len(out) >= limit {
 			break
 		}
 		d.leaseUntil = now.Add(lease)
 		inFlight[key] = true
+		perSub[d.SubscriptionID]++
 		out = append(out, d.Delivery)
+	}
+	return out, nil
+}
+
+func (r deliveriesRepo) Backlog(_ context.Context, tenantID string, now time.Time) (map[string]ports.Backlog, error) {
+	r.s.mu.Lock()
+	defer r.s.mu.Unlock()
+	out := map[string]ports.Backlog{}
+	for _, d := range r.s.deliveries {
+		if d.TenantID != tenantID || d.Status != subscription.DeliveryPending {
+			continue
+		}
+		b := out[d.SubscriptionID]
+		b.Pending++
+		if age := now.Sub(d.CreatedAt); age > b.OldestPending {
+			b.OldestPending = age
+		}
+		out[d.SubscriptionID] = b
 	}
 	return out, nil
 }

@@ -31,6 +31,9 @@ type Subscription struct {
 	SecretVersion int
 	RotatedAt     time.Time
 	Active        bool
+	// Paused keeps the subscription receiving events (deliveries accumulate, none is sent) until it is resumed: the
+	// consumer's own backpressure. Unlike Active=false, nothing is lost.
+	Paused bool
 	// ExcludeGroups drops events of group chats (message.received with group=true).
 	ExcludeGroups bool
 	CreatedAt     time.Time

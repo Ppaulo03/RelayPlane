@@ -194,3 +194,21 @@ async def test_api_key_rotation_calls():
     assert k.secret == "rpk_ab12secret" and "secret" not in repr(k)
     assert [x.active for x in keys] == [True, False] and keys[0].current and keys[0].secret == ""
     assert seen == [("POST", "/api/v1/api-keys"), ("GET", "/api/v1/api-keys"), ("DELETE", "/api/v1/api-keys/key_1")]
+
+
+async def test_subscription_pause_resume_and_backlog():
+    seen = []
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        seen.append((req.method, req.url.path))
+        if req.method == "GET":
+            return httpx.Response(200, json={"subscriptions": [{"id": "sub_1", "url": "https://a/h", "active": True, "paused": True,
+                                                                "backlog": {"pending": 42, "oldest_pending_seconds": 90}}]})
+        return httpx.Response(204)
+
+    async with client(handler) as rp:
+        await rp.subscriptions.pause("sub_1")
+        subs = await rp.subscriptions.list()
+        await rp.subscriptions.resume("sub_1")
+    assert subs[0].paused and subs[0].pending == 42 and subs[0].oldest_pending_seconds == 90
+    assert seen == [("POST", "/api/v1/subscriptions/sub_1/pause"), ("GET", "/api/v1/subscriptions"), ("POST", "/api/v1/subscriptions/sub_1/resume")]

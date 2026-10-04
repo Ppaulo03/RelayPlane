@@ -81,13 +81,13 @@ func (r eventsRepo) Purge(ctx context.Context, before time.Time) (int64, error) 
 
 type subsRepo struct{ s *Store }
 
-const subCols = `id,tenant_id,url,event_types,instance_ids,secret_version,rotated_at,active,created_at,exclude_groups`
+const subCols = `id,tenant_id,url,event_types,instance_ids,secret_version,rotated_at,active,created_at,exclude_groups,paused`
 
 func scanSub(row pgx.Row) (*subscription.Subscription, error) {
 	var s subscription.Subscription
 	var types []string
 	var rotated *time.Time
-	if err := row.Scan(&s.ID, &s.TenantID, &s.URL, &types, &s.InstanceIDs, &s.SecretVersion, &rotated, &s.Active, &s.CreatedAt, &s.ExcludeGroups); err != nil {
+	if err := row.Scan(&s.ID, &s.TenantID, &s.URL, &types, &s.InstanceIDs, &s.SecretVersion, &rotated, &s.Active, &s.CreatedAt, &s.ExcludeGroups, &s.Paused); err != nil {
 		return nil, notFound(err)
 	}
 	for _, t := range types {
@@ -157,6 +157,17 @@ func (r subsRepo) ListByTenant(ctx context.Context, tenantID string) ([]subscrip
 
 func (r subsRepo) ListActive(ctx context.Context, tenantID string) ([]subscription.Subscription, error) {
 	return r.list(ctx, tenantID, true)
+}
+
+func (r subsRepo) SetPaused(ctx context.Context, tenantID, id string, paused bool) error {
+	tag, err := r.s.pool.Exec(ctx, `UPDATE subscriptions SET paused=$3 WHERE id=$1 AND tenant_id=$2`, id, tenantID, paused)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return errs.ErrNotFound
+	}
+	return nil
 }
 
 func (r subsRepo) RotateSecret(ctx context.Context, tenantID, id string, at time.Time) (int, error) {
@@ -250,26 +261,38 @@ func (r deliveriesRepo) Enqueue(ctx context.Context, ds []subscription.Delivery)
 }
 
 func (r deliveriesRepo) ClaimDue(ctx context.Context, now time.Time, lease time.Duration, limit int) ([]subscription.Delivery, error) {
+	return r.ClaimDueWith(ctx, now, lease, limit, 0)
+}
+
+func (r deliveriesRepo) ClaimDueWith(ctx context.Context, now time.Time, lease time.Duration, limit, perSubscription int) ([]subscription.Delivery, error) {
 	if limit <= 0 {
 		limit = 50
 	}
 	rows, err := r.s.pool.Query(ctx, `
 WITH heads AS (
-    SELECT id, created_at FROM (
-        SELECT DISTINCT ON (d.subscription_id, d.instance_id) d.id, d.created_at
-        FROM webhook_deliveries d
-        WHERE d.status='PENDING' AND d.next_attempt_at <= $1 AND (d.lease_until IS NULL OR d.lease_until <= $1)
-          AND NOT EXISTS (SELECT 1 FROM webhook_deliveries o
-                           WHERE o.subscription_id=d.subscription_id AND o.instance_id=d.instance_id AND o.id<>d.id
-                             AND o.status='PENDING' AND o.lease_until > $1)
-        ORDER BY d.subscription_id, d.instance_id, d.sequence, d.created_at, d.id
-    ) first ORDER BY created_at, id LIMIT $3
+    -- the head of each (subscription, instance): one delivery in flight per pair, in sequence order; paused subscriptions wait
+    SELECT DISTINCT ON (d.subscription_id, d.instance_id) d.id, d.created_at, d.subscription_id
+    FROM webhook_deliveries d
+    WHERE d.status='PENDING' AND d.next_attempt_at <= $1 AND (d.lease_until IS NULL OR d.lease_until <= $1)
+      AND NOT EXISTS (SELECT 1 FROM subscriptions s WHERE s.id=d.subscription_id AND s.paused)
+      AND NOT EXISTS (SELECT 1 FROM webhook_deliveries o
+                       WHERE o.subscription_id=d.subscription_id AND o.instance_id=d.instance_id AND o.id<>d.id
+                         AND o.status='PENDING' AND o.lease_until > $1)
+    ORDER BY d.subscription_id, d.instance_id, d.sequence, d.created_at, d.id
+), ranked AS (
+    SELECT h.id, h.created_at,
+           row_number() OVER (PARTITION BY h.subscription_id ORDER BY h.created_at, h.id) AS rn,
+           (SELECT count(*) FROM webhook_deliveries o WHERE o.subscription_id=h.subscription_id AND o.status='PENDING' AND o.lease_until > $1) AS inflight
+    FROM heads h
+), picked AS (
+    -- no subscription may hold more than $4 POSTs in flight (0: no ceiling)
+    SELECT id, created_at FROM ranked WHERE $4 <= 0 OR rn + inflight <= $4 ORDER BY created_at, id LIMIT $3
 ), locked AS (
-    SELECT w.id FROM webhook_deliveries w JOIN heads h ON h.id=w.id ORDER BY h.created_at, h.id FOR UPDATE OF w SKIP LOCKED
+    SELECT w.id FROM webhook_deliveries w JOIN picked h ON h.id=w.id ORDER BY h.created_at, h.id FOR UPDATE OF w SKIP LOCKED
 )
 UPDATE webhook_deliveries x SET lease_until = $1 + make_interval(secs => $2)
 FROM locked WHERE x.id = locked.id AND (x.lease_until IS NULL OR x.lease_until <= $1)
-RETURNING `+prefixCols("x", delCols), now, lease.Seconds(), limit)
+RETURNING `+prefixCols("x", delCols), now, lease.Seconds(), limit, perSubscription)
 	if err != nil {
 		return nil, err
 	}
@@ -287,6 +310,26 @@ RETURNING `+prefixCols("x", delCols), now, lease.Seconds(), limit)
 	}
 	sortDeliveries(out)
 	return out, nil
+}
+
+func (r deliveriesRepo) Backlog(ctx context.Context, tenantID string, now time.Time) (map[string]ports.Backlog, error) {
+	rows, err := r.s.pool.Query(ctx, `SELECT subscription_id, count(*), min(created_at) FROM webhook_deliveries WHERE tenant_id=$1 AND status='PENDING' GROUP BY subscription_id`, tenantID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]ports.Backlog{}
+	for rows.Next() {
+		var id string
+		var b ports.Backlog
+		var oldest time.Time
+		if err := rows.Scan(&id, &b.Pending, &oldest); err != nil {
+			return nil, err
+		}
+		b.OldestPending = now.Sub(oldest)
+		out[id] = b
+	}
+	return out, rows.Err()
 }
 
 func (r deliveriesRepo) exec(ctx context.Context, q string, args ...any) error {

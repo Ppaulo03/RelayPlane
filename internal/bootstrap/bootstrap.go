@@ -125,7 +125,7 @@ func New(ctx context.Context, cfg config.Config, service string) (*Runtime, erro
 	rt.FanOut = &delivery.FanOut{Repos: repos, Log: log, Metrics: rt.Metrics}
 	rt.Dispatcher = &delivery.Dispatcher{Repos: repos, ServerKey: subKey, Metrics: rt.Metrics, Log: log,
 		Sender:         webhookout.New(webhookout.Config{AllowPrivate: cfg.WebhooksAllowPrivate, AllowInsecure: cfg.WebhooksAllowInsecure}),
-		RequestTimeout: cfg.WebhookDeliveryTimeout, Concurrency: cfg.WebhookDeliveryWorkers}
+		RequestTimeout: cfg.WebhookDeliveryTimeout, Concurrency: cfg.WebhookDeliveryWorkers, MaxInFlightPerSubscription: cfg.WebhookMaxInFlightPerSub}
 	return rt, nil
 }
 

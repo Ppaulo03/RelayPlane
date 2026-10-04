@@ -17,6 +17,9 @@ type errorBody struct {
 	Error apiError `json:"error"`
 }
 
+// errRateLimited is what the limiter reports (the message tells the client what to do).
+var errRateLimited = errs.Wrap(errs.ErrRateLimited, "too many requests: slow down and retry after the Retry-After delay")
+
 var errorMap = []struct {
 	err    error
 	status int
@@ -38,6 +41,7 @@ var errorMap = []struct {
 	{errs.ErrMigrationBlocked, 409, "migration_blocked"},
 	{errs.ErrPairingUnavailable, 409, "pairing_unavailable"},
 	{errs.ErrPayloadTooLarge, 413, "payload_too_large"},
+	{errs.ErrRateLimited, 429, "rate_limited"},
 	{errs.ErrCapabilityMissing, 501, "capability_not_supported"},
 	{errs.ErrNoCapacity, 503, "no_capacity"},
 	{errs.ErrProviderUnavailable, 503, "provider_unavailable"},

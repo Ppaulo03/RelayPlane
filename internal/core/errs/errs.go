@@ -28,7 +28,9 @@ var (
 	ErrInProgress          = errors.New("operation in progress")
 	ErrPayloadTooLarge     = errors.New("payload exceeds inline limit")
 	ErrCapabilityMissing   = errors.New("capability not supported")
-	ErrAlreadyTerminal     = errors.New("operation already finished")
+	// ErrRateLimited: the caller exceeded its request budget; retry after the advertised delay.
+	ErrRateLimited     = errors.New("rate limit exceeded")
+	ErrAlreadyTerminal = errors.New("operation already finished")
 	// ErrDestinationBlocked: an outbound webhook destination is not allowed (private/loopback/metadata address,
 	// forbidden scheme). It is permanent: retrying cannot help.
 	ErrDestinationBlocked = errors.New("destination not allowed")

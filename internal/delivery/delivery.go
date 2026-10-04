@@ -81,6 +81,9 @@ type Dispatcher struct {
 	Lease          time.Duration // how long a claimed delivery is exclusive (default 1m)
 	RequestTimeout time.Duration // per POST (default 5s)
 	Poll           time.Duration // pause when idle (default 250ms)
+	// MaxInFlightPerSubscription caps the POSTs one subscription can have going at the same time (default 8), so a
+	// consumer that answers slowly cannot take every dispatcher slot from the others.
+	MaxInFlightPerSubscription int
 
 	Breaker *Breaker
 }
@@ -107,6 +110,9 @@ func (d *Dispatcher) defaults() {
 	}
 	if d.Poll <= 0 {
 		d.Poll = 250 * time.Millisecond
+	}
+	if d.MaxInFlightPerSubscription <= 0 {
+		d.MaxInFlightPerSubscription = 8
 	}
 	if d.Rand == nil {
 		d.Rand = rand.Float64
@@ -145,7 +151,7 @@ func (d *Dispatcher) Run(ctx context.Context) {
 // RunOnce claims and processes one batch; it returns how many deliveries were handled.
 func (d *Dispatcher) RunOnce(ctx context.Context) (int, error) {
 	d.defaults()
-	claimed, err := d.Repos.Deliveries.ClaimDue(ctx, d.now(), d.Lease, d.BatchSize)
+	claimed, err := d.Repos.Deliveries.ClaimDueWith(ctx, d.now(), d.Lease, d.BatchSize, d.MaxInFlightPerSubscription)
 	if err != nil || len(claimed) == 0 {
 		return 0, err
 	}

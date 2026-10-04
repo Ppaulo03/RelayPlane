@@ -31,6 +31,7 @@ type Metrics struct {
 	ReconciliationDrift   prometheus.Counter
 	RateLimitWait         prometheus.Histogram
 	BlobBytes             *prometheus.CounterVec // by op (put|get)
+	RateLimited           prometheus.Counter     // API requests refused because the tenant spent its budget
 	InboundMedia          *prometheus.CounterVec // inbound attachments by outcome (ready|too_large|type_not_allowed|unsupported|expired|download_failed|retry)
 	InboundMediaPending   *prometheus.GaugeVec   // jobs waiting by stage (download|publish)
 	BlobCleanupTotal      *prometheus.CounterVec // by reason
@@ -79,6 +80,7 @@ func NewMetrics() *Metrics {
 	m.ReconciliationFail = prometheus.NewCounter(prometheus.CounterOpts{Name: "relayplane_reconciliation_failure_total", Help: "Reconciliation passes that failed."})
 	m.ReconciliationDrift = prometheus.NewCounter(prometheus.CounterOpts{Name: "relayplane_reconciliation_drift_total", Help: "Instances found with desired != observed."})
 	m.RateLimitWait = prometheus.NewHistogram(prometheus.HistogramOpts{Name: "relayplane_rate_limit_wait_seconds", Help: "Time sends were delayed by rate limiting.", Buckets: prometheus.ExponentialBuckets(0.05, 2, 12)})
+	m.RateLimited = prometheus.NewCounter(prometheus.CounterOpts{Name: "relayplane_api_rate_limited_total", Help: "API requests refused with 429."})
 	m.InboundMedia = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "relayplane_inbound_media_total", Help: "Inbound attachments by outcome."}, []string{"outcome"})
 	m.InboundMediaPending = prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "relayplane_inbound_media_pending", Help: "Inbound attachments waiting to be resolved or published, by stage."}, []string{"stage"})
 	m.BlobBytes = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "relayplane_blob_bytes", Help: "Bytes moved through the blob store."}, []string{"op"})
@@ -108,7 +110,7 @@ func NewMetrics() *Metrics {
 		m.InstancesTotal, m.InstancesConnected, m.ProviderNodesTotal, m.ProviderNodeHealth, m.OutboundQueueDepth,
 		m.OutboundRetryTotal, m.OutboundDLQTotal, m.OutboundMessages, m.InboundEventsTotal, m.InboundDuplicates,
 		m.OwnershipViolation, m.StaleCommandTotal, m.EpochMismatchTotal, m.ReconciliationTotal, m.ReconciliationFail,
-		m.ReconciliationDrift, m.RateLimitWait, m.BlobBytes, m.InboundMedia, m.InboundMediaPending, m.BlobCleanupTotal, m.ProviderLatency, m.HTTPRequests,
+		m.ReconciliationDrift, m.RateLimitWait, m.BlobBytes, m.RateLimited, m.InboundMedia, m.InboundMediaPending, m.BlobCleanupTotal, m.ProviderLatency, m.HTTPRequests,
 		m.HTTPLatency, m.MigrationBlockedTotal, m.BarrierDeferrals, m.OutboxPublished,
 	} {
 		f(c)
