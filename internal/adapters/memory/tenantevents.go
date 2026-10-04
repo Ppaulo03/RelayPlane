@@ -16,6 +16,7 @@ import (
 
 type outboxEvent struct {
 	ev        events.Event
+	created   time.Time
 	published time.Time
 }
 
@@ -39,7 +40,7 @@ func (s *Store) queueEvent(ev events.Event) {
 			return
 		}
 	}
-	s.eventOutbox = append(s.eventOutbox, &outboxEvent{ev: ev})
+	s.eventOutbox = append(s.eventOutbox, &outboxEvent{ev: ev, created: s.Now()})
 }
 
 // ---- events outbox ----
@@ -90,6 +91,24 @@ func (r eventsRepo) Purge(_ context.Context, before time.Time) (int64, error) {
 	}
 	r.s.eventOutbox = keep
 	return n, nil
+}
+
+func (r eventsRepo) PendingStats(_ context.Context) (int64, time.Duration, error) {
+	r.s.mu.Lock()
+	defer r.s.mu.Unlock()
+	var n int64
+	var oldest time.Duration
+	now := r.s.Now()
+	for _, e := range r.s.eventOutbox {
+		if !e.published.IsZero() {
+			continue
+		}
+		n++
+		if age := now.Sub(e.created); age > oldest {
+			oldest = age
+		}
+	}
+	return n, oldest, nil
 }
 
 func (r eventsRepo) EraseContact(_ context.Context, tenantID, number string) (int64, error) {

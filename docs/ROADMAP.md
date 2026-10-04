@@ -17,7 +17,7 @@ Legenda: ✅ feito e testado · ⚠️ feito com limitação registrada · ⏭�
 | Worker outbound (CAS, ordering, retry/backoff, DLQ, UNKNOWN) | ✅ | |
 | Idempotência (create/send/delete/migrate) | ✅ | |
 | Rate limit configurável com hierarquia | ⚠️ | estado por worker (ver abaixo) |
-| Webhook inbound (auth por node, ownership, normalização, dedupe 2 fases) | ✅ | |
+| Webhook inbound (auth por node, ownership, normalização, aceite durável: dedupe + outbox em uma transação) | ✅ | |
 | Reconciler (drift, adoção, retomada, probe de nodes, dispatcher do outbox, janitor) | ✅ | |
 | Outbox transacional + `sequence_no` + barreira `UNKNOWN` (INV-07 de ponta a ponta) | ✅ | ver ARCHITECTURE §6 |
 | Serialização de lifecycle (`instance-control`) | ✅ | `TestLifecycle_*` |

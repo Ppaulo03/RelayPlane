@@ -189,6 +189,11 @@ Por padrão (`UNKNOWN_BARRIER_TIMEOUT=0`) a barreira só cai com `resolve`: orde
 decidir (monitore `relayplane_outbound_barrier_deferrals_total{reason="unknown"}`). Definir um timeout (ex.: `15m`) faz a barreira cair
 sozinha; a mensagem segue `UNKNOWN` e a ordem relativa a ela deixa de ser garantida.
 
+### Outbox de eventos (mensagens recebidas e status)
+Todo evento aceito (mensagem recebida, recibo, mudança de sessão, status de envio) é gravado em `event_outbox` na mesma transação da chave de dedupe e **só então** o provedor recebe 200. O reconciler o publica no barramento a cada `OUTBOX_INTERVAL`
+(padrão 250 ms), então **o reconciler precisa estar rodando** para que eventos recebidos cheguem ao tenant. Se ele parar (ou o Redis cair), nada se perde, mas os eventos ficam atrasados:
+`relayplane_event_outbox_pending` e `relayplane_event_outbox_oldest_seconds`; alerta `RelayPlaneEventOutboxStalled` (> 30 s). Linhas publicadas são purgadas depois de algum tempo.
+
 ### Outbox
 `outbox` guarda cada comando aceito até a publicação (gateway publica de imediato; o reconciler varre a cada 1 s e republica comandos
 perdidos pelo broker). Entradas despachadas são purgadas após 24 h. Backlog crescente ⇒ broker indisponível: o accept continua funcionando.

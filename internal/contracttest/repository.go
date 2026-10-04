@@ -758,6 +758,9 @@ func dedupContract(t *testing.T, f RepoFactory) {
 	if got := pending(); len(got) != 1 || got[0] != "evt_1" {
 		t.Fatalf("an accepted event must be in the outbox: %v", got)
 	}
+	if n, age, err := fx.r.Events.PendingStats(ctx); err != nil || n != 1 || age < 0 || age > time.Minute {
+		t.Errorf("pending stats: %d %v %v", n, age, err)
+	}
 	// a duplicate writes nothing
 	if o, err := fx.r.Dedup.Accept(ctx, "k1", ttl, ev("evt_1b"), nil); err != nil || o != ports.DedupDuplicate {
 		t.Fatalf("duplicate: %v %v", o, err)

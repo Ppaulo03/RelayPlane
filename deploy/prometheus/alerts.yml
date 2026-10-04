@@ -21,6 +21,11 @@ groups:
         expr: increase(relayplane_reconciliation_failure_total[10m]) > 5
         labels: {severity: warn}
         annotations: {summary: "Reconciliation passes are failing"}
+      - alert: RelayPlaneEventOutboxStalled
+        expr: relayplane_event_outbox_oldest_seconds > 30
+        for: 1m
+        labels: {severity: page}
+        annotations: {summary: "accepted events have waited over 30 s to reach the bus: the reconciler is down or the event bus is unavailable. Nothing is lost (it is in the database), but inbound messages and statuses are late"}
       - alert: RelayPlaneUnknownMessageWaiting
         expr: relayplane_unknown_oldest_seconds > 300
         for: 1m

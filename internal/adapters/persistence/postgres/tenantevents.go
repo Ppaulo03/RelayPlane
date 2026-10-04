@@ -87,6 +87,16 @@ func (r eventsRepo) EraseContact(ctx context.Context, tenantID, number string) (
 	return tag.RowsAffected(), err
 }
 
+func (r eventsRepo) PendingStats(ctx context.Context) (int64, time.Duration, error) {
+	var n int64
+	var age *float64
+	err := r.s.pool.QueryRow(ctx, `SELECT count(*), extract(epoch FROM now() - min(created_at)) FROM event_outbox WHERE published_at IS NULL`).Scan(&n, &age)
+	if err != nil || age == nil {
+		return n, 0, err
+	}
+	return n, time.Duration(*age * float64(time.Second)), nil
+}
+
 // ---- subscriptions ----
 
 type subsRepo struct{ s *Store }

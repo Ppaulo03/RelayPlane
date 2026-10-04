@@ -32,6 +32,8 @@ type Metrics struct {
 	RateLimitWait         prometheus.Histogram
 	BlobBytes             *prometheus.CounterVec   // by op (put|get)
 	EventDeliveryLag      *prometheus.HistogramVec // seconds from "RelayPlane knows" to the consumer's 2xx, by event type and attempt
+	EventOutboxPending    prometheus.Gauge         // accepted events not yet on the bus
+	EventOutboxOldest     prometheus.Gauge         // seconds the oldest of them has waited
 	UnknownMessages       prometheus.Gauge         // messages waiting for a decision (UNKNOWN)
 	UnknownOldest         prometheus.Gauge         // seconds the oldest UNKNOWN has been waiting
 	RetentionApplied      *prometheus.CounterVec   // records changed by retention (messages|dead_deliveries)
@@ -87,6 +89,8 @@ func NewMetrics() *Metrics {
 	m.EventDeliveryLag = prometheus.NewHistogramVec(prometheus.HistogramOpts{Name: "relayplane_event_delivery_lag_seconds",
 		Help:    "Seconds from the moment RelayPlane learned of an event to the consumer's 2xx answer. attempt=first is the healthy-path latency (target p95 < 2s); attempt=recovered waited for the lease of a dead worker; attempt=retry includes the backoff.",
 		Buckets: []float64{0.025, 0.05, 0.1, 0.25, 0.5, 1, 2, 5, 10, 30, 60, 300}}, []string{"event_type", "attempt"})
+	m.EventOutboxPending = prometheus.NewGauge(prometheus.GaugeOpts{Name: "relayplane_event_outbox_pending", Help: "Accepted events (inbound messages, statuses) that are not on the event bus yet."})
+	m.EventOutboxOldest = prometheus.NewGauge(prometheus.GaugeOpts{Name: "relayplane_event_outbox_oldest_seconds", Help: "How long the oldest accepted event has waited to reach the event bus: growing means nobody publishes the outbox."})
 	m.UnknownMessages = prometheus.NewGauge(prometheus.GaugeOpts{Name: "relayplane_unknown_messages", Help: "Outbound messages in UNKNOWN: they wait for a decision (resolve) and hold back the later messages of their instance."})
 	m.UnknownOldest = prometheus.NewGauge(prometheus.GaugeOpts{Name: "relayplane_unknown_oldest_seconds", Help: "How long the oldest UNKNOWN message has been waiting."})
 	m.RetentionApplied = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "relayplane_retention_applied_total", Help: "Records anonymized or deleted by retention."}, []string{"kind"})
@@ -120,7 +124,7 @@ func NewMetrics() *Metrics {
 		m.InstancesTotal, m.InstancesConnected, m.ProviderNodesTotal, m.ProviderNodeHealth, m.OutboundQueueDepth,
 		m.OutboundRetryTotal, m.OutboundDLQTotal, m.OutboundMessages, m.InboundEventsTotal, m.InboundDuplicates,
 		m.OwnershipViolation, m.StaleCommandTotal, m.EpochMismatchTotal, m.ReconciliationTotal, m.ReconciliationFail,
-		m.ReconciliationDrift, m.RateLimitWait, m.BlobBytes, m.UnknownMessages, m.UnknownOldest, m.EventDeliveryLag, m.RetentionApplied, m.RateLimited, m.InboundMedia, m.InboundMediaPending, m.BlobCleanupTotal, m.ProviderLatency, m.HTTPRequests,
+		m.ReconciliationDrift, m.RateLimitWait, m.BlobBytes, m.EventOutboxPending, m.EventOutboxOldest, m.UnknownMessages, m.UnknownOldest, m.EventDeliveryLag, m.RetentionApplied, m.RateLimited, m.InboundMedia, m.InboundMediaPending, m.BlobCleanupTotal, m.ProviderLatency, m.HTTPRequests,
 		m.HTTPLatency, m.MigrationBlockedTotal, m.BarrierDeferrals, m.OutboxPublished,
 	} {
 		f(c)
