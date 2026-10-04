@@ -42,7 +42,8 @@ type Store struct {
 	eventOutbox []*outboxEvent
 	subs        map[string]*subscription.Subscription
 	deliveries  map[string]*deliveryRow
-	deliverySeq map[string]int64 // "subscription|instance" -> last sequence
+	erasures    map[string]time.Time // tenant|number -> when it was erased
+	deliverySeq map[string]int64     // "subscription|instance" -> last sequence
 	inbound     map[string]*inboundRow
 	apiKeys     map[string]*instance.APIKey
 
@@ -86,6 +87,7 @@ func (s *Store) Repositories() ports.Repositories {
 		Operations: opRepo{s}, Messages: msgRepo{s}, Blobs: blobRepo{s},
 		Idempotency: idemRepo{s}, Dedup: dedupRepo{s},
 		Events: eventsRepo{s}, Subscriptions: subsRepo{s}, Deliveries: deliveriesRepo{s}, InboundMedia: inboundMediaRepo{s},
+		Erasures: erasureRepo{s},
 	}
 }
 

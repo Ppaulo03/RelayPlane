@@ -40,6 +40,12 @@ var _ ports.MediaDownloader = (*FakeProvider)(nil)
 // DownloadMedia serves the attachment described by a FakeMediaRef.
 func (f *FakeProvider) DownloadMedia(_ context.Context, a ownership.Assignment, ref json.RawMessage, maxBytes int64) (*ports.DownloadedMedia, error) {
 	f.enter("DownloadMedia", a)
+	f.mu.Lock()
+	hook := f.OnDownload
+	f.mu.Unlock()
+	if hook != nil {
+		hook()
+	}
 	var r FakeMediaRef
 	if err := json.Unmarshal(ref, &r); err != nil {
 		return nil, fmt.Errorf("%w: unusable media reference", errs.ErrProviderRejected)

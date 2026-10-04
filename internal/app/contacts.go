@@ -29,6 +29,10 @@ type ErasureReport struct {
 	ErasedAt           time.Time `json:"erased_at"`
 }
 
+// ErasureTombstoneRetention is how long the mark of an erased contact is kept. It must outlast anything that can be in flight: an event
+// waiting in the broker for a consumer that is down, an attachment waiting for its next attempt.
+const ErasureTombstoneRetention = 30 * 24 * time.Hour
+
 // NormalizeNumber reduces what a caller typed ("+55 (62) 99999-9999") to the digits RelayPlane stores.
 func NormalizeNumber(raw string) (string, error) {
 	var b strings.Builder
@@ -58,6 +62,11 @@ func (s *ContactService) Erase(ctx context.Context, tenantID, rawNumber string) 
 	}
 	at := s.d.now().UTC()
 	rep := &ErasureReport{ErasedAt: at}
+	// mark FIRST: everything that was accepted before this moment and is still on its way (broker, download) is dropped by whoever
+	// holds it, and whoever writes concurrently with the deletes below sees the mark afterwards and cleans up after itself
+	if err := s.d.Repos.Erasures.Mark(ctx, tenantID, number, at); err != nil {
+		return nil, fmt.Errorf("mark erasure: %w", err)
+	}
 
 	// a recipient can have been given in any of the usual spellings
 	for _, spelling := range []string{number, "+" + number, number + "@s.whatsapp.net"} {

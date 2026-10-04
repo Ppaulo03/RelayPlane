@@ -136,11 +136,27 @@ func (m *MediaIngestor) handle(ctx context.Context, j media.InboundJob) {
 	ctx = observability.With(ctx, observability.KeyTenantID, j.TenantID, observability.KeyInstanceID, j.InstanceID)
 	ctx, span := observability.Start(ctx, "media.ingest")
 	defer span.End()
+	// the contact was erased after the message was accepted: stop here, at every step that may have written something
+	if m.erased(ctx, j) {
+		m.discard(ctx, j)
+		return
+	}
 	if j.Stage == media.StageDownload {
-		if err := m.download(ctx, &j); err != nil {
+		err := m.download(ctx, &j)
+		// the file may have been stored while the erasure listed what to delete (which also removed the job row, so the attempt may even
+		// have failed on it): whatever the outcome, an erased contact's attachment goes
+		if m.erased(ctx, j) {
+			m.discard(ctx, j)
+			return
+		}
+		if err != nil {
 			m.retry(ctx, j, err)
 			return
 		}
+	}
+	if m.erased(ctx, j) {
+		m.discard(ctx, j)
+		return
 	}
 	// publish the resolved event, then close the job (a crash in between republishes the same event id: consumers dedupe)
 	if err := m.Bus.Publish(ctx, j.Event); err != nil {
@@ -150,6 +166,36 @@ func (m *MediaIngestor) handle(ctx context.Context, j media.InboundJob) {
 	if err := m.Repos.InboundMedia.Done(ctx, j.ID, m.now()); err != nil {
 		m.Log.WarnContext(ctx, "could not close the inbound media job (it will be republished with the same event id)", "media_id", j.ID, "error", err)
 	}
+}
+
+// erased reports whether the sender of the job's message was erased after the message was accepted. A failed check counts as "no":
+// the job is retried and asked again before anything is published.
+func (m *MediaIngestor) erased(ctx context.Context, j media.InboundJob) bool {
+	gone, err := m.Repos.Erasures.Erased(ctx, j.Event)
+	if err != nil {
+		m.Log.WarnContext(ctx, "could not check the erasure tombstones", "media_id", j.ID, "error", err)
+		return false
+	}
+	return gone
+}
+
+// discard removes whatever the job of an erased contact has stored and forgets the job: nothing is published.
+func (m *MediaIngestor) discard(ctx context.Context, j media.InboundJob) {
+	if b, err := m.Repos.Blobs.Get(ctx, j.ID); err == nil {
+		if err := m.Blob.Delete(ctx, b.ObjectKey); err != nil && !errors.Is(err, errs.ErrNotFound) {
+			m.retry(ctx, j, fmt.Errorf("delete the attachment of an erased contact: %w", err))
+			return
+		}
+		if err := m.Repos.Blobs.MarkDeleted(ctx, b.ID, m.now()); err != nil {
+			m.retry(ctx, j, fmt.Errorf("record the deletion: %w", err))
+			return
+		}
+	}
+	if err := m.Repos.InboundMedia.Drop(ctx, j.ID); err != nil {
+		m.retry(ctx, j, fmt.Errorf("drop the job of an erased contact: %w", err))
+		return
+	}
+	m.Metrics.InboundMedia.WithLabelValues("erased").Inc()
 }
 
 func (m *MediaIngestor) retry(ctx context.Context, j media.InboundJob, cause error) {

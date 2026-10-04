@@ -50,7 +50,7 @@ Evolution/Baileys e suas versões, nodes, fencing e epochs, outbox, leases, part
 | Envio: aceito de forma durável antes da resposta, uma vez por `idempotency_key`, ordem por instância | ✅ testado (contrato, sistema, caos) |
 | Entrega do evento ao seu webhook: at-least-once, `sequence` sem buracos, retry/DLQ | ✅ testado |
 | Mensagem **recebida** → seu webhook | ✅ **durável a partir do aceite**: o 200 ao provedor só sai depois de a mensagem estar gravada no banco (chave de dedupe e evento na mesma transação); queda do processo ou do Redis depois disso só atrasa a entrega, nunca a perde. Depende do reconciler rodando (alerta `RelayPlaneEventOutboxStalled`). Testado contra Postgres/Redis/S3 reais |
-| Apagamento por pessoa | ⚠️ apaga o que existe; evento/mídia **em voo** durante o apagamento pode recriar dado depois dele (correção planejada: marca de apagamento) |
+| Apagamento por pessoa | ✅ apaga o que existe **e** marca o contato: evento ou anexo já em voo (Redis, outbox, fan-out, download) é descartado, não recria o dado. Uma mensagem posterior ao pedido é entregue. Não alcança logs, backups, o estado do WhatsApp/Evolution nem a cópia que fica no Redis até ser consumida |
 | Comportamento com WhatsApp real | ⚠️ validado com um número em 2026-10; mídia/citação/"digitando"/leitura ainda sem conferência no aparelho; sem teste automatizado possível ([atualização de versões](./runbooks/PROVIDER-UPGRADE.md)) |
 | Pausa de assinatura | ⚠️ uma entrega já arrendada no instante da pausa ainda pode sair (correção pequena planejada) |
 

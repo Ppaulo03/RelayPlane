@@ -25,6 +25,8 @@ type InboundMediaRepository interface {
 	Purge(ctx context.Context, before time.Time) (int64, error)
 	// EraseContact deletes the jobs of the tenant whose message came from the contact.
 	EraseContact(ctx context.Context, tenantID, number string) (int64, error)
+	// Drop deletes one job (its contact was erased while it was in flight).
+	Drop(ctx context.Context, id string) error
 	// Counts feeds the gauges.
 	Counts(ctx context.Context, now time.Time) (InboundMediaCounts, error)
 }
