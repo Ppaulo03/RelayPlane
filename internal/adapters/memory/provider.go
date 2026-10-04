@@ -46,6 +46,8 @@ type FakeProvider struct {
 	presences     []FakePresence
 	reads         []FakeRead
 	mediaFailures map[string]int
+	// OnDownload, when set, runs when a download starts (a test holds the download here to play an event that lands in the middle of it).
+	OnDownload func()
 }
 
 // Call is one recorded provider call.

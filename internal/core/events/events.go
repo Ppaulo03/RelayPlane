@@ -62,6 +62,26 @@ type Event struct {
 	// measured by relayplane_event_delivery_lag_seconds. Events that carry the provider's own time in Timestamp
 	// (message.received) need it; for the others Timestamp is already that moment.
 	ObservedAt *time.Time `json:"observed_at,omitempty"`
+	// AcceptedAt is INTERNAL (never sent to a tenant): when RelayPlane durably accepted an inbound message. Unlike ObservedAt it is never
+	// moved (a message with an attachment is "observed" again when the download ends), so it can answer one question: was this message
+	// accepted BEFORE its sender asked to be erased? (docs/OPERATIONS.md, erasure)
+	AcceptedAt *time.Time `json:"accepted_at,omitempty"`
+}
+
+// ContactNumber is the phone number a message.received event is about (the subject of an erasure request); "" for any other event.
+func (e Event) ContactNumber() string {
+	if e.EventType != MessageReceived {
+		return ""
+	}
+	raw, err := json.Marshal(e.Payload)
+	if err != nil {
+		return ""
+	}
+	var probe struct {
+		From string `json:"from"`
+	}
+	_ = json.Unmarshal(raw, &probe)
+	return probe.From
 }
 
 // LagOrigin is the moment from which the delivery lag of an event is counted: when RelayPlane observed it.
