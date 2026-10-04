@@ -33,7 +33,9 @@ type Config struct {
 	OrphanGrace      time.Duration
 	// DeliveredRetention is how long delivered webhook records are kept (the DLQ is never purged automatically).
 	DeliveredRetention time.Duration
-	Policy             reconciliation.Policy
+	// Retention is how long personal content stays: finished messages and dead-lettered deliveries.
+	Retention app.RetentionPolicy
+	Policy    reconciliation.Policy
 }
 
 // DefaultConfig returns production defaults.
@@ -41,7 +43,7 @@ func DefaultConfig() Config {
 	return Config{
 		Interval: 10 * time.Second, InstanceInterval: 30 * time.Second, BatchSize: 100,
 		CallTimeout: 15 * time.Second, NodeOfflineAfter: time.Minute,
-		StuckQueuedAfter: 2 * time.Minute, OutboxInterval: time.Second, OrphanGrace: time.Hour, DeliveredRetention: 7 * 24 * time.Hour, Policy: reconciliation.DefaultPolicy(),
+		StuckQueuedAfter: 2 * time.Minute, OutboxInterval: time.Second, OrphanGrace: time.Hour, DeliveredRetention: 7 * 24 * time.Hour, Retention: app.DefaultRetention(), Policy: reconciliation.DefaultPolicy(),
 	}
 }
 

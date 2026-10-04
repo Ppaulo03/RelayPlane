@@ -212,3 +212,14 @@ async def test_subscription_pause_resume_and_backlog():
         await rp.subscriptions.resume("sub_1")
     assert subs[0].paused and subs[0].pending == 42 and subs[0].oldest_pending_seconds == 90
     assert seen == [("POST", "/api/v1/subscriptions/sub_1/pause"), ("GET", "/api/v1/subscriptions"), ("POST", "/api/v1/subscriptions/sub_1/resume")]
+
+
+async def test_contact_erasure_call():
+    def handler(req: httpx.Request) -> httpx.Response:
+        assert req.method == "DELETE" and req.url.path == "/api/v1/contacts/5562999999999/data"
+        return httpx.Response(200, json={"messages_anonymized": 3, "messages_cancelled": 1, "events_deleted": 5, "attachments_deleted": 1,
+                                         "erased_at": "2026-10-03T00:00:00Z"})
+
+    async with client(handler) as rp:
+        out = await rp.contacts.erase("5562999999999")
+    assert out["messages_anonymized"] == 3 and out["attachments_deleted"] == 1

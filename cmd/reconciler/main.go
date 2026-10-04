@@ -9,6 +9,7 @@ import (
 	"os/signal"
 	"syscall"
 
+	"github.com/relayplane/relayplane/internal/app"
 	"github.com/relayplane/relayplane/internal/bootstrap"
 	"github.com/relayplane/relayplane/internal/config"
 	"github.com/relayplane/relayplane/internal/reconciler"
@@ -50,6 +51,7 @@ func run() error {
 	rc := reconciler.DefaultConfig()
 	rc.Interval, rc.InstanceInterval, rc.NodeOfflineAfter = cfg.ReconcilerInterval, cfg.InstanceInterval, cfg.NodeOfflineAfter
 	rc.DeliveredRetention = cfg.WebhookDeliveredRetention
+	rc.Retention = app.RetentionPolicy{Messages: cfg.RetentionMessages, DeadDeliveries: cfg.RetentionDeadDeliveries}
 	rt.Log.Info("reconciler started", "version", version, "interval", rc.Interval.String())
 	_ = reconciler.New(rt.App, rc, rt.Log).Run(ctx)
 	return nil

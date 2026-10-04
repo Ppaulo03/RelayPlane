@@ -103,6 +103,8 @@ type Message struct {
 	AcceptedAt time.Time
 	// TraceParent is the W3C trace context of the request that created the message.
 	TraceParent string
+	// ErasedAt is when the recipient and the content were removed (retention or an erasure request); zero while they exist.
+	ErasedAt time.Time
 }
 
 // Payload is the claim-check message body carried in the command.

@@ -12,4 +12,4 @@ __all__ = [
     "CreatedInstance", "Instance", "Media", "Message", "Operation", "OperationRef", "Pairing", "SentMessage", "Subscription", "WebhookDelivery", "Limits",
     "WebhookSignatureError", "verify_request", "verify_signature", "ApiKey", "Event", "MessageMedia", "SequenceTracker",
 ]
-__version__ = "0.7.0"
+__version__ = "0.8.0"

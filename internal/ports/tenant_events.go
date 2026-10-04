@@ -64,6 +64,11 @@ type DeliveryRepository interface {
 	// Requeue moves a DEAD delivery of the tenant back to PENDING with a fresh budget.
 	Requeue(ctx context.Context, tenantID, id string, now time.Time) error
 	PurgeDelivered(ctx context.Context, before time.Time) (int64, error)
+	// PurgeDead deletes dead-lettered deliveries created before `before`: the DLQ keeps the user's text, so it needs a retention.
+	PurgeDead(ctx context.Context, before time.Time) (int64, error)
+	// EraseContact deletes every delivery of the tenant whose event is about the contact (payload.from == number), whatever
+	// its status. A subscription that had not received those events yet will see gaps in its sequence.
+	EraseContact(ctx context.Context, tenantID, number string) (int64, error)
 	// Counts feeds the gauges: deliveries per status, and the age of the oldest PENDING one.
 	Counts(ctx context.Context, now time.Time) (DeliveryCounts, error)
 }

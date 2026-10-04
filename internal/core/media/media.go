@@ -30,10 +30,12 @@ type Blob struct {
 	Size        int64
 	SHA256      string // hex
 	Filename    string
-	Status      BlobStatus
-	ExpiresAt   time.Time
-	CreatedAt   time.Time
-	DeletedAt   *time.Time
+	// Subject is the phone number an inbound attachment came from ("" for uploads), so an erasure request can find it.
+	Subject   string
+	Status    BlobStatus
+	ExpiresAt time.Time
+	CreatedAt time.Time
+	DeletedAt *time.Time
 }
 
 // Ref is the claim check carried inside a command.

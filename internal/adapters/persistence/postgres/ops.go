@@ -141,19 +141,20 @@ func (r opRepo) ListActive(ctx context.Context, t instance.OperationType, limit 
 type msgRepo struct{ s *Store }
 
 const msgCols = `id,tenant_id,instance_id,idempotency_key,node_id,assignment_epoch,partition_key,recipient,type,payload,status,
-	provider_message_id,attempt_count,error_code,error_message,created_at,updated_at,sequence_no,accepted_at,traceparent`
+	provider_message_id,attempt_count,error_code,error_message,created_at,updated_at,sequence_no,accepted_at,traceparent,erased_at`
 
 func scanMsg(row pgx.Row) (*messaging.Message, error) {
 	var m messaging.Message
 	var t, st string
 	var payload []byte
-	var accepted *time.Time
+	var accepted, erased *time.Time
 	if err := row.Scan(&m.ID, &m.TenantID, &m.InstanceID, &m.IdempotencyKey, &m.NodeID, &m.AssignmentEpoch, &m.PartitionKey,
-		&m.Recipient, &t, &payload, &st, &m.ProviderMessageID, &m.AttemptCount, &m.ErrorCode, &m.ErrorMessage, &m.CreatedAt, &m.UpdatedAt, &m.SequenceNo, &accepted, &m.TraceParent); err != nil {
+		&m.Recipient, &t, &payload, &st, &m.ProviderMessageID, &m.AttemptCount, &m.ErrorCode, &m.ErrorMessage, &m.CreatedAt, &m.UpdatedAt, &m.SequenceNo, &accepted, &m.TraceParent, &erased); err != nil {
 		return nil, notFound(err)
 	}
 	m.AcceptedAt = zeroIfNil(accepted)
 	m.Type, m.Status, m.Payload = messaging.Type(t), messaging.Status(st), json.RawMessage(payload)
+	m.ErasedAt = zeroIfNil(erased)
 	return &m, nil
 }
 
@@ -391,12 +392,12 @@ func (r msgRepo) FirstUnresolvedBefore(ctx context.Context, instanceID string, s
 
 type blobRepo struct{ s *Store }
 
-const blobCols = `id,tenant_id,object_key,content_type,size,sha256,filename,status,expires_at,created_at,deleted_at`
+const blobCols = `id,tenant_id,object_key,content_type,size,sha256,filename,subject,status,expires_at,created_at,deleted_at`
 
 func scanBlob(row pgx.Row) (*media.Blob, error) {
 	var b media.Blob
 	var st string
-	if err := row.Scan(&b.ID, &b.TenantID, &b.ObjectKey, &b.ContentType, &b.Size, &b.SHA256, &b.Filename, &st, &b.ExpiresAt, &b.CreatedAt, &b.DeletedAt); err != nil {
+	if err := row.Scan(&b.ID, &b.TenantID, &b.ObjectKey, &b.ContentType, &b.Size, &b.SHA256, &b.Filename, &b.Subject, &st, &b.ExpiresAt, &b.CreatedAt, &b.DeletedAt); err != nil {
 		return nil, notFound(err)
 	}
 	b.Status = media.BlobStatus(st)
@@ -410,9 +411,9 @@ func (r blobRepo) Create(ctx context.Context, b media.Blob) error {
 	if b.CreatedAt.IsZero() {
 		b.CreatedAt = time.Now()
 	}
-	_, err := r.s.pool.Exec(ctx, `INSERT INTO blob_metadata(id,tenant_id,object_key,content_type,size,sha256,filename,status,expires_at,created_at)
-		VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
-		b.ID, b.TenantID, b.ObjectKey, b.ContentType, b.Size, b.SHA256, b.Filename, string(b.Status), b.ExpiresAt, b.CreatedAt)
+	_, err := r.s.pool.Exec(ctx, `INSERT INTO blob_metadata(id,tenant_id,object_key,content_type,size,sha256,filename,subject,status,expires_at,created_at)
+		VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
+		b.ID, b.TenantID, b.ObjectKey, b.ContentType, b.Size, b.SHA256, b.Filename, b.Subject, string(b.Status), b.ExpiresAt, b.CreatedAt)
 	if _, code := constraint(err); code == "23505" {
 		return errs.ErrAlreadyExists
 	}

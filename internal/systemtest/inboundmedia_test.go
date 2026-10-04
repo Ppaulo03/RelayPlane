@@ -45,6 +45,37 @@ func (f *mediaFixture) receive(id string, m memory.FakeWebhookMedia) {
 	}
 }
 
+// receiveFrom plays a given contact writing: a text, or an attachment with an optional caption.
+func (f *mediaFixture) receiveFrom(from, id, text string, m *memory.FakeWebhookMedia) {
+	f.t.Helper()
+	typ := "text"
+	if m != nil {
+		typ = m.Kind
+	}
+	payload := fmt.Sprintf(`{"provider_message_id":%q,"from":%q,"type":%q,"text":%q}`, id, from, typ, text)
+	ev := memory.FakeWebhookEv{InstanceID: f.inst.ID, Type: events.MessageReceived, ProviderMessageID: id, Timestamp: time.Now().UTC(),
+		Payload: json.RawMessage(payload), Media: m}
+	if _, err := f.e.App.Inbound.Handle(bg, ProviderKey, inboundBody(f.inst.NodeID, f.inst.AssignmentEpoch, ev)); err != nil {
+		f.t.Fatal(err)
+	}
+}
+
+func attachmentOf(kind, mime, name string, content []byte) *memory.FakeWebhookMedia {
+	m := attachment(kind, mime, name, content, nil)
+	return &m
+}
+
+func mediaIDOf(t *testing.T, body []byte) string {
+	t.Helper()
+	var env struct {
+		Payload events.MessageReceivedPayload `json:"payload"`
+	}
+	if err := json.Unmarshal(body, &env); err != nil || env.Payload.Media == nil {
+		t.Fatalf("no media in %s: %v", body, err)
+	}
+	return env.Payload.Media.MediaID
+}
+
 func attachment(kind, mime, name string, content []byte, mod func(*memory.FakeMediaRef)) memory.FakeWebhookMedia {
 	ref := memory.NewFakeMediaRef(content, mime, name)
 	if mod != nil {
