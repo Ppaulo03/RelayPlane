@@ -31,6 +31,14 @@ x-relayplane-env: &relayplane-env
   EVENT_BUS_RETENTION: ${EVENT_BUS_RETENTION:-100000}
   UNKNOWN_BARRIER_TIMEOUT: ${UNKNOWN_BARRIER_TIMEOUT:-0}
   MEDIA_PENDING_TTL: ${MEDIA_PENDING_TTL:-30m}
+  INBOUND_MEDIA_MAX_BYTES: ${INBOUND_MEDIA_MAX_BYTES:-26214400}
+  INBOUND_MEDIA_TTL: ${INBOUND_MEDIA_TTL:-168h}
+  # each tenant's request budget PER GATEWAY REPLICA (0 turns it off); retention of personal content (0 keeps it forever)
+  API_RATE_PER_SECOND: ${API_RATE_PER_SECOND:-50}
+  API_RATE_BURST: ${API_RATE_BURST:-100}
+  RETENTION_MESSAGES: ${RETENTION_MESSAGES:-2160h}
+  RETENTION_DEAD_DELIVERIES: ${RETENTION_DEAD_DELIVERIES:-720h}
+  WEBHOOK_MAX_IN_FLIGHT_PER_SUBSCRIPTION: ${WEBHOOK_MAX_IN_FLIGHT_PER_SUBSCRIPTION:-8}
   PROVIDER_NODES: >-
     [{"id":"node-01","provider":"evolution-v2","endpoint":"http://evolution-node-01:8080","api_key":"${EVOLUTION_NODE_01_API_KEY:?set EVOLUTION_NODE_01_API_KEY}","capacity":${NODE_CAPACITY:-50}},
      {"id":"node-02","provider":"evolution-v2","endpoint":"http://evolution-node-02:8080","api_key":"${EVOLUTION_NODE_02_API_KEY:?set EVOLUTION_NODE_02_API_KEY}","capacity":${NODE_CAPACITY:-50}}]

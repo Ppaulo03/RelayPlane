@@ -29,6 +29,8 @@ RATE_MIN_INTERVAL=0s
 RATE_MAX_PER_MINUTE=0
 RATE_MAX_CONCURRENT=0
 RATE_BURST=0
+# the load generator is one very busy tenant: measure the platform, not the per-tenant request limit
+API_RATE_PER_SECOND=0
 RECONCILER_INTERVAL=2s
 UNKNOWN_BARRIER_TIMEOUT=$([ "${CHAOS_KILL:-0}" = 1 ] && echo 5s || echo 0)
 STUB_SEND_LATENCY=${STUB_SEND_LATENCY:-50ms}

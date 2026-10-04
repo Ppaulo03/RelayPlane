@@ -18,7 +18,16 @@ import (
 // An erasure request leaves nothing of the person behind: not in the messages sent to them, not in the events that
 // mention them (delivered, waiting or dead-lettered), not in the files they sent. Everybody else is untouched.
 func TestErasure_NothingOfTheContactIsLeft(t *testing.T) {
-	f := newMediaFixture(t)
+	const deadURL = "http://dead.local/hook"
+	f := newMediaFixtureWith(t, func(e *Env) {
+		e.Receiver.Behave = func(_ int, r Received) (int, error) {
+			if r.URL == deadURL {
+				return 500, nil
+			}
+			return 200, nil
+		}
+		e.Dispatcher.Retry = subscription.RetryPolicy{Schedule: []time.Duration{time.Millisecond}} // dead after the 2nd attempt
+	})
 	e := f.e
 	e.StartWorkers(2)
 	e.StartProjector()
@@ -39,15 +48,7 @@ func TestErasure_NothingOfTheContactIsLeft(t *testing.T) {
 	}
 
 	// the contact wrote back: text, a voice note (stored as an attachment) and something that will end in the DLQ
-	deadURL := "http://dead.local/hook"
 	deadSub, _ := subscribe(t, e, e.Tenant, deadURL, string(events.MessageReceived))
-	e.Receiver.Behave = func(_ int, r Received) (int, error) {
-		if r.URL == deadURL {
-			return 500, nil
-		}
-		return 200, nil
-	}
-	e.Dispatcher.Retry = subscription.RetryPolicy{Schedule: []time.Duration{time.Millisecond}} // dead after the 2nd attempt
 	f.receiveFrom(target, "WA-T1", "olá, aqui é a Ana", nil)
 	f.receiveFrom(target, "WA-T2", "", attachmentOf("audio", "audio/ogg", "", []byte("OggS minha voz")))
 	f.receiveFrom("5562900000000", "WA-OTHER", "outra pessoa", nil)
@@ -139,13 +140,13 @@ func TestErasure_NothingOfTheContactIsLeft(t *testing.T) {
 // Retention does on a clock what an erasure does on request.
 func TestRetention_FinishedMessagesAndTheDLQDoNotStayForever(t *testing.T) {
 	e := NewEnv(t)
+	e.Receiver.Behave = func(int, Received) (int, error) { return 500, nil }
+	e.Dispatcher.Retry = subscription.RetryPolicy{Schedule: []time.Duration{time.Millisecond}}
 	inst := e.CreateInstance(e.Tenant, "a", true)
 	e.StartWorkers(1)
 	e.StartProjector()
 	deadURL := "http://dead.local/hook"
 	sub, _ := subscribe(t, e, e.Tenant, deadURL, string(events.MessageReceived))
-	e.Receiver.Behave = func(int, Received) (int, error) { return 500, nil }
-	e.Dispatcher.Retry = subscription.RetryPolicy{Schedule: []time.Duration{time.Millisecond}}
 	e.StartOutbox()
 	e.StartWebhooks()
 

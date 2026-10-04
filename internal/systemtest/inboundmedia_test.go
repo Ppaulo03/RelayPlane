@@ -25,8 +25,15 @@ type mediaFixture struct {
 	inst *instance.Instance
 }
 
-func newMediaFixture(t *testing.T) *mediaFixture {
+func newMediaFixture(t *testing.T) *mediaFixture { return newMediaFixtureWith(t, nil) }
+
+// newMediaFixtureWith lets a test configure the environment BEFORE the background loops start (changing the dispatcher or
+// the receiver afterwards would race with them).
+func newMediaFixtureWith(t *testing.T, configure func(*Env)) *mediaFixture {
 	e := NewEnv(t)
+	if configure != nil {
+		configure(e)
+	}
 	inst := e.CreateInstance(e.Tenant, "a", true)
 	subscribe(t, e, e.Tenant, hookURL, string(events.MessageReceived))
 	e.StartOutbox()

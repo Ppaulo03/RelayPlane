@@ -21,6 +21,16 @@ data:
   DEFAULT_PROVIDER: evolution-v2
   WEBHOOK_BASE_URL: http://gateway.relayplane.svc:8080
   IDEMPOTENCY_TTL: 24h
+  # attachments of inbound messages (25 MiB; a download costs ~3x the file in worker memory) and their retention
+  INBOUND_MEDIA_MAX_BYTES: "26214400"
+  INBOUND_MEDIA_TTL: 168h
+  # each tenant's request budget PER GATEWAY REPLICA (0 turns it off)
+  API_RATE_PER_SECOND: "50"
+  API_RATE_BURST: "100"
+  # personal content: finished messages lose recipient and text after 90 days, the webhook DLQ is deleted after 30 (0 keeps forever)
+  RETENTION_MESSAGES: 2160h
+  RETENTION_DEAD_DELIVERIES: 720h
+  WEBHOOK_MAX_IN_FLIGHT_PER_SUBSCRIPTION: "8"
   # tenant webhooks: https + public destinations only in production (APP_ENV=production)
   WEBHOOKS_MAX_PER_TENANT: "10"
   # id/endpoint/capacity per node; api_key values come from the Secret (PROVIDER_NODES is assembled by your secret tooling)
