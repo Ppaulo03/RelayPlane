@@ -18,6 +18,9 @@ type EventOutboxRepository interface {
 	MarkPublished(ctx context.Context, eventIDs []string, at time.Time) error
 	// Purge deletes events published before `before`.
 	Purge(ctx context.Context, before time.Time) (int64, error)
+	// EraseContact deletes the events of the tenant that are about the contact (payload.from == number), published or not:
+	// an accepted inbound event waits here until it is published, and keeps the text and the number while it does.
+	EraseContact(ctx context.Context, tenantID, number string) (int64, error)
 }
 
 // SubscriptionRepository persists tenant webhook subscriptions. Every method that takes a tenant id is scoped by

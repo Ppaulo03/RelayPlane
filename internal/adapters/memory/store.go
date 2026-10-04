@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/relayplane/relayplane/internal/core/errs"
+	"github.com/relayplane/relayplane/internal/core/events"
 	"github.com/relayplane/relayplane/internal/core/instance"
 	"github.com/relayplane/relayplane/internal/core/media"
 	"github.com/relayplane/relayplane/internal/core/messaging"
@@ -52,7 +53,6 @@ type Store struct {
 
 type dedupRow struct {
 	instanceID string
-	committed  bool
 	claimedAt  time.Time
 	expiresAt  time.Time
 }
@@ -1022,36 +1022,21 @@ func (r idemRepo) DeleteExpired(_ context.Context, now time.Time) (int64, error)
 
 type dedupRepo struct{ s *Store }
 
-func (r dedupRepo) Begin(_ context.Context, key, instanceID string, ttl, inflight time.Duration) (ports.DedupOutcome, error) {
+func (r dedupRepo) Accept(_ context.Context, key string, ttl time.Duration, ev events.Event, job *media.InboundJob) (ports.DedupOutcome, error) {
 	r.s.mu.Lock()
 	defer r.s.mu.Unlock()
 	now := r.s.Now()
 	if row, ok := r.s.dedup[key]; ok && row.expiresAt.After(now) {
-		if row.committed || now.Sub(row.claimedAt) < inflight {
-			return ports.DedupDuplicate, nil
-		}
+		return ports.DedupDuplicate, nil
 	}
-	r.s.dedup[key] = dedupRow{instanceID: instanceID, claimedAt: now, expiresAt: now.Add(ttl)}
+	// the key and the work are written under one lock: the in-memory analogue of the SQL transaction
+	r.s.dedup[key] = dedupRow{instanceID: ev.InstanceID, claimedAt: now, expiresAt: now.Add(ttl)}
+	if job != nil {
+		r.s.enqueueInbound(*job)
+	} else {
+		r.s.queueEvent(ev)
+	}
 	return ports.DedupProceed, nil
-}
-
-func (r dedupRepo) Commit(_ context.Context, key string) error {
-	r.s.mu.Lock()
-	defer r.s.mu.Unlock()
-	if row, ok := r.s.dedup[key]; ok {
-		row.committed = true
-		r.s.dedup[key] = row
-	}
-	return nil
-}
-
-func (r dedupRepo) Abort(_ context.Context, key string) error {
-	r.s.mu.Lock()
-	defer r.s.mu.Unlock()
-	if row, ok := r.s.dedup[key]; ok && !row.committed {
-		delete(r.s.dedup, key)
-	}
-	return nil
 }
 
 func (r dedupRepo) DeleteExpired(_ context.Context, now time.Time) (int64, error) {

@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/relayplane/relayplane/internal/core/errs"
+	"github.com/relayplane/relayplane/internal/core/events"
 	"github.com/relayplane/relayplane/internal/core/instance"
 	"github.com/relayplane/relayplane/internal/core/media"
 	"github.com/relayplane/relayplane/internal/core/messaging"
@@ -729,47 +730,64 @@ func idempotencyContract(t *testing.T, f RepoFactory) {
 
 func dedupContract(t *testing.T, f RepoFactory) {
 	fx, ctx := newFixture(t, f), context.Background()
-	ttl, inflight := time.Hour, 200*time.Millisecond
-	o, err := fx.r.Dedup.Begin(ctx, "k1", "inst_1", ttl, inflight)
+	fx.tenant(t, "t1")
+	fx.node(t, "node-01", 10)
+	fx.instance(t, "inst_1", "t1")
+	ttl := time.Hour
+	ev := func(id string) events.Event {
+		return events.Event{EventID: id, EventType: events.MessageReceived, Provider: "p", TenantID: "t1", InstanceID: "inst_1",
+			Timestamp: time.Now().UTC(), Payload: map[string]any{"text": "oi"}}
+	}
+	pending := func() []string {
+		evs, err := fx.r.Events.ListUnpublished(ctx, 100)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var ids []string
+		for _, e := range evs {
+			ids = append(ids, e.EventID)
+		}
+		return ids
+	}
+
+	// accepting records the key AND the event: they exist together
+	o, err := fx.r.Dedup.Accept(ctx, "k1", ttl, ev("evt_1"), nil)
 	if err != nil || o != ports.DedupProceed {
 		t.Fatalf("first: %v %v", o, err)
 	}
-	if o, _ := fx.r.Dedup.Begin(ctx, "k1", "inst_1", ttl, inflight); o != ports.DedupDuplicate {
-		t.Error("in-flight duplicate must be suppressed")
+	if got := pending(); len(got) != 1 || got[0] != "evt_1" {
+		t.Fatalf("an accepted event must be in the outbox: %v", got)
 	}
-	if err := fx.r.Dedup.Abort(ctx, "k1"); err != nil {
-		t.Fatal(err)
+	// a duplicate writes nothing
+	if o, err := fx.r.Dedup.Accept(ctx, "k1", ttl, ev("evt_1b"), nil); err != nil || o != ports.DedupDuplicate {
+		t.Fatalf("duplicate: %v %v", o, err)
 	}
-	if o, _ := fx.r.Dedup.Begin(ctx, "k1", "inst_1", ttl, inflight); o != ports.DedupProceed {
-		t.Error("aborted claim must be retryable")
+	if got := pending(); len(got) != 1 {
+		t.Errorf("a duplicate must not queue another event: %v", got)
 	}
-	if err := fx.r.Dedup.Commit(ctx, "k1"); err != nil {
-		t.Fatal(err)
+	// an attachment: the JOB carries the event; nothing goes to the outbox until it is resolved
+	job := inboundJob("job_1", "evt_media", time.Now().UTC())
+	if o, err := fx.r.Dedup.Accept(ctx, "k2", ttl, ev("evt_media"), &job); err != nil || o != ports.DedupProceed {
+		t.Fatalf("media: %v %v", o, err)
 	}
-	time.Sleep(inflight + 50*time.Millisecond)
-	if o, _ := fx.r.Dedup.Begin(ctx, "k1", "inst_1", ttl, inflight); o != ports.DedupDuplicate {
-		t.Error("committed keys stay duplicates forever (until ttl)")
+	if got := pending(); len(got) != 1 {
+		t.Errorf("a message with an attachment is published by its job, not by the outbox: %v", got)
 	}
-	if err := fx.r.Dedup.Abort(ctx, "k1"); err != nil {
-		t.Fatal(err)
+	claimed, err := fx.r.InboundMedia.ClaimDue(ctx, time.Now().Add(time.Second), time.Minute, 10)
+	if err != nil || len(claimed) != 1 || claimed[0].EventID != "evt_media" {
+		t.Fatalf("the attachment job must be queued: %v %v", claimed, err)
 	}
-	if o, _ := fx.r.Dedup.Begin(ctx, "k1", "inst_1", ttl, inflight); o != ports.DedupDuplicate {
-		t.Error("Abort must not undo a commit")
+	if o, _ := fx.r.Dedup.Accept(ctx, "k2", ttl, ev("evt_media"), &job); o != ports.DedupDuplicate {
+		t.Error("an attachment is deduplicated too")
 	}
-	// crashed publisher: stale in-flight claim is retaken
-	_, _ = fx.r.Dedup.Begin(ctx, "k2", "inst_1", ttl, inflight)
-	time.Sleep(inflight + 50*time.Millisecond)
-	if o, _ := fx.r.Dedup.Begin(ctx, "k2", "inst_1", ttl, inflight); o != ports.DedupProceed {
-		t.Error("expired in-flight claim must be retaken")
-	}
-	// concurrency: a single winner
+	// concurrency: a single winner, and exactly one event
 	var wins atomic.Int32
 	var wg sync.WaitGroup
 	for k := 0; k < 12; k++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			if o, err := fx.r.Dedup.Begin(ctx, "k3", "inst_1", ttl, time.Minute); err == nil && o == ports.DedupProceed {
+			if o, err := fx.r.Dedup.Accept(ctx, "k3", ttl, ev("evt_3"), nil); err == nil && o == ports.DedupProceed {
 				wins.Add(1)
 			}
 		}()
@@ -778,7 +796,17 @@ func dedupContract(t *testing.T, f RepoFactory) {
 	if wins.Load() != 1 {
 		t.Errorf("INV-05: exactly one concurrent duplicate may proceed, got %d", wins.Load())
 	}
-	if n, err := fx.r.Dedup.DeleteExpired(ctx, time.Now().Add(2*time.Hour)); err != nil || n < 1 {
+	n := 0
+	for _, id := range pending() {
+		if id == "evt_3" {
+			n++
+		}
+	}
+	if n != 1 {
+		t.Errorf("one event queued for the winner, got %d", n)
+	}
+	// expiry: after the ttl the key is forgotten
+	if n, err := fx.r.Dedup.DeleteExpired(ctx, time.Now().Add(2*time.Hour)); err != nil || n < 3 {
 		t.Errorf("delete expired: %d %v", n, err)
 	}
 }

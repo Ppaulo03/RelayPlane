@@ -260,6 +260,7 @@ func TestINV05_DuplicateEventsAreDeduplicated(t *testing.T) {
 	if err != nil || r2.Published != 0 || r2.Duplicates != 1 {
 		t.Fatalf("duplicate: %+v %v", r2, err)
 	}
+	e.Flush()
 	if n := len(e.Bus.Published()) - base; n != 1 {
 		t.Fatalf("published %d events", n)
 	}
@@ -271,6 +272,7 @@ func TestINV05_DuplicateEventsAreDeduplicated(t *testing.T) {
 			t.Fatalf("%s: %+v %v", st, r, err)
 		}
 	}
+	e.Flush()
 	if n := len(e.Bus.Published()) - base; n != 4 {
 		t.Fatalf("want 4 events, got %d", n)
 	}
@@ -294,6 +296,7 @@ func TestINV05_DuplicateEventsAreDeduplicated(t *testing.T) {
 	if published.Load() != 1 {
 		t.Fatalf("concurrent duplicates published %d times", published.Load())
 	}
+	e.Flush()
 	// event ids are deterministic so downstream can also dedupe
 	var ids = map[string]int{}
 	for _, ev := range e.Bus.Published() {

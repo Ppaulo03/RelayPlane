@@ -4,6 +4,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/relayplane/relayplane/internal/core/events"
 	"github.com/relayplane/relayplane/internal/core/instance"
 	"github.com/relayplane/relayplane/internal/core/media"
 	"github.com/relayplane/relayplane/internal/core/messaging"
@@ -188,21 +189,22 @@ type MessageRepository interface {
 	FirstUnresolvedBefore(ctx context.Context, instanceID string, seq int64, unknownTimeout time.Duration) (*messaging.Message, error)
 }
 
-// DedupOutcome is the result of claiming an inbound event key.
+// DedupOutcome is the result of accepting an inbound event.
 type DedupOutcome int
 
 const (
-	DedupProceed   DedupOutcome = iota // first time (or in-flight claim expired): publish
-	DedupDuplicate                     // already published (or being published)
+	DedupProceed   DedupOutcome = iota // first time: the event was durably accepted
+	DedupDuplicate                     // already accepted: nothing was written
 )
 
-// Deduplicator guarantees duplicate inbound events produce no duplicate
-// effects. It is two-phase so a failed publish can be retried by the provider:
-// Begin -> publish -> Commit, or Abort on failure.
+// Deduplicator is the durable front door of inbound events. Accept is ATOMIC: the deduplication key and the work that will
+// deliver the event (the event in the transactional outbox, or the attachment job that publishes it once resolved) are written
+// in ONE transaction. Either both exist or neither does, so once Accept returns the provider's request may be answered 200:
+// the event can no longer be lost between "I remember having seen it" and "it was queued" (a crash there used to make the
+// provider's retry look like a duplicate of an event that was never queued).
 type Deduplicator interface {
-	Begin(ctx context.Context, key, instanceID string, ttl, inflightTimeout time.Duration) (DedupOutcome, error)
-	Commit(ctx context.Context, key string) error
-	Abort(ctx context.Context, key string) error
+	// Accept records key and, when it is new, the event (job == nil) or the attachment job (job != nil, which carries the event).
+	Accept(ctx context.Context, key string, ttl time.Duration, ev events.Event, job *media.InboundJob) (DedupOutcome, error)
 	DeleteExpired(ctx context.Context, now time.Time) (int64, error)
 }
 

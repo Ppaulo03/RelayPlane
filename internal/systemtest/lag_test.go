@@ -176,6 +176,7 @@ func TestEventDeliveryLag_ADeliveryAWorkerDiedHoldingIsToldApart(t *testing.T) {
 	inst := e.CreateInstance(e.Tenant, "a", true)
 	subID, _ := subscribe(t, e, e.Tenant, hookURL, string(events.MessageReceived))
 	// only the fan-out runs: the delivery gets created, nobody sends it yet
+	e.StartOutbox()
 	e.wg.Add(1)
 	go func() { defer e.wg.Done(); _ = e.Bus.Subscribe(e.ctx, "webhook-fanout", e.FanOut.Handle) }()
 	if _, err := e.App.Inbound.Handle(bg, ProviderKey, inboundBody(inst.NodeID, inst.AssignmentEpoch, recvEv(inst.ID, "WA-DEAD"))); err != nil {

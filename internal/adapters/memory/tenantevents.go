@@ -29,7 +29,11 @@ func (s *Store) emitOutbound(m *messaging.Message) {
 	if i, ok := s.instances[m.InstanceID]; ok {
 		provider = i.Provider
 	}
-	ev := messaging.OutboundStatusEvent(*m, provider)
+	s.queueEvent(messaging.OutboundStatusEvent(*m, provider))
+}
+
+// queueEvent adds an event to the outbox unless it is already there. The caller holds s.mu.
+func (s *Store) queueEvent(ev events.Event) {
 	for _, e := range s.eventOutbox {
 		if e.ev.EventID == ev.EventID {
 			return
@@ -79,6 +83,22 @@ func (r eventsRepo) Purge(_ context.Context, before time.Time) (int64, error) {
 	var n int64
 	for _, e := range r.s.eventOutbox {
 		if !e.published.IsZero() && e.published.Before(before) {
+			n++
+			continue
+		}
+		keep = append(keep, e)
+	}
+	r.s.eventOutbox = keep
+	return n, nil
+}
+
+func (r eventsRepo) EraseContact(_ context.Context, tenantID, number string) (int64, error) {
+	r.s.mu.Lock()
+	defer r.s.mu.Unlock()
+	var keep []*outboxEvent
+	var n int64
+	for _, e := range r.s.eventOutbox {
+		if e.ev.TenantID == tenantID && payloadFrom(e.ev.Payload) == number {
 			n++
 			continue
 		}
