@@ -4,6 +4,8 @@ package ports
 
 import (
 	"context"
+	"encoding/json"
+	"io"
 	"net/http"
 	"net/url"
 	"time"
@@ -83,6 +85,22 @@ type MessagingProvider interface {
 	Disconnect(ctx context.Context, assignment ownership.Assignment) error
 	// ProbeNode checks a provider node's own health (not any instance's).
 	ProbeNode(ctx context.Context, nodeID string) (*NodeProbe, error)
+}
+
+// DownloadedMedia is an attachment fetched from the provider. Body is bounded by the caller's limit.
+type DownloadedMedia struct {
+	Body        io.ReadCloser
+	Size        int64
+	ContentType string
+	Filename    string
+}
+
+// MediaDownloader is implemented by providers that can hand over the bytes of an inbound attachment. ref is the opaque
+// reference the same provider's normalizer produced (events.InboundMedia.Ref). Errors: ErrPayloadTooLarge when the content
+// exceeds maxBytes, ErrNotFound when the provider no longer has it (WhatsApp keeps media for a limited time),
+// ErrProviderUnavailable for anything worth retrying.
+type MediaDownloader interface {
+	DownloadMedia(ctx context.Context, assignment ownership.Assignment, ref json.RawMessage, maxBytes int64) (*DownloadedMedia, error)
 }
 
 // InboundRequest is a raw webhook request handed to a provider's adapter.

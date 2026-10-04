@@ -109,6 +109,37 @@ type MessageReceivedPayload struct {
 	// SenderLID is the opaque WhatsApp LID of the sender when the provider addressed them that way. From carries the
 	// phone number whenever the provider reported it.
 	SenderLID string `json:"sender_lid,omitempty"`
+	// Media is set when the message carries an attachment (image, audio, video, document, sticker).
+	Media *MessageMedia `json:"media,omitempty"`
+}
+
+// Media outcomes reported to the tenant in message.received.
+const (
+	MediaReady    = "READY"    // downloaded and stored: GET /api/v1/media/{media_id}/content
+	MediaRejected = "REJECTED" // not downloaded on purpose (reason: too_large, type_not_allowed, unsupported)
+	MediaFailed   = "FAILED"   // the provider could not deliver the bytes (reason: expired, download_failed)
+)
+
+// MessageMedia describes the attachment of an inbound message. The adapter fills what the sender's client declared
+// (kind, mime type, size, filename, seconds); the control plane adds media_id, status and reason, and the sizes are
+// replaced by the real ones once the bytes are stored.
+type MessageMedia struct {
+	MediaID  string `json:"media_id,omitempty"`
+	Status   string `json:"status,omitempty"`
+	Reason   string `json:"reason,omitempty"`
+	Kind     string `json:"kind"`
+	MimeType string `json:"mime_type,omitempty"`
+	Size     int64  `json:"size,omitempty"`
+	Filename string `json:"filename,omitempty"`
+	Seconds  int    `json:"seconds,omitempty"`
+}
+
+// InboundMedia is what a provider's normalizer reports about an attachment: the declared description and an opaque,
+// provider-specific reference that only the same provider's DownloadMedia understands (it can hold decryption keys, so
+// it never leaves the control plane).
+type InboundMedia struct {
+	Media MessageMedia
+	Ref   json.RawMessage
 }
 
 // MessageDeletedPayload is the payload of message.deleted. ProviderMessageID is the id of the revoked message, as it was
@@ -158,6 +189,9 @@ type Inbound struct {
 	State             string // sub-state: sent/delivered/read, connection state, ...
 	Timestamp         time.Time
 	Payload           any
+	// Media is set for a message.received whose message has an attachment; the payload then carries the same
+	// description (MessageMedia) and the control plane resolves the bytes before the event is delivered.
+	Media *InboundMedia
 }
 
 // DedupeKey is the canonical dedupe key: instance + event type + provider
