@@ -244,6 +244,9 @@ func (m *MediaIngestor) finish(ctx context.Context, j *media.InboundJob, status,
 		pl.Media.Size, pl.Media.MimeType, pl.Media.Filename = b.Size, baseType(b.ContentType), b.Filename
 	}
 	j.Event.Payload = pl
+	// the delivery lag of a message with an attachment starts when it is ready, not when the download began
+	observed := m.now().UTC()
+	j.Event.ObservedAt = &observed
 	if err := m.Repos.InboundMedia.Resolve(ctx, j.ID, j.Event); err != nil {
 		return err
 	}

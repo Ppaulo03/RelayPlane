@@ -93,10 +93,11 @@ func (s *InboundService) Handle(ctx context.Context, providerKey string, req por
 		if ts.IsZero() {
 			ts = s.d.now()
 		}
+		observed := s.d.now().UTC()
 		ev := events.Event{EventID: events.EventIDFor(key), EventType: in.Type, Provider: inst.Provider,
 			TenantID: inst.TenantID, InstanceID: inst.ID, Timestamp: ts.UTC(), Payload: in.Payload,
 			// the claim was validated against the catalog just above: remember WHICH owner/epoch spoke
-			SourceAssignment: &events.SourceAssignment{NodeID: inst.NodeID, Epoch: inst.AssignmentEpoch}}
+			SourceAssignment: &events.SourceAssignment{NodeID: inst.NodeID, Epoch: inst.AssignmentEpoch}, ObservedAt: &observed}
 		// an attachment is resolved (downloaded and stored, or rejected) BEFORE the event is delivered: a message with
 		// media is queued and the ingestor publishes it, so the tenant never sees a half-resolved media
 		if job := s.admitMedia(inst, &ev, in); job != nil {

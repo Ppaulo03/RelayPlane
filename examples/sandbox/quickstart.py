@@ -10,7 +10,8 @@ What it does, against the REAL gateway/worker/reconciler and a provider simulato
   4. plays the user ANSWERING BY QUOTING that message and checks the signed ``message.received`` webhook carries
      ``reply_to_provider_message_id`` equal to the id of the message we sent: the evidence a confirmation relies on;
   5. plays the user sending a VOICE NOTE: RelayPlane downloads it from the node, stores it, and only then delivers the
-     ``message.received`` webhook with ``media.status == "READY"``; the script downloads the audio and checks every byte.
+     ``message.received`` webhook with ``media.status == "READY"``; the script downloads the audio and checks every byte;
+  6. answers like a person: marks the voice note as read, shows "typing…" and replies QUOTING it.
 """
 from __future__ import annotations
 
@@ -25,7 +26,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import httpx
 
-from relayplane import Event, RelayPlaneClient, WebhookSignatureError, verify_request
+from relayplane import Event, RelayPlaneClient, ReplyTo, WebhookSignatureError, verify_request
 
 GATEWAY = os.environ.get("GATEWAY", "http://127.0.0.1:18080")
 ADMIN_KEY = os.environ["ADMIN_API_KEY"]
@@ -132,6 +133,23 @@ async def main() -> None:
         if got != voice:
             raise SystemExit("the downloaded voice note is not what the user sent")
         print(f"6. voice note {res['id']}: media {media.media_id} READY ({media.size} bytes, {media.mime_type}); downloaded and verified")
+
+        # the agent answers like a person: marks the voice note as read, shows "typing…", then replies QUOTING it
+        voice_id = audio["payload"]["provider_message_id"]
+        sender = audio["payload"]["from"]
+        await rp.messages.mark_read(inst.id, sender, [voice_id])
+        await rp.instances.send_presence(inst.id, sender, "composing", duration_ms=1500)
+        reply = await rp.messages.send_text(inst.id, sender, "Recebi o seu áudio, já te respondo.",
+                                            reply_to=ReplyTo.to_user_message(voice_id, "(nota de voz)"))
+        await rp.messages.wait(reply.message_id, timeout=30)
+        sent = control(node_url, node_key, "GET", f"/_sim/instances/{inst.id}/sent")["sent"][-1]
+        if sent["quoted_id"] != voice_id or sent.get("quote_dropped"):
+            raise SystemExit(f"the reply must quote the voice note, node saw {sent}")
+        wait_for("typing indicator", lambda: control(node_url, node_key, "GET", f"/_sim/instances/{inst.id}/presences")["presences"])
+        reads = control(node_url, node_key, "GET", f"/_sim/instances/{inst.id}/reads")["reads"]
+        if [r["id"] for r in reads] != [voice_id]:
+            raise SystemExit(f"the voice note must be marked as read: {reads}")
+        print(f"7. marked the voice note as read, showed typing, replied quoting it (node saw quoted_id={sent['quoted_id']})")
 
     if bad:
         raise SystemExit(f"{len(bad)} webhook(s) failed signature verification: {bad[:2]}")

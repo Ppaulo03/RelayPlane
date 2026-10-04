@@ -27,6 +27,7 @@ var (
 	webhookListen = flag.String("webhook-listen", "", "address to listen on for the tenant webhook sink, e.g. 0.0.0.0:18090 (enables the webhook check)")
 	webhookURL    = flag.String("webhook-url", "", "URL the gateway/worker containers use to reach the sink, e.g. http://host.docker.internal:18090/hook")
 	webhookFail   = flag.Float64("webhook-fail-rate", 0.1, "fraction of webhook requests the sink answers with 500 (exercises retries)")
+	maxLagP95     = flag.Duration("max-event-lag-p95", 0, "fail when the p95 delivery lag of outbound status events (first attempts) is above this (0: only report it)")
 	timeout       = flag.Duration("timeout", 5*time.Minute, "how long to wait for the delivery to finish")
 )
 
@@ -277,6 +278,13 @@ func main() {
 			fmt.Println("no status event for message", id)
 		}
 		bad = bad || len(miss) > 0 || sink.badSignatures() > 0
+		if n, p50, p95, p99 := sink.lagReport(); n > 0 {
+			fmt.Printf("event delivery lag (%d first-attempt status events): p50=%v p95=%v p99=%v\n", n, p50.Round(time.Millisecond), p95.Round(time.Millisecond), p99.Round(time.Millisecond))
+			if *maxLagP95 > 0 && p95 > *maxLagP95 {
+				fmt.Printf("FAIL: p95 event delivery lag %v is above the limit %v\n", p95.Round(time.Millisecond), *maxLagP95)
+				bad = true
+			}
+		}
 	}
 	st, serr := readStubs(*stubs)
 	if serr != nil {
