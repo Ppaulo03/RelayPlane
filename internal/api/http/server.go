@@ -136,6 +136,7 @@ func (s *Server) Handler() nethttp.Handler {
 	mux.HandleFunc("POST /api/v1/nodes/{id}/resume", admin(s.resumeNode))
 	mux.HandleFunc("POST /api/v1/tenants", admin(s.createTenant))
 	mux.HandleFunc("POST /api/v1/tenants/{id}/api-keys", admin(s.createTenantAPIKey))
+	mux.HandleFunc("DELETE /api/v1/contacts/{number}/data", tenant(s.eraseContact))
 	mux.HandleFunc("POST /api/v1/api-keys", tenant(s.createAPIKey))
 	mux.HandleFunc("GET /api/v1/api-keys", tenant(s.listAPIKeys))
 	mux.HandleFunc("DELETE /api/v1/api-keys/{id}", tenant(s.revokeAPIKey))

@@ -124,6 +124,12 @@ type MessagePatch struct {
 }
 
 // MessageRepository persists outbound messages.
+// ErasedMessages reports an erasure of the messages to one recipient.
+type ErasedMessages struct {
+	Anonymized int // messages whose recipient and content were removed
+	Cancelled  int // of those, messages that had not been sent and will not be
+}
+
 type MessageRepository interface {
 	// Create stores a message and allocates its per-instance SequenceNo (gapless,
 	// ordered by commit) in the same transaction.
@@ -139,6 +145,14 @@ type MessageRepository interface {
 	// ApplyProviderStatus applies a delivery receipt monotonically
 	// (ACCEPTED < DELIVERED < READ; regressions are ignored).
 	ApplyProviderStatus(ctx context.Context, instanceID, providerMessageID string, to messaging.Status) (applied bool, err error)
+
+	// EraseRecipient anonymizes every message the tenant sent to the number: recipient, content and error text are removed
+	// (the ledger row stays). A message not yet sent (QUEUED) is cancelled (FAILED / ERASED). The copy of a command of a
+	// message that is in the provider's hands (DISPATCHING) disappears with its outbox entry once it is resolved.
+	EraseRecipient(ctx context.Context, tenantID, number string, at time.Time) (ErasedMessages, error)
+	// ScrubTerminalBefore anonymizes (retention) up to limit finished messages created before `before` that still hold
+	// a recipient and content. It returns how many it did.
+	ScrubTerminalBefore(ctx context.Context, before, at time.Time, limit int) (int64, error)
 
 	// ListOutbox returns the undispatched outbox entries of one instance in sequence order.
 	ListOutbox(ctx context.Context, instanceID string, limit int) ([]messaging.OutboxEntry, error)
@@ -195,4 +209,6 @@ type BlobMetadataRepository interface {
 	MarkDeleted(ctx context.Context, id string, at time.Time) error
 	// ListExpired returns non-deleted blobs whose expires_at is before `now`.
 	ListExpired(ctx context.Context, now time.Time, limit int) ([]media.Blob, error)
+	// ListBySubject returns the live blobs of a tenant that came from the phone number (inbound attachments).
+	ListBySubject(ctx context.Context, tenantID, subject string) ([]media.Blob, error)
 }

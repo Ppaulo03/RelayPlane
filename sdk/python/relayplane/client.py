@@ -201,6 +201,20 @@ class MediaAPI:
         await self._h.request("DELETE", f"/api/v1/media/{media_id}")
 
 
+class ContactsAPI:
+    """Data about the people who talk to you."""
+
+    def __init__(self, http: _Http):
+        self._h = http
+
+    async def erase(self, number: str) -> dict[str, Any]:
+        """Erase what RelayPlane keeps about one person (LGPD/GDPR): the recipient and text of the messages you sent them,
+        the events that mention them (delivered, waiting or dead-lettered) and the files they sent. Idempotent. Returns counts,
+        never the number. Subscriptions that had not received some of those events yet will see gaps in ``sequence``."""
+        out, _ = await self._h.request("DELETE", f"/api/v1/contacts/{number}/data")
+        return out
+
+
 class ApiKeysAPI:
     """Your own API keys. Rotating without downtime: ``create`` a new key, deploy it, then ``revoke`` the old one
     (both authenticate in between). The last usable key cannot be revoked."""
@@ -304,6 +318,7 @@ class RelayPlaneClient:
         self.subscriptions = SubscriptionsAPI(self._http)
         self.limits = LimitsAPI(self._http)
         self.api_keys = ApiKeysAPI(self._http)
+        self.contacts = ContactsAPI(self._http)
 
     async def __aenter__(self) -> "RelayPlaneClient":
         return self

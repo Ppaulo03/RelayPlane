@@ -35,6 +35,13 @@ func (r *Reconciler) Maintenance(ctx context.Context) {
 	if _, err := r.App.EventOutbox.Purge(ctx, 24*time.Hour); err != nil {
 		r.Log.WarnContext(ctx, "event outbox purge failed", "error", err)
 	}
+	if msgs, dead, err := r.App.Retention.Apply(ctx, r.Cfg.Retention, r.Cfg.BatchSize); err != nil {
+		r.Log.WarnContext(ctx, "retention pass failed", "error", err)
+	} else if msgs+dead > 0 {
+		r.Log.InfoContext(ctx, "retention applied", "messages_scrubbed", msgs, "dead_deliveries_deleted", dead)
+		d.Metrics.RetentionApplied.WithLabelValues("messages").Add(float64(msgs))
+		d.Metrics.RetentionApplied.WithLabelValues("dead_deliveries").Add(float64(dead))
+	}
 	if _, err := d.Repos.InboundMedia.Purge(ctx, time.Now().Add(-24*time.Hour)); err != nil {
 		r.Log.WarnContext(ctx, "inbound media job purge failed", "error", err)
 	}

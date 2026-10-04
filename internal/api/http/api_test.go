@@ -695,3 +695,28 @@ func TestSubscriptionPauseResumeAndBacklogOverHTTP(t *testing.T) {
 		t.Errorf("unknown: %d", c)
 	}
 }
+
+func TestContactErasureOverHTTP(t *testing.T) {
+	h := newHarness(t)
+	c, body, hdr := h.call("DELETE", "/api/v1/contacts/+55%20(62)%2099999-9999/data", h.key1, "")
+	if c != 200 || hdr.Get("Cache-Control") != "no-store" {
+		t.Fatalf("erase: %d %v %v", c, body, hdr)
+	}
+	for _, k := range []string{"messages_anonymized", "messages_cancelled", "events_deleted", "attachments_deleted", "erased_at"} {
+		if _, ok := body[k]; !ok {
+			t.Errorf("the report lacks %q: %v", k, body)
+		}
+	}
+	if raw, _ := body["_raw"].(string); strings.Contains(raw, "999999999") {
+		t.Errorf("the report must not repeat the number: %v", body)
+	}
+	if c, _, _ := h.call("DELETE", "/api/v1/contacts/not-a-number/data", h.key1, ""); c != 400 {
+		t.Errorf("malformed number: %d", c)
+	}
+	if c, _, _ := h.call("DELETE", "/api/v1/contacts/5562999999999/data", "", ""); c != 401 {
+		t.Errorf("unauthenticated: %d", c)
+	}
+	if c, _, _ := h.call("DELETE", "/api/v1/contacts/5562999999999/data", h.admin, ""); c != 403 {
+		t.Errorf("an administrator is not a tenant: %d", c)
+	}
+}

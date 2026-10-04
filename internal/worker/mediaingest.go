@@ -223,7 +223,7 @@ func (m *MediaIngestor) download(ctx context.Context, j *media.InboundJob) error
 	}
 	m.Metrics.BlobBytes.WithLabelValues("put").Add(float64(res.Size))
 	b := media.Blob{ID: j.ID, TenantID: j.TenantID, ObjectKey: key, ContentType: contentType, Size: res.Size, SHA256: hex.EncodeToString(h.Sum(nil)),
-		Filename: media.SafeFilename(name), Status: media.BlobReady, ExpiresAt: m.now().Add(m.TTL), CreatedAt: m.now()}
+		Filename: media.SafeFilename(name), Subject: senderOf(j.Event), Status: media.BlobReady, ExpiresAt: m.now().Add(m.TTL), CreatedAt: m.now()}
 	if err := m.Repos.Blobs.Create(ctx, b); err != nil && !errors.Is(err, errs.ErrAlreadyExists) {
 		return fmt.Errorf("record media: %w", err) // a retry after a crash finds the record already there and goes on
 	}
@@ -268,6 +268,14 @@ func receivedPayload(ev events.Event) (events.MessageReceivedPayload, error) {
 	}
 	var p events.MessageReceivedPayload
 	return p, json.Unmarshal(raw, &p)
+}
+
+// senderOf is the phone number the message came from (the subject an erasure request will look for).
+func senderOf(ev events.Event) string {
+	if p, err := receivedPayload(ev); err == nil {
+		return p.From
+	}
+	return ""
 }
 
 func declared(ev events.Event) events.MessageMedia {
