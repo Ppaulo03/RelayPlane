@@ -1,4 +1,4 @@
-# Builds the patched Evolution image (Baileys >= 7.0.0-rc12, CVE-2026-48063), scans it and only then publishes it to GHCR.
+# Builds the patched Evolution image (Baileys >= 7.0.0-rc12, CVE-2026-48063) once, scans that build and publishes that same build to GHCR.
 # Run manually (workflow_dispatch) or by pushing a tag `evolution-<version>`. The immutable digest to use in the compose file
 # and Kubernetes manifests is printed in the job summary.
 name: evolution-image
@@ -32,54 +32,31 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - id: name
         run: echo "image=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/relayplane-evolution" >> "$GITHUB_OUTPUT"
-      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
-      # build locally first: nothing is published unless the scan passes
-      - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+      # the patched Baileys is pinned in the Dockerfile, which also checks the FINAL dependency tree and fails the build if it is not
+      # exactly this version (a check here, on a loaded image, would look at a copy and say nothing about what is published)
+      - name: the Dockerfile pins the patched Baileys
+        run: grep -Fq 'ARG BAILEYS_VERSION=7.0.0-rc13' deploy/docker/evolution/Dockerfile
+      # build once, scan that build (CRITICAL stops here; HIGH is listed: the stock Evolution tree has many HIGH findings in its own
+      # dependencies that this repository cannot fix without forking it), publish that same build
+      - id: push
+        uses: ./.github/actions/build-scan-push
         with:
+          image: ${{ steps.name.outputs.image }}
+          tag: ${{ env.TAG }}
           context: deploy/docker/evolution
-          load: true
-          tags: candidate:scan
-      - name: the Baileys inside the image is the patched one
-        run: |
-          v=$(docker run --rm --entrypoint node candidate:scan -p "require('/evolution/node_modules/baileys/package.json').version")
-          echo "baileys $v"
-          [ "$v" = "7.0.0-rc13" ]
-      - uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
-        with:
-          image-ref: candidate:scan
-          severity: CRITICAL
-          exit-code: "1"
-          ignore-unfixed: true
-      # visibility, not a gate: the stock Evolution tree has many HIGH findings in its own dependencies (axios, brace-expansion...)
-      # that this repository cannot fix without forking it; they are listed so they are never a surprise
-      - uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
-        with:
-          image-ref: candidate:scan
-          severity: HIGH
-          exit-code: "0"
-          ignore-unfixed: true
-          format: table
-      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
-        with:
-          registry: ghcr.io
+          report-high: "true"
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - id: push
-        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
-        with:
-          context: deploy/docker/evolution
-          push: true
-          tags: ${{ steps.name.outputs.image }}:${{ env.TAG }}
       - name: digest to pin
         id: pin
         run: |
-          echo "image=${{ steps.name.outputs.image }}@${{ steps.push.outputs.digest }}" >> "$GITHUB_OUTPUT"
+          echo "image=${{ steps.push.outputs.image }}" >> "$GITHUB_OUTPUT"
           {
             echo "### Evolution image published"
             echo
             echo "Pin this immutable reference in docker-compose.yml and deploy/kubernetes/relayplane.yaml:"
             echo
             echo '```'
-            echo "${{ steps.name.outputs.image }}@${{ steps.push.outputs.digest }}"
+            echo "${{ steps.push.outputs.image }}"
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"

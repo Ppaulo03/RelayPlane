@@ -8,16 +8,19 @@ Como o RelayPlane vira imagens imutáveis, como essas imagens sobem num ambiente
 Empurrar uma tag `v<versão>` (ou rodar o workflow `release` manualmente informando a versão) dispara `.github/workflows/release.yml`:
 
 ```
-version ─┬─ evolution  (workflow evolution-image: build, verifica o Baileys, SCAN, publica)
-         └─ images ×3  (gateway, worker, reconciler: build, SCAN, publica com proveniência e SBOM)
+version ─┬─ evolution  (workflow evolution-image: build único, SCAN desse build, publica esse build)
+         └─ images ×3  (gateway, worker, reconciler: build único, SCAN desse build, publica esse build com proveniência e SBOM)
                  │
              manifests   cmd/render-release: relayplane-<v>.yaml com TODA imagem fixada por digest + images.env
                  │
           staging-smoke  sobe as imagens publicadas em modo produção e roda o smoke
 ```
 
-* **Nada é publicado sem passar no scan.** Trivy (gravidade `CRITICAL`, só o que tem correção) roda antes do passo que faz o `push`, em cada imagem
-  (`internal/archtest/release_test.go` falha se a ordem for invertida).
+* **Nada é publicado sem passar no scan, e o que é escaneado é exatamente o que é publicado.** Cada imagem é construída **uma vez**, para um arquivo OCI no runner (com proveniência e SBOM);
+  o Trivy (gravidade `CRITICAL`, só o que tem correção) escaneia **esse arquivo**; só então o `crane push` envia **esses mesmos bytes** e a ação confere que o digest que o registro devolve é o digest que foi
+  escaneado. Tudo isso vive numa única ação composta (`.github/actions/build-scan-push`), usada pelo release e pelo workflow da imagem Evolution; `internal/archtest` falha se algum workflow voltar a
+  construir para dar `push` (um segundo build publicaria algo que ninguém escaneou) ou se a ordem construir → escanear → publicar for invertida. Nada sai do runner antes do scan: não há candidata no registro.
+  A política é `ignore-unfixed: true` (um CRITICAL sem correção disponível não bloqueia; é uma escolha de risco consciente) e o scan olha o sistema operacional e as dependências da imagem, não a sua configuração.
 * **Nenhum placeholder chega a um manifesto.** `deploy/kubernetes/relayplane.yaml` é um *template* (`registry.example.com/relayplane/<componente>:…@sha256:REPLACE…`); o
   `render-release` o transforma em `relayplane-<v>.yaml` e **recusa** produzir algo com placeholder, tag flutuante, digest curto, componente sem imagem ou imagem desconhecida
   (`internal/release`, testado contra o template real do repositório).

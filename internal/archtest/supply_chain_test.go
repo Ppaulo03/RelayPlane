@@ -108,6 +108,8 @@ var actionRef = regexp.MustCompile(`^\s*-?\s*uses:\s*(\S+)`)
 func TestWorkflowActionsArePinnedByCommitSHA(t *testing.T) {
 	root := repoRoot(t)
 	files, _ := filepath.Glob(filepath.Join(root, ".github", "workflows", "*.yml"))
+	composites, _ := filepath.Glob(filepath.Join(root, ".github", "actions", "*", "action.yml"))
+	files = append(files, composites...)
 	if len(files) == 0 {
 		t.Skip("no workflows")
 	}
@@ -129,18 +131,21 @@ func TestWorkflowActionsArePinnedByCommitSHA(t *testing.T) {
 	}
 }
 
-// Anything that publishes an image must scan it first and print the digest to pin.
+// The patched Baileys is pinned in the Dockerfile, which verifies the final dependency tree; the publishing workflow keeps its own guard on the pin.
 func TestImagePublishingWorkflowScansBeforePushing(t *testing.T) {
 	b, err := os.ReadFile(filepath.Join(repoRoot(t), ".github", "workflows", "evolution-image.yml"))
 	if err != nil {
 		t.Skip("no image workflow")
 	}
 	s := string(b)
-	scan, push := strings.Index(s, "trivy-action"), strings.Index(s, "push: true")
-	if scan < 0 || push < 0 || scan > push {
-		t.Error("the image must be scanned (trivy) BEFORE the step that pushes it")
+	if !strings.Contains(s, "./.github/actions/build-scan-push") {
+		t.Error("the Evolution image must be built, scanned and published by the composite action")
 	}
 	if !strings.Contains(s, "7.0.0-rc13") {
-		t.Error("the workflow must verify the patched Baileys version inside the built image")
+		t.Error("the workflow must guard the patched Baileys pin")
+	}
+	d, err := os.ReadFile(filepath.Join(repoRoot(t), "deploy", "docker", "evolution", "Dockerfile"))
+	if err != nil || !strings.Contains(string(d), "ARG BAILEYS_VERSION=7.0.0-rc13") || !strings.Contains(string(d), "process.exit(1)") {
+		t.Error("the Dockerfile must pin the patched Baileys and fail the build when the final tree has another version")
 	}
 }

@@ -1,0 +1,115 @@
+# Builds an image ONCE, scans exactly that build and publishes exactly that build.
+#
+#   build   -> an OCI archive on the runner (with build provenance and an SBOM); nothing leaves the runner
+#   scan    -> trivy on that archive; a CRITICAL finding with a fix stops here, before any registry is touched
+#   publish -> `crane push` of the very same bytes, then the digest the registry reports must equal the digest that was scanned
+#
+# Building again for the push (what a `docker build` + `docker build --push` pair does) would publish something that was never
+# scanned; so would pushing an untagged candidate and re-tagging it, because the candidate would already be out. The repository's
+# architecture test (internal/archtest) fails if a workflow pushes with docker/build-push-action again.
+name: build-scan-push
+description: Build once, scan that build, publish that build, and verify the published digest is the scanned one.
+
+inputs:
+  image:
+    description: Repository to publish to, without a tag (ghcr.io/owner/name)
+    required: true
+  tag:
+    description: Tag to publish
+    required: true
+  context:
+    description: Docker build context
+    required: true
+  build-args:
+    description: Docker build arguments, one per line
+    required: false
+    default: ""
+  report-high:
+    description: Also list HIGH findings (informational, never blocks)
+    required: false
+    default: "false"
+  username:
+    description: Registry user
+    required: true
+  password:
+    description: Registry token
+    required: true
+
+outputs:
+  digest:
+    description: Digest of the published image (sha256:...)
+    value: ${{ steps.verify.outputs.digest }}
+  image:
+    description: Immutable reference of the published image (repository@sha256:...)
+    value: ${{ steps.verify.outputs.image }}
+
+runs:
+  using: composite
+  steps:
+    - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+    - name: build once (nothing is pushed)
+      uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+      with:
+        context: ${{ inputs.context }}
+        build-args: ${{ inputs.build-args }}
+        outputs: type=oci,dest=${{ runner.temp }}/image.tar
+        # build provenance and an SBOM travel with the image
+        provenance: mode=max
+        sbom: true
+    - name: unpack what was built and note its digest
+      id: built
+      shell: bash
+      run: |
+        set -euo pipefail
+        mkdir -p "$RUNNER_TEMP/oci"
+        tar -xf "$RUNNER_TEMP/image.tar" -C "$RUNNER_TEMP/oci"
+        # the digest of the image index the registry will report for this exact content
+        digest=$(jq -r '.manifests[0].digest' "$RUNNER_TEMP/oci/index.json")
+        case "$digest" in sha256:????????????????????????????????????????????????????????????????) ;; *) echo "no digest in the archive: $digest" >&2; exit 1;; esac
+        echo "digest=$digest" >> "$GITHUB_OUTPUT"
+        echo "built $digest"
+    - name: scan what was built
+      uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+      with:
+        input: ${{ runner.temp }}/oci
+        severity: CRITICAL
+        exit-code: "1"
+        ignore-unfixed: true
+    # visibility, not a gate: findings in the dependencies of third-party software that this repository cannot fix without a fork
+    - name: list HIGH findings
+      if: inputs.report-high == 'true'
+      uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+      with:
+        input: ${{ runner.temp }}/oci
+        severity: HIGH
+        exit-code: "0"
+        ignore-unfixed: true
+        format: table
+    - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+      with:
+        go-version-file: go.mod
+        cache: false
+    - name: install crane (version pinned; go verifies the module checksums)
+      shell: bash
+      run: go install github.com/google/go-containerregistry/cmd/crane@v0.20.6
+    - name: publish what was scanned, and verify it
+      id: verify
+      shell: bash
+      env:
+        IMAGE: ${{ inputs.image }}
+        TAG: ${{ inputs.tag }}
+        REGISTRY_USER: ${{ inputs.username }}
+        REGISTRY_TOKEN: ${{ inputs.password }}
+        SCANNED: ${{ steps.built.outputs.digest }}
+      run: |
+        set -euo pipefail
+        crane=$(go env GOPATH)/bin/crane
+        printf '%s' "$REGISTRY_TOKEN" | "$crane" auth login "${IMAGE%%/*}" --username "$REGISTRY_USER" --password-stdin
+        "$crane" push "$RUNNER_TEMP/oci" "$IMAGE:$TAG"
+        published=$("$crane" digest "$IMAGE:$TAG")
+        if [ "$published" != "$SCANNED" ]; then
+          echo "the registry holds $published, but $SCANNED was scanned" >&2
+          exit 1
+        fi
+        echo "digest=$published" >> "$GITHUB_OUTPUT"
+        echo "image=$IMAGE@$published" >> "$GITHUB_OUTPUT"
