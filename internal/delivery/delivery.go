@@ -185,7 +185,9 @@ func (d *Dispatcher) process(ctx context.Context, dl subscription.Delivery) {
 		return
 	}
 
-	body, err := json.Marshal(dl.Event)
+	wire := dl.Event
+	wire.SchemaVersion, wire.Sequence = events.SchemaVersion, dl.Sequence
+	body, err := json.Marshal(wire)
 	if err != nil {
 		_ = d.Repos.Deliveries.MarkDead(rctx, dl.ID, "event not serializable: "+err.Error())
 		return
