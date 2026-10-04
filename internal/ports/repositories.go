@@ -3,6 +3,7 @@ package ports
 // Repositories groups the persistence ports for dependency injection.
 type Repositories struct {
 	Tenants     TenantRepository
+	APIKeys     APIKeyRepository
 	Instances   InstanceRepository
 	Nodes       NodeRepository
 	Operations  OperationRepository

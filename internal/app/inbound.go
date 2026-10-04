@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/relayplane/relayplane/internal/core/errs"
@@ -172,7 +173,10 @@ func (s *NodeService) Register(ctx context.Context, n routing.Node) error {
 // ---- tenants ----
 
 // TenantService manages tenants and API-key authentication.
-type TenantService struct{ d Deps }
+type TenantService struct {
+	d       Deps
+	touched sync.Map // key id -> time of the last recorded use
+}
 
 // HashAPIKey is the stored form of an API key.
 func HashAPIKey(key string) string {
@@ -190,22 +194,105 @@ func (s *TenantService) Create(ctx context.Context, name string) (*instance.Tena
 	if _, err := rand.Read(buf); err != nil {
 		return nil, "", err
 	}
-	key := "rpk_" + base64.RawURLEncoding.EncodeToString(buf)
-	t := instance.Tenant{ID: ids.New("tenant"), Name: name, APIKeyHash: HashAPIKey(key), CreatedAt: time.Now()}
+	key := newAPIKey(buf)
+	t := instance.Tenant{ID: ids.New("tenant"), Name: name, APIKeyHash: HashAPIKey(key), APIKeyPrefix: keyPrefix(key), CreatedAt: time.Now()}
 	if err := s.d.Repos.Tenants.Create(ctx, t); err != nil {
 		return nil, "", err
 	}
 	return &t, key, nil
 }
 
+// Get returns a tenant (administration).
+func (s *TenantService) Get(ctx context.Context, id string) (*instance.Tenant, error) {
+	return s.d.Repos.Tenants.Get(ctx, id)
+}
+
 // Authenticate resolves the tenant owning an API key.
 func (s *TenantService) Authenticate(ctx context.Context, apiKey string) (*instance.Tenant, error) {
-	if apiKey == "" {
-		return nil, errs.ErrUnauthenticated
-	}
-	t, err := s.d.Repos.Tenants.GetByAPIKeyHash(ctx, HashAPIKey(apiKey))
-	if errors.Is(err, errs.ErrNotFound) {
-		return nil, errs.ErrUnauthenticated
-	}
+	t, _, err := s.AuthenticateKey(ctx, apiKey)
 	return t, err
+}
+
+// AuthenticateKey resolves the tenant and the key itself: a revoked or expired key is as unknown as a wrong one. It
+// records the use (last_used_at), at most once every half minute per key per process.
+func (s *TenantService) AuthenticateKey(ctx context.Context, apiKey string) (*instance.Tenant, *instance.APIKey, error) {
+	if apiKey == "" {
+		return nil, nil, errs.ErrUnauthenticated
+	}
+	now := s.d.now()
+	k, err := s.d.Repos.APIKeys.FindActiveByHash(ctx, HashAPIKey(apiKey), now)
+	if errors.Is(err, errs.ErrNotFound) {
+		return nil, nil, errs.ErrUnauthenticated
+	}
+	if err != nil {
+		return nil, nil, err
+	}
+	t, err := s.d.Repos.Tenants.Get(ctx, k.TenantID)
+	if err != nil {
+		return nil, nil, err
+	}
+	if last, ok := s.touched.Load(k.ID); !ok || now.Sub(last.(time.Time)) > 30*time.Second {
+		s.touched.Store(k.ID, now)
+		if err := s.d.Repos.APIKeys.Touch(ctx, k.ID, now, time.Minute); err != nil {
+			s.d.Log.WarnContext(ctx, "could not record api key use", "key_id", k.ID, "error", err)
+		}
+	}
+	return t, k, nil
+}
+
+func newAPIKey(entropy []byte) string { return "rpk_" + base64.RawURLEncoding.EncodeToString(entropy) }
+
+// keyPrefix is the part of a key shown in listings: enough to recognise it, nowhere near enough to use it.
+func keyPrefix(key string) string {
+	if len(key) > 8 {
+		return key[:8]
+	}
+	return key
+}
+
+// APIKeyService manages the keys of a tenant: several at once, so a credential can be rotated without downtime.
+type APIKeyService struct{ d Deps }
+
+// Create issues a new key. ttl <= 0 means it never expires. The secret is returned here and never again.
+func (s *APIKeyService) Create(ctx context.Context, tenantID, name string, ttl time.Duration) (*instance.APIKey, string, error) {
+	name = strings.TrimSpace(name)
+	if name == "" || len(name) > 64 {
+		return nil, "", fmt.Errorf("%w: name must be 1-64 characters", errs.ErrInvalidArgument)
+	}
+	buf := make([]byte, 32)
+	if _, err := rand.Read(buf); err != nil {
+		return nil, "", err
+	}
+	secret := newAPIKey(buf)
+	now := s.d.now().UTC()
+	k := instance.APIKey{ID: ids.New("key"), TenantID: tenantID, Name: name, Prefix: keyPrefix(secret), KeyHash: HashAPIKey(secret), CreatedAt: now}
+	if ttl > 0 {
+		k.ExpiresAt = now.Add(ttl)
+	}
+	if err := s.d.Repos.APIKeys.Create(ctx, k); err != nil {
+		if errors.Is(err, errs.ErrConflict) {
+			return nil, "", fmt.Errorf("%w: a tenant can hold at most %d active API keys: revoke one first", errs.ErrConflict, instance.MaxActiveAPIKeys)
+		}
+		return nil, "", err
+	}
+	s.d.Log.InfoContext(ctx, "api key created", "tenant_id", tenantID, "key_id", k.ID, "name", name)
+	return &k, secret, nil
+}
+
+// List returns the tenant's keys (never the secrets).
+func (s *APIKeyService) List(ctx context.Context, tenantID string) ([]instance.APIKey, error) {
+	return s.d.Repos.APIKeys.List(ctx, tenantID)
+}
+
+// Revoke stops a key from authenticating, at once. The last usable key of a tenant cannot be revoked (the admin can
+// always issue a new one, but a tenant must not lock itself out by mistake).
+func (s *APIKeyService) Revoke(ctx context.Context, tenantID, id string) error {
+	if err := s.d.Repos.APIKeys.Revoke(ctx, tenantID, id, s.d.now().UTC()); err != nil {
+		if errors.Is(err, errs.ErrConflict) {
+			return fmt.Errorf("%w: this is the last usable API key: create another one before revoking it", errs.ErrConflict)
+		}
+		return err
+	}
+	s.d.Log.InfoContext(ctx, "api key revoked", "tenant_id", tenantID, "key_id", id)
+	return nil
 }

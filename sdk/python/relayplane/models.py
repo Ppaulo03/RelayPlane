@@ -1,7 +1,7 @@
 """Typed views of API responses."""
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 
@@ -166,6 +166,31 @@ class SentMessage:
     message_id: str
     status: str
     replayed: bool = False
+
+
+@dataclass(frozen=True)
+class ApiKey:
+    """An API key of your tenant. ``secret`` is set only on the object returned by ``create`` (it is never shown again)."""
+
+    id: str
+    name: str
+    prefix: str
+    created_at: str = ""
+    expires_at: str = ""
+    last_used_at: str = ""
+    revoked_at: str = ""
+    current: bool = False  # the key that authenticated this request
+    secret: str = field(default="", repr=False)
+
+    @property
+    def active(self) -> bool:
+        return not self.revoked_at
+
+    @classmethod
+    def from_dict(cls, d: dict[str, Any]) -> "ApiKey":
+        return cls(id=d["id"], name=d.get("name", ""), prefix=d.get("prefix", ""), created_at=d.get("created_at", ""),
+                   expires_at=d.get("expires_at", ""), last_used_at=d.get("last_used_at", ""), revoked_at=d.get("revoked_at", ""),
+                   current=bool(d.get("current", False)), secret=d.get("api_key", ""))
 
 
 @dataclass(frozen=True)

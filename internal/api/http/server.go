@@ -34,6 +34,7 @@ const (
 type Principal struct {
 	Role     Role
 	TenantID string // empty for admins
+	KeyID    string // the API key that authenticated the request (tenants only)
 }
 
 type ctxKey struct{}
@@ -57,11 +58,11 @@ func (a KeyAuthenticator) Authenticate(ctx context.Context, token string) (Princ
 	if a.AdminKey != "" && subtle.ConstantTimeCompare([]byte(token), []byte(a.AdminKey)) == 1 {
 		return Principal{Role: RoleAdmin}, nil
 	}
-	t, err := a.Tenants.Authenticate(ctx, token)
+	t, k, err := a.Tenants.AuthenticateKey(ctx, token)
 	if err != nil {
 		return Principal{}, err
 	}
-	return Principal{Role: RoleTenant, TenantID: t.ID}, nil
+	return Principal{Role: RoleTenant, TenantID: t.ID, KeyID: k.ID}, nil
 }
 
 // ReadyCheck is one readiness dependency.
@@ -127,6 +128,10 @@ func (s *Server) Handler() nethttp.Handler {
 	mux.HandleFunc("POST /api/v1/nodes/{id}/drain", admin(s.drainNode))
 	mux.HandleFunc("POST /api/v1/nodes/{id}/resume", admin(s.resumeNode))
 	mux.HandleFunc("POST /api/v1/tenants", admin(s.createTenant))
+	mux.HandleFunc("POST /api/v1/tenants/{id}/api-keys", admin(s.createTenantAPIKey))
+	mux.HandleFunc("POST /api/v1/api-keys", tenant(s.createAPIKey))
+	mux.HandleFunc("GET /api/v1/api-keys", tenant(s.listAPIKeys))
+	mux.HandleFunc("DELETE /api/v1/api-keys/{id}", tenant(s.revokeAPIKey))
 	mux.HandleFunc("PUT /api/v1/tenants/{id}/rate-policy", admin(s.setTenantRatePolicy))
 
 	mux.HandleFunc("POST /webhooks/{provider}", s.webhook)

@@ -47,8 +47,15 @@ func (r tenantRepo) Create(ctx context.Context, t instance.Tenant) error {
 	if t.CreatedAt.IsZero() {
 		t.CreatedAt = time.Now()
 	}
-	_, err = r.s.pool.Exec(ctx, `INSERT INTO tenants(id,name,api_key_hash,rate_policy,created_at) VALUES($1,$2,$3,$4,$5)`,
-		t.ID, t.Name, t.APIKeyHash, pol, t.CreatedAt)
+	k := instance.InitialKey(t)
+	err = r.s.withTx(ctx, func(tx pgx.Tx) error {
+		if _, err := tx.Exec(ctx, `INSERT INTO tenants(id,name,rate_policy,created_at) VALUES($1,$2,$3,$4)`, t.ID, t.Name, pol, t.CreatedAt); err != nil {
+			return err
+		}
+		_, err := tx.Exec(ctx, `INSERT INTO api_keys(id,tenant_id,name,key_prefix,key_hash,created_at) VALUES($1,$2,$3,$4,$5,$6)`,
+			k.ID, k.TenantID, k.Name, k.Prefix, k.KeyHash, k.CreatedAt)
+		return err
+	})
 	if _, code := constraint(err); code == "23505" {
 		return errs.ErrAlreadyExists
 	}
@@ -65,14 +72,15 @@ func scanTenant(row pgx.Row) (*instance.Tenant, error) {
 	return &t, nil
 }
 
-const tenantCols = `id,name,api_key_hash,rate_policy,created_at`
+const tenantCols = `id,name,coalesce(api_key_hash,''),rate_policy,created_at`
 
 func (r tenantRepo) Get(ctx context.Context, id string) (*instance.Tenant, error) {
 	return scanTenant(r.s.pool.QueryRow(ctx, `SELECT `+tenantCols+` FROM tenants WHERE id=$1`, id))
 }
 
 func (r tenantRepo) GetByAPIKeyHash(ctx context.Context, hash string) (*instance.Tenant, error) {
-	return scanTenant(r.s.pool.QueryRow(ctx, `SELECT `+tenantCols+` FROM tenants WHERE api_key_hash=$1`, hash))
+	return scanTenant(r.s.pool.QueryRow(ctx, `SELECT t.id,t.name,coalesce(t.api_key_hash,''),t.rate_policy,t.created_at FROM tenants t JOIN api_keys k ON k.tenant_id=t.id
+		WHERE k.key_hash=$1 AND k.revoked_at IS NULL AND (k.expires_at IS NULL OR k.expires_at > now())`, hash))
 }
 
 func (r tenantRepo) SetRatePolicy(ctx context.Context, id string, p *messaging.RatePolicy) error {

@@ -171,3 +171,26 @@ async def test_media_download_verifies_the_checksum():
     async with client(truncated) as rp:
         with pytest.raises(ValueError):
             await rp.media.download("med_1")
+
+
+async def test_api_key_rotation_calls():
+    seen = []
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        seen.append((req.method, req.url.path))
+        if req.method == "POST":
+            assert json.loads(req.content) == {"name": "agent-prod", "expires_in_seconds": 3600}
+            return httpx.Response(201, json={"id": "key_2", "name": "agent-prod", "prefix": "rpk_ab12", "created_at": "2026-10-03T00:00:00Z",
+                                             "api_key": "rpk_ab12secret"})
+        if req.method == "GET":
+            return httpx.Response(200, json={"api_keys": [{"id": "key_2", "name": "agent-prod", "prefix": "rpk_ab12", "current": True},
+                                                          {"id": "key_1", "name": "initial", "prefix": "rpk_zz99", "revoked_at": "2026-10-03T01:00:00Z"}]})
+        return httpx.Response(204)
+
+    async with client(handler) as rp:
+        k = await rp.api_keys.create("agent-prod", expires_in_seconds=3600)
+        keys = await rp.api_keys.list()
+        await rp.api_keys.revoke("key_1")
+    assert k.secret == "rpk_ab12secret" and "secret" not in repr(k)
+    assert [x.active for x in keys] == [True, False] and keys[0].current and keys[0].secret == ""
+    assert seen == [("POST", "/api/v1/api-keys"), ("GET", "/api/v1/api-keys"), ("DELETE", "/api/v1/api-keys/key_1")]

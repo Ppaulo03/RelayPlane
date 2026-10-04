@@ -43,6 +43,7 @@ type Store struct {
 	deliveries  map[string]*deliveryRow
 	deliverySeq map[string]int64 // "subscription|instance" -> last sequence
 	inbound     map[string]*inboundRow
+	apiKeys     map[string]*instance.APIKey
 
 	// BeforeCommit lets failure tests inject a fault into multi-step writes
 	// (simulating a transaction rollback). Return an error to abort.
@@ -73,6 +74,7 @@ func NewStore() *Store {
 		deliveries:  map[string]*deliveryRow{},
 		deliverySeq: map[string]int64{},
 		inbound:     map[string]*inboundRow{},
+		apiKeys:     map[string]*instance.APIKey{},
 		nextSeq:     map[string]int64{},
 	}
 }
@@ -80,7 +82,7 @@ func NewStore() *Store {
 // Repositories returns the port bundle backed by this store.
 func (s *Store) Repositories() ports.Repositories {
 	return ports.Repositories{
-		Tenants: tenantRepo{s}, Instances: instanceRepo{s}, Nodes: nodeRepo{s},
+		Tenants: tenantRepo{s}, APIKeys: apiKeyRepo{s}, Instances: instanceRepo{s}, Nodes: nodeRepo{s},
 		Operations: opRepo{s}, Messages: msgRepo{s}, Blobs: blobRepo{s},
 		Idempotency: idemRepo{s}, Dedup: dedupRepo{s},
 		Events: eventsRepo{s}, Subscriptions: subsRepo{s}, Deliveries: deliveriesRepo{s}, InboundMedia: inboundMediaRepo{s},
@@ -104,8 +106,8 @@ func (r tenantRepo) Create(_ context.Context, t instance.Tenant) error {
 	if _, ok := r.s.tenants[t.ID]; ok {
 		return errs.ErrAlreadyExists
 	}
-	for _, x := range r.s.tenants {
-		if x.APIKeyHash == t.APIKeyHash {
+	for _, x := range r.s.apiKeys {
+		if x.KeyHash == t.APIKeyHash {
 			return errs.ErrAlreadyExists
 		}
 	}
@@ -113,6 +115,8 @@ func (r tenantRepo) Create(_ context.Context, t instance.Tenant) error {
 		t.CreatedAt = r.s.Now()
 	}
 	r.s.tenants[t.ID] = t
+	k := instance.InitialKey(t)
+	r.s.apiKeys[k.ID] = &k
 	return nil
 }
 
@@ -129,9 +133,10 @@ func (r tenantRepo) Get(_ context.Context, id string) (*instance.Tenant, error) 
 func (r tenantRepo) GetByAPIKeyHash(_ context.Context, hash string) (*instance.Tenant, error) {
 	r.s.mu.Lock()
 	defer r.s.mu.Unlock()
-	for _, t := range r.s.tenants {
-		if t.APIKeyHash == hash {
-			t := t
+	now := r.s.Now()
+	for _, k := range r.s.apiKeys {
+		if k.KeyHash == hash && k.Active(now) {
+			t := r.s.tenants[k.TenantID]
 			return &t, nil
 		}
 	}

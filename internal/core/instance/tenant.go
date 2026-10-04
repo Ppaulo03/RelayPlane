@@ -12,6 +12,8 @@ type Tenant struct {
 	ID         string
 	Name       string
 	APIKeyHash string
-	RatePolicy *messaging.RatePolicy
-	CreatedAt  time.Time
+	// APIKeyPrefix is the visible start of the first key (see APIKey.Prefix).
+	APIKeyPrefix string
+	RatePolicy   *messaging.RatePolicy
+	CreatedAt    time.Time
 }
