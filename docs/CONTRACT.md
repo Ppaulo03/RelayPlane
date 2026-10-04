@@ -52,7 +52,7 @@ Evolution/Baileys e suas versões, nodes, fencing e epochs, outbox, leases, part
 | Mensagem **recebida** → seu webhook | ✅ **durável a partir do aceite**: o 200 ao provedor só sai depois de a mensagem estar gravada no banco (chave de dedupe e evento na mesma transação); queda do processo ou do Redis depois disso só atrasa a entrega, nunca a perde. Depende do reconciler rodando (alerta `RelayPlaneEventOutboxStalled`). Testado contra Postgres/Redis/S3 reais |
 | Apagamento por pessoa | ✅ apaga o que existe **e** marca o contato: evento ou anexo já em voo (Redis, outbox, fan-out, download) é descartado, não recria o dado. Uma mensagem posterior ao pedido é entregue. Não alcança logs, backups, o estado do WhatsApp/Evolution nem a cópia que fica no Redis até ser consumida |
 | Comportamento com WhatsApp real | ⚠️ validado com um número em 2026-10; mídia/citação/"digitando"/leitura ainda sem conferência no aparelho; sem teste automatizado possível ([atualização de versões](./runbooks/PROVIDER-UPGRADE.md)) |
-| Pausa de assinatura | ⚠️ uma entrega já arrendada no instante da pausa ainda pode sair (correção pequena planejada) |
+| Pausa de assinatura | ✅ nada sai depois do `pause`, nem o que já estava arrendado; as entregas esperam e saem na ordem depois do `resume`. Uma pausa longa não guarda texto para sempre: o que continua pendente é apagado após `RETENTION_PENDING_DELIVERIES` (30 dias), deixando buracos em `sequence` |
 
 Esta tabela é a fonte do que o consumidor pode assumir. Quando um ⚠️ fechar, ele vira ✅ aqui, no mesmo PR que o fecha.
 
