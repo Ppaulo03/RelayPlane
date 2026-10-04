@@ -11,6 +11,7 @@ from typing import Any, Union
 
 import httpx
 
+from ._version import __version__
 from .errors import from_response
 from .models import (ApiKey, ReplyTo, CreatedInstance, Instance, Media, Message, Operation, OperationRef, Limits, Pairing, SentMessage, Subscription, WebhookDelivery)
 
@@ -21,7 +22,7 @@ class _Http:
     def __init__(self, base_url: str, api_key: str, timeout: float, transport: httpx.AsyncBaseTransport | None):
         self._client = httpx.AsyncClient(
             base_url=base_url.rstrip("/"), timeout=timeout, transport=transport,
-            headers={"Authorization": f"Bearer {api_key}", "User-Agent": "relayplane-python/0.2.0"})
+            headers={"Authorization": f"Bearer {api_key}", "User-Agent": f"relayplane-python/{__version__}"})
 
     async def request(self, method: str, path: str, *, json: Any = None, content: Any = None,
                       idempotency_key: str | None = None, headers: dict[str, str] | None = None) -> tuple[Any, httpx.Response]:
