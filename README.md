@@ -89,6 +89,7 @@ make sandbox-up      # stack real com um simulador de provedor drivável (sem n�
 | Documento | Conteúdo |
 |---|---|
 | [ARCHITECTURE](docs/ARCHITECTURE.md) | camadas, state machines, ownership/fencing, ordering, idempotência, claim-check, mapa invariante→teste |
+| [runbooks](docs/runbooks/UNKNOWN-MESSAGES.md) | [`UNKNOWN`](docs/runbooks/UNKNOWN-MESSAGES.md) e [reposição de node](docs/runbooks/NODE-REPLACEMENT.md) |
 | [OPERATIONS](docs/OPERATIONS.md) | runbook: deploy, escalar workers/nodes, drain, migração, DLQ, métricas e alertas |
 | [FAILURE-MODES](docs/FAILURE-MODES.md) | o que acontece (e o que *não* acontece) em cada falha |
 | [PROVIDER-ADAPTERS](docs/PROVIDER-ADAPTERS.md) | como escrever/versionar um provider; contrato e limitações da Evolution |

@@ -31,7 +31,7 @@ As Fases 1–5 do agente (núcleo, confiabilidade, confirmação, flows, compile
 
 ## 3. G1 — Contrato (sem WhatsApp)
 
-✅ = entregue: **todo o G1** (R01–R16). Falta o G2 (R22–R24 e rodar o release de verdade) e o G3.
+✅ = entregue: **todo o G1** (R01–R16), R23 e R24. Falta do G2 (R22 parcial e rodar o release de verdade) e o G3.
 
 | ID | Item | Por quê (requisito do agente) | Tam. | Pronto quando |
 |---|---|---|---|---|
@@ -64,8 +64,8 @@ As Fases 1–5 do agente (núcleo, confiabilidade, confirmação, flows, compile
 | **R20** ✅ | **Capturar payloads reais** da Evolution (texto, resposta citada, áudio, imagem, receipts, reconexão) como fixtures de ouro; **confirmar que `contextInfo.stanzaId` e `messageTimestamp` têm o significado assumido** e corrigir o adapter | S–M | fixtures no repositório; testes do adapter passam com payload real. **Feito:** 21 fixtures em `testdata/real`, `golden_test.go`; `stanzaId` e `messageTimestamp` confirmados; 4 defeitos corrigidos (mídia por URL interna, remetente LID, `message.deleted`, `date_time` local) |
 | **R21** ✅ (código) | **Imagens e deploy de staging:** rodar o workflow da imagem Evolution e fixar o digest; construir, escanear e publicar gateway/worker/reconciler no CI; ambiente de staging (compose ou Kubernetes) com a mesma configuração de produção | M | staging sobe a partir do CI; sem placeholders de digest. **Feito** ([`RELEASE`](./RELEASE.md)): workflow `release` (tag `v*`): build, **scan antes do push**, proveniência e SBOM das 4 imagens, `cmd/render-release` (recusa placeholder, tag e digest curto) e smoke das imagens publicadas; staging em compose (`deploy/staging`: produção, sem build, só digests) com um **smoke que roda em todo PR** (guardas de produção, nós Evolution `READY` na versão validada, QR do nó real). **Achado:** o scan do que seria o primeiro push da imagem Evolution teria falhado (4 CRITICAL corrigíveis: openssl, `tar` do npm, `fast-xml-parser` x3, `esbuild`); corrigidos no Dockerfile, e uma armadilha do `npm install --no-save` (que revertia o Baileys para a versão vulnerável) agora é barrada por uma verificação da árvore final. **Falta, e depende de você:** rodar o release de verdade (publica no seu GHCR), e um host/cluster permanente para o staging |
 | **R22** 🔑 (parcial) | **Roteiro de validação com número real**, automatizado onde possível: parear, enviar, receipt, resposta citada ida e volta, nota de voz, reconexão, queda do node e reposição **sem QR**, migração **com** QR; relatório com o que passou | M | relatório versionado em `docs/`. **Feito:** [`SPIKE-FINDINGS`](./SPIKE-FINDINGS.md) cobre parear, envio de texto e mídia, receipts, citação (direta e em grupo), nota de voz, node parado, gateway parado, edição, exclusão e logout. **Falta:** migração com QR, reação/enquete/localização, queda de conexão sem logout |
-| **R23** | **Reposição de node:** runbook e garantia de fencing (um processo por sessão: StatefulSet de 1 réplica com o banco do node como único estado), validado no roteiro R22. A reposição com o mesmo banco reconecta sem QR (**verificado** em 2026-10-03: `connecting` → `open`, envio seguinte aceito); falta o runbook e a validação em staging | S–M | queda de node simulada em staging volta a `CONNECTED` sem QR |
-| **R24** | **Runbook de `UNKNOWN`** para operadores e orientação ao agente (quando resolver como `sent`/`not_sent`) | S | documento + exemplo no SDK |
+| **R23** ✅ (parcial) | **Reposição de node:** [runbook](./runbooks/NODE-REPLACEMENT.md) e garantia de fencing: cada pod do StatefulSet usa **o seu próprio banco** (derivado do nome do pod; teste de arquitetura impede URI compartilhado). Reposição com o mesmo banco reconecta sem QR (**verificado** com número real em 2026-10-03). **Falta** repetir a queda/reposição num staging permanente com número | S–M | queda de node simulada em staging volta a `CONNECTED` sem QR |
+| **R24** ✅ | **Runbook de `UNKNOWN`:** [runbook](./runbooks/UNKNOWN-MESSAGES.md), `GET /api/v1/messages?status=UNKNOWN`, `messages.list`, métricas `relayplane_unknown_messages`/`_oldest_seconds`, alerta e política de exemplo no SDK (`relayplane.unknown`: pergunta a um humano por padrão) | S | documento + exemplo no SDK |
 
 ## 5. G3 — Operação
 
@@ -106,4 +106,4 @@ G2 começa quando houver um número de WhatsApp e um ambiente de staging; **R20 
 
 * **API não oficial:** risco de bloqueio de número e de quebra a cada atualização do WhatsApp; o piloto deve usar números descartáveis primeiro.
 * **Nodes singleton:** a queda de um node é indisponibilidade até a reposição (R23), não perda de sessão, **desde que** o banco do node seja preservado.
-* **`UNKNOWN` exige decisão:** com `UNKNOWN_BARRIER_TIMEOUT=0` as mensagens seguintes esperam o `resolve`; o agente precisa de política para isso (R24).
+* **`UNKNOWN` exige decisão:** com `UNKNOWN_BARRIER_TIMEOUT=0` as mensagens seguintes esperam o `resolve`; o agente tem uma política de exemplo para isso (R24, `relayplane.unknown`).

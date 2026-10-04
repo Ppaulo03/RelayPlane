@@ -163,6 +163,9 @@ curl -X PUT -H "Authorization: Bearer $KEY"   :8080/api/v1/instances/<id>/rate-p
 2. Acrescente-o a `PROVIDER_NODES` e reinicie gateway/reconciler/worker (o seed é idempotente; o node nasce `STARTING` e o
    Reconciler o promove a `READY` após a primeira sonda bem-sucedida).
 
+### Reposição de um node que caiu
+Veja [NODE-REPLACEMENT](./runbooks/NODE-REPLACEMENT.md): mesmo banco reconecta sem QR.
+
 ### Drenar/aposentar um node
 `drain` ⇒ nenhuma instância nova. Para esvaziar: `POST /instances/{id}/migrate` para cada instância (veja abaixo).
 **Atenção:** sessões Evolution são locais ao node; a migração faz *logout* no node antigo (fencing físico) e cria a sessão
@@ -176,6 +179,7 @@ capability ausente). Nada foi trocado; a instância continua com o owner e o epo
 `POST …/migrate` (retoma a mesma operação). Métrica/alerta: `relayplane_migration_blocked_total`.
 
 ### Mensagens `UNKNOWN` (barreira de ordem)
+Runbook completo: [UNKNOWN-MESSAGES](./runbooks/UNKNOWN-MESSAGES.md). Listar: `GET /api/v1/messages?status=UNKNOWN`.
 Um envio ambíguo (timeout/5xx após possível envio, worker morto no meio) vira `UNKNOWN` e **bloqueia as mensagens seguintes daquela
 instância** (alerta: `relayplane_outbound_barrier_deferrals_total{reason="unknown"}` crescendo). Confirme no aparelho e resolva:
 ```bash

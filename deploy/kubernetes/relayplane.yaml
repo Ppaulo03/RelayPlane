@@ -38,7 +38,7 @@ data:
   # id/endpoint/capacity per node; api_key values come from the Secret (PROVIDER_NODES is assembled by your secret tooling)
 ---
 # Expected Secret `relayplane-secrets` keys: DATABASE_URL, BLOB_STORE_ACCESS_KEY, BLOB_STORE_SECRET_KEY,
-# WEBHOOK_SECRET, SUBSCRIPTION_SECRET (optional), ADMIN_API_KEY, PROVIDER_NODES, EVOLUTION_API_KEY
+# WEBHOOK_SECRET, SUBSCRIPTION_SECRET (optional), ADMIN_API_KEY, PROVIDER_NODES, EVOLUTION_API_KEY, EVOLUTION_DATABASE_URI_BASE
 apiVersion: apps/v1
 kind: Deployment
 metadata: {name: gateway, namespace: relayplane}
@@ -139,10 +139,15 @@ spec:
             - {name: CACHE_LOCAL_ENABLED, value: "true"}
             - {name: TZ, value: UTC}
             - {name: TELEMETRY_ENABLED, value: "false"}
-            - name: HOSTNAME_ORDINAL
+            - name: POD_NAME
               valueFrom: {fieldRef: {fieldPath: metadata.name}}
             - {name: AUTHENTICATION_API_KEY, valueFrom: {secretKeyRef: {name: relayplane-secrets, key: EVOLUTION_API_KEY}}}
-            # one database per node: DATABASE_CONNECTION_URI must be derived per pod (e.g. init container / operator)
-            - {name: DATABASE_CONNECTION_URI, valueFrom: {secretKeyRef: {name: relayplane-secrets, key: EVOLUTION_DATABASE_URI}}}
+            # ONE DATABASE PER NODE, derived from the pod's stable name: evolution-v2-0 -> <base>/evolution-v2-0. The database is the
+            # node's only state (the WhatsApp sessions), so a replacement pod with the same name reconnects without a QR code, and two
+            # nodes can never share one. Create the databases beforehand (docs/runbooks/NODE-REPLACEMENT.md).
+            # EVOLUTION_DATABASE_URI_BASE is the Secret's connection URI WITHOUT the database name, e.g. postgresql://user:pass@host:5432
+            - {name: EVOLUTION_DATABASE_URI_BASE, valueFrom: {secretKeyRef: {name: relayplane-secrets, key: EVOLUTION_DATABASE_URI_BASE}}}
+            - {name: DATABASE_CONNECTION_URI, value: "$(EVOLUTION_DATABASE_URI_BASE)/$(POD_NAME)"}
+            - {name: DATABASE_CONNECTION_CLIENT_NAME, value: "$(POD_NAME)"}
           readinessProbe: {httpGet: {path: /, port: 8080}, initialDelaySeconds: 30, periodSeconds: 10}
           resources: {requests: {cpu: 250m, memory: 512Mi}, limits: {memory: 2Gi}}
