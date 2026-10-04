@@ -38,6 +38,25 @@ cria uma entrega por assinatura (`UNIQUE(subscription_id, event_id)`: reentrega 
   o tamanho **anunciado** acima do limite é recusado sem baixar nada. A resposta da Evolution traz o arquivo em base64 dentro do JSON, então cada download ocupa na memória
   do worker cerca de 3x o tamanho do arquivo; dimensione `INBOUND_MEDIA_MAX_BYTES` com isso em mente (4 downloads em paralelo). Métricas: `relayplane_inbound_media_total{outcome}`,
   `relayplane_inbound_media_pending{stage}`. Download pelo tenant: `GET /api/v1/media/{id}/content`.
+* **Chaves de API (R09):** um tenant tem **várias** chaves ao mesmo tempo (até 10 ativas), cada uma com nome, prefixo visível, `last_used_at` (gravado no máximo 1×/min) e,
+  opcionalmente, validade. **Rotação sem parada:** `POST /api/v1/api-keys {name}` (o segredo `rpk_…` aparece uma única vez) → implante a nova → `DELETE /api/v1/api-keys/{id}` na antiga
+  (as duas valem no intervalo; a revogada deixa de valer na hora). A **última chave utilizável não pode ser revogada** (409): um tenant não se tranca para fora por engano; o
+  administrador sempre pode emitir outra (`POST /api/v1/tenants/{id}/api-keys`). Os hashes são o que fica no banco; as chaves que já existiam foram migradas como `initial`.
+* **Limite de requisições por tenant (R10):** balde de fichas por tenant (`API_RATE_PER_SECOND`, padrão 50, e `API_RATE_BURST`, padrão 100; `0` desliga). Estourou: `429`
+  com `Retry-After` e `RateLimit-Limit/Remaining`; os outros tenants não sentem. O balde mora no processo do gateway, então com N réplicas o limite efetivo é até N× (dimensione, ou
+  ponha um limitador compartilhado na frente). Métrica `relayplane_api_rate_limited_total`.
+* **Backpressure por subscription (R10):** `POST /subscriptions/{id}/pause` segura as entregas (os eventos continuam sendo enfileirados, **nada se perde**; o `GET` mostra
+  `backlog.pending` e `oldest_pending_seconds`) e `…/resume` envia o acumulado em ordem de `sequence`. Cada subscription pode ter no máximo
+  `WEBHOOK_MAX_IN_FLIGHT_PER_SUBSCRIPTION` (padrão 8) POSTs em voo: um consumidor lento não ocupa o dispatcher inteiro.
+* **Retenção e apagamento (R11, LGPD):** `RETENTION_MESSAGES` (padrão 90 dias): mensagens enviadas que já terminaram perdem **destinatário e texto** (a linha do ledger, com status e
+  sequência, fica); `RETENTION_DEAD_DELIVERIES` (padrão 30 dias): a **DLQ**, que guarda o texto do usuário, é apagada; entregas já feitas seguem em `WEBHOOK_DELIVERED_RETENTION`
+  (7 dias) e anexos recebidos em `INBOUND_MEDIA_TTL` (7 dias). `0` mantém para sempre. Métrica `relayplane_retention_applied_total{kind}`.
+  **Apagamento por pessoa:** `DELETE /api/v1/contacts/{número}/data` (qualquer grafia: `+55 (62) 99999-9999`) apaga, **para o tenant que pediu**: destinatário e conteúdo das mensagens que ele
+  enviou àquela pessoa (e cancela as que ainda não saíram), os eventos que a mencionam (entregues, pendentes e da DLQ) e os arquivos que ela enviou (objeto e metadados). É idempotente e
+  devolve contagens, nunca o número. **O que isso não alcança** (e deve constar na sua política): as streams transitórias do Redis (comandos e eventos em trânsito, aparadas por tamanho
+  em `EVENT_BUS_RETENTION`), a cópia do comando de uma mensagem que está nas mãos do provedor no instante do pedido (some quando ela resolve), o estado do próprio WhatsApp/Evolution,
+  os logs (não carregam texto nem o número) e os backups do banco. Uma subscription que ainda não recebera eventos apagados verá **buracos em `sequence`**: depois de um apagamento
+  isso é esperado.
 * **Filtro de grupos:** `exclude_groups: true` descarta `message.received` de conversas em grupo para aquela subscription.
 * **Trace:** o webhook leva o header `traceparent`. Os eventos de status (`message.outbound_status`) carregam o trace do `POST /messages/send` que criou a mensagem
   (o consumidor liga seu trace ao do envio); eventos que nascem no provedor (mensagem recebida) levam o trace da própria entrega.
