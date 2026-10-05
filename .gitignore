@@ -10,3 +10,6 @@ __pycache__/
 captures/
 .env.staging
 deploy/staging/images.env
+
+# produced by tooling around the build (never source)
+archive.zip

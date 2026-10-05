@@ -16,13 +16,19 @@ type EventOutboxRepository interface {
 	ListUnpublished(ctx context.Context, limit int) ([]events.Event, error)
 	// MarkPublished records the publication of the given event ids.
 	MarkPublished(ctx context.Context, eventIDs []string, at time.Time) error
-	// Purge deletes events published before `before`.
+	// ClaimForFanOut leases up to limit events whose deliveries for the tenant do not exist yet, oldest first. The lease keeps other
+	// workers off them for `lease`; a worker that dies leaves them to be claimed again.
+	ClaimForFanOut(ctx context.Context, limit int, lease time.Duration) ([]events.Event, error)
+	// MarkFannedOut records that the deliveries of the given events exist. An event leaves the outbox's purge window only after this AND
+	// MarkPublished.
+	MarkFannedOut(ctx context.Context, eventIDs []string, at time.Time) error
+	// Purge deletes events that were published AND fanned out before `before`.
 	Purge(ctx context.Context, before time.Time) (int64, error)
 	// EraseContact deletes the events of the tenant that are about the contact (payload.from == number), published or not:
 	// an accepted inbound event waits here until it is published, and keeps the text and the number while it does.
 	EraseContact(ctx context.Context, tenantID, number string) (int64, error)
-	// PendingStats counts the accepted events that are not on the bus yet and the age of the oldest one (by the store's clock). A
-	// growing age means nobody is publishing the outbox (the reconciler is down): accepted inbound messages are safe but late.
+	// PendingStats counts the accepted events whose deliveries for the tenant do not exist yet and the age of the oldest one (by the
+	// store's clock). A growing age means nobody is fanning the outbox out (the worker is down): accepted events are safe but late.
 	PendingStats(ctx context.Context) (count int64, oldest time.Duration, err error)
 }
 

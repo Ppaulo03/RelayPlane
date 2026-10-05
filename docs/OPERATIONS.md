@@ -193,9 +193,11 @@ decidir (monitore `relayplane_outbound_barrier_deferrals_total{reason="unknown"}
 sozinha; a mensagem segue `UNKNOWN` e a ordem relativa a ela deixa de ser garantida.
 
 ### Outbox de eventos (mensagens recebidas e status)
-Todo evento aceito (mensagem recebida, recibo, mudança de sessão, status de envio) é gravado em `event_outbox` na mesma transação da chave de dedupe e **só então** o provedor recebe 200. O reconciler o publica no barramento a cada `OUTBOX_INTERVAL`
-(padrão 250 ms), então **o reconciler precisa estar rodando** para que eventos recebidos cheguem ao tenant. Se ele parar (ou o Redis cair), nada se perde, mas os eventos ficam atrasados:
-`relayplane_event_outbox_pending` e `relayplane_event_outbox_oldest_seconds`; alerta `RelayPlaneEventOutboxStalled` (> 30 s). Linhas publicadas são purgadas depois de algum tempo.
+Todo evento público para o tenant (mensagem recebida, recibo, mudança de sessão, status de envio, mídia resolvida, reconciliação) **nasce no `event_outbox`**, na mesma transação do fato que o produz (a chave de dedupe, a mudança de estado, o fechamento do job de mídia), e só então o provedor recebe 200. Nenhuma regra de domínio publica direto no Redis.
+Dois consumidores leem essa tabela, cada um com o seu marco:
+* **o worker** cria as entregas do tenant a partir do **banco** (`fanout_at`; não passa pelo Redis). Por isso **o worker precisa estar rodando** para o tenant ser avisado, e uma queda ou perda do Redis não atrasa nem perde nada para ele. Métricas: `relayplane_event_outbox_pending` e `relayplane_event_outbox_oldest_seconds` (eventos aceitos sem entrega criada); alerta `RelayPlaneTenantFanOutStalled` (> 30 s);
+* **o reconciler** publica no barramento a cada `OUTBOX_INTERVAL` (padrão 250 ms) para os consumidores **internos** (`published_at`); alerta `RelayPlaneEventOutboxStalled`.
+Uma linha só é purgada (depois de 24 h) quando os dois marcos existem: a entrega ao tenant não depende de nenhuma cópia que viva só no Redis.
 
 ### Outbox
 `outbox` guarda cada comando aceito até a publicação (gateway publica de imediato; o reconciler varre a cada 1 s e republica comandos

@@ -15,9 +15,11 @@ import (
 )
 
 type outboxEvent struct {
-	ev        events.Event
-	created   time.Time
-	published time.Time
+	ev         events.Event
+	created    time.Time
+	published  time.Time
+	fanout     time.Time // the tenant's deliveries exist
+	leaseUntil time.Time // a fan-out worker holds it until then
 }
 
 // emitOutbound records the tenant-facing event of a message that just entered m.Status. It runs inside the
@@ -62,6 +64,42 @@ func (r eventsRepo) ListUnpublished(_ context.Context, limit int) ([]events.Even
 	return out, nil
 }
 
+func (r eventsRepo) ClaimForFanOut(_ context.Context, limit int, lease time.Duration) ([]events.Event, error) {
+	r.s.mu.Lock()
+	defer r.s.mu.Unlock()
+	if limit <= 0 {
+		limit = 100
+	}
+	now := r.s.Now()
+	var out []events.Event
+	for _, e := range r.s.eventOutbox {
+		if !e.fanout.IsZero() || e.leaseUntil.After(now) {
+			continue
+		}
+		e.leaseUntil = now.Add(lease)
+		out = append(out, e.ev)
+		if len(out) >= limit {
+			break
+		}
+	}
+	return out, nil
+}
+
+func (r eventsRepo) MarkFannedOut(_ context.Context, ids []string, at time.Time) error {
+	r.s.mu.Lock()
+	defer r.s.mu.Unlock()
+	want := map[string]bool{}
+	for _, id := range ids {
+		want[id] = true
+	}
+	for _, e := range r.s.eventOutbox {
+		if want[e.ev.EventID] && e.fanout.IsZero() {
+			e.fanout, e.leaseUntil = at, time.Time{}
+		}
+	}
+	return nil
+}
+
 func (r eventsRepo) MarkPublished(_ context.Context, ids []string, at time.Time) error {
 	r.s.mu.Lock()
 	defer r.s.mu.Unlock()
@@ -83,7 +121,7 @@ func (r eventsRepo) Purge(_ context.Context, before time.Time) (int64, error) {
 	var keep []*outboxEvent
 	var n int64
 	for _, e := range r.s.eventOutbox {
-		if !e.published.IsZero() && e.published.Before(before) {
+		if !e.published.IsZero() && !e.fanout.IsZero() && e.published.Before(before) {
 			n++
 			continue
 		}
@@ -100,7 +138,7 @@ func (r eventsRepo) PendingStats(_ context.Context) (int64, time.Duration, error
 	var oldest time.Duration
 	now := r.s.Now()
 	for _, e := range r.s.eventOutbox {
-		if !e.published.IsZero() {
+		if !e.fanout.IsZero() {
 			continue
 		}
 		n++

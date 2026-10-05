@@ -99,13 +99,14 @@ func (r inboundMediaRepo) Retry(_ context.Context, id string, next time.Time, la
 	return nil
 }
 
-func (r inboundMediaRepo) Done(_ context.Context, id string, at time.Time) error {
+func (r inboundMediaRepo) Complete(_ context.Context, id string, ev events.Event, at time.Time) error {
 	r.s.mu.Lock()
 	defer r.s.mu.Unlock()
 	j, err := r.row(id)
 	if err != nil {
 		return err
 	}
+	r.s.queueEvent(ev) // the event and the closing of the job under one lock: the in-memory analogue of the SQL transaction
 	j.Stage, j.DoneAt, j.leaseUntil, j.Ref = media.StageDone, at, time.Time{}, nil
 	return nil
 }

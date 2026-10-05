@@ -19,8 +19,9 @@ type InboundMediaRepository interface {
 	Resolve(ctx context.Context, id string, ev events.Event) error
 	// Retry counts a failed attempt and schedules the next one (the lease is released).
 	Retry(ctx context.Context, id string, next time.Time, lastErr string) error
-	// Done marks the job as published.
-	Done(ctx context.Context, id string, at time.Time) error
+	// Complete closes the job AND queues its resolved event in the event outbox, atomically: once the job is DONE the event exists in the
+	// database, so a broker that loses it cannot lose the message.
+	Complete(ctx context.Context, id string, ev events.Event, at time.Time) error
 	// Purge deletes jobs finished before `before`.
 	Purge(ctx context.Context, before time.Time) (int64, error)
 	// EraseContact deletes the jobs of the tenant whose message came from the contact.

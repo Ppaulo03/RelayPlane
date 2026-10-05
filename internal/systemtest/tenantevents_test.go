@@ -242,8 +242,8 @@ func TestTenantEvents_EndpointOutageIsRetriedWithoutLoss(t *testing.T) {
 
 var start time.Time
 
-// The broker is down while messages are accepted: the status changes are already durable, and the events are
-// published (and delivered) once the broker is back. Nothing is lost between the database and the bus.
+// The broker is down while messages are accepted: the status changes are already durable and the tenant is told anyway (its deliveries are
+// made from the database, not from the broker); the broker only carries the events for internal consumers once it is back.
 func TestTenantEvents_BrokerOutageLosesNothing(t *testing.T) {
 	e := NewEnv(t)
 	inst := e.CreateInstance(e.Tenant, "a", true)
@@ -261,16 +261,11 @@ func TestTenantEvents_BrokerOutageLosesNothing(t *testing.T) {
 	for _, id := range ids {
 		e.WaitMessage(id, messaging.StatusAccepted) // the commands use the queue, not the bus
 	}
-	time.Sleep(150 * time.Millisecond)
-	if n := len(e.Receiver.Accepted(hookURL)); n != 0 {
-		t.Fatalf("nothing can be delivered while the bus is down: %d", n)
-	}
 	pending, _ := e.Repos.Events.ListUnpublished(bg, 100)
 	if len(pending) < 3 {
-		t.Fatalf("the status changes must be waiting in the durable outbox: %d", len(pending))
+		t.Fatalf("the status changes must be waiting in the durable outbox for the broker: %d", len(pending))
 	}
-	e.Bus.Down.Store(false)
-	Eventually(t, 15*time.Second, "events delivered after the bus recovered", func() bool {
+	Eventually(t, 15*time.Second, "events delivered to the tenant WHILE the bus is down", func() bool {
 		got := outboundStatuses(t, e.Receiver.Accepted(hookURL))
 		for _, id := range ids {
 			if _, ok := got[id+"/ACCEPTED"]; !ok {
@@ -278,6 +273,11 @@ func TestTenantEvents_BrokerOutageLosesNothing(t *testing.T) {
 			}
 		}
 		return true
+	})
+	e.Bus.Down.Store(false)
+	Eventually(t, 15*time.Second, "the broker catches up with what it missed", func() bool {
+		left, _ := e.Repos.Events.ListUnpublished(bg, 100)
+		return len(left) == 0
 	})
 }
 

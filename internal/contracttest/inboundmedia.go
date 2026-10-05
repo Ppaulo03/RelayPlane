@@ -91,8 +91,18 @@ func inboundMediaContract(t *testing.T, f RepoFactory) {
 	if c, _ := repo.Counts(ctx, now.Add(3*time.Hour)); c.Publish != 1 || c.Download != 1 {
 		t.Errorf("counts: %+v", c)
 	}
-	if err := repo.Done(ctx, "med_1", now.Add(3*time.Hour)); err != nil {
+	if err := repo.Complete(ctx, "med_1", j1.Event, now.Add(3*time.Hour)); err != nil {
 		t.Fatal(err)
+	}
+	// the resolved event is in the event outbox the moment the job is DONE: the broker is not the only copy
+	if got, err := fx.r.Events.ClaimForFanOut(ctx, 10, time.Minute); err != nil || len(got) != 1 || got[0].EventID != "evt_1" {
+		t.Errorf("Complete must queue the resolved event in the outbox: %v %v", got, err)
+	}
+	if err := repo.Complete(ctx, "med_1", j1.Event, now.Add(3*time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if left, _ := fx.r.Events.ClaimForFanOut(ctx, 10, time.Minute); len(left) != 0 {
+		t.Errorf("completing twice queues the event once (the first claim still holds its lease): %v", left)
 	}
 	if rest, _ := repo.ClaimDue(ctx, now.Add(4*time.Hour), time.Minute, 10); len(rest) != 1 || rest[0].ID != "med_2" {
 		t.Errorf("a done job is never claimed again: %+v", rest)

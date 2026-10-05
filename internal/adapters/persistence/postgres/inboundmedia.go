@@ -124,8 +124,20 @@ func (r inboundMediaRepo) Retry(ctx context.Context, id string, next time.Time, 
 	return r.exec(ctx, `UPDATE inbound_media SET attempts=attempts+1, next_attempt_at=$2, last_error=$3, lease_until=NULL WHERE id=$1`, id, next, lastErr)
 }
 
-func (r inboundMediaRepo) Done(ctx context.Context, id string, at time.Time) error {
-	return r.exec(ctx, `UPDATE inbound_media SET stage='DONE', done_at=$2, lease_until=NULL, ref='{}' WHERE id=$1`, id, at)
+func (r inboundMediaRepo) Complete(ctx context.Context, id string, ev events.Event, at time.Time) error {
+	return r.s.withTx(ctx, func(tx pgx.Tx) error {
+		if err := insertEventOutbox(ctx, tx, ev); err != nil {
+			return err
+		}
+		tag, err := tx.Exec(ctx, `UPDATE inbound_media SET stage='DONE', done_at=$2, lease_until=NULL, ref='{}' WHERE id=$1`, id, at)
+		if err != nil {
+			return err
+		}
+		if tag.RowsAffected() == 0 {
+			return fmt.Errorf("%w: inbound media job %s", errs.ErrNotFound, id) // erased meanwhile: the event must not be queued either
+		}
+		return nil
+	})
 }
 
 func (r inboundMediaRepo) Purge(ctx context.Context, before time.Time) (int64, error) {

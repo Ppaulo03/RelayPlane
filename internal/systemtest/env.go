@@ -94,12 +94,18 @@ type RecBus struct {
 	log []events.Event
 	// Down makes Publish fail (the broker is unavailable).
 	Down atomic.Bool
+	// Drop makes Publish "succeed" and lose the event (the broker answered OK and then lost its data, e.g. a Redis wiped before any
+	// consumer read the entry).
+	Drop atomic.Bool
 }
 
 // Publish implements ports.EventBus.
 func (b *RecBus) Publish(ctx context.Context, ev events.Event) error {
 	if b.Down.Load() {
 		return errors.New("event bus unavailable")
+	}
+	if b.Drop.Load() {
+		return nil
 	}
 	if err := b.EventBus.Publish(ctx, ev); err != nil {
 		return err
@@ -186,7 +192,7 @@ func NewEnv(t *testing.T) *Env {
 		Retry: subscription.RetryPolicy{Schedule: []time.Duration{20 * time.Millisecond, 20 * time.Millisecond, 20 * time.Millisecond, 20 * time.Millisecond, 20 * time.Millisecond, 20 * time.Millisecond}},
 		Poll:  5 * time.Millisecond, Breaker: delivery.NewBreaker(1000, time.Millisecond, time.Millisecond)}
 
-	e.MediaIngest = &worker.MediaIngestor{Repos: e.Repos, Providers: reg, Blob: e.Blob, Bus: e.Bus, Metrics: e.Metrics, Log: log,
+	e.MediaIngest = &worker.MediaIngestor{Repos: e.Repos, Providers: reg, Blob: e.Blob, Metrics: e.Metrics, Log: log,
 		MaxBytes: cfg.EffectiveInboundMaxBytes(), TTL: cfg.EffectiveInboundTTL(), Policy: cfg.MediaPolicy,
 		Poll: 5 * time.Millisecond, MaxAttempts: 4, Backoff: func(int) time.Duration { return 5 * time.Millisecond }}
 

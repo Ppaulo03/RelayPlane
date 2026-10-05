@@ -498,6 +498,7 @@ func TestFailure_ReconcilerRestartIsIdempotent(t *testing.T) {
 	if got.ObservedState != instance.Connected {
 		t.Fatalf("observed %s", got.ObservedState)
 	}
+	e.Flush() // the reconciler's events go through the outbox
 	changes := 0
 	for _, ev := range e.Bus.Published() {
 		if ev.EventType == events.InstanceStatusChanged && ev.InstanceID == inst.ID {
@@ -769,6 +770,7 @@ func TestProjector_StaleEventOfPreviousOwnerNeverAffectsTheNewAssignment(t *test
 		t.Fatal(err)
 	}
 	var carried bool
+	e.Flush()
 	for _, ev := range e.Bus.Published() {
 		if ev.EventType == events.InstanceStatusChanged && ev.SourceAssignment != nil &&
 			ev.SourceAssignment.NodeID == inst.NodeID && ev.SourceAssignment.Epoch == 1 {

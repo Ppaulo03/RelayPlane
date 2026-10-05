@@ -56,8 +56,8 @@ func TestInbound_AcceptedEventSurvivesTheBrokerBeingDown(t *testing.T) {
 	}
 }
 
-// ... and all the way to the tenant: the webhook is delivered even though the broker was down when the message arrived.
-func TestInbound_AcceptedEventIsDeliveredToTheTenantAfterAnOutage(t *testing.T) {
+// ... and all the way to the tenant, with the broker still down: the tenant's deliveries are made from the database.
+func TestInbound_AcceptedEventIsDeliveredToTheTenantWhileTheBrokerIsDown(t *testing.T) {
 	e := NewEnv(t)
 	inst := e.CreateInstance(e.Tenant, "a", true)
 	subscribe(t, e, e.Tenant, hookURL, string(events.MessageReceived))
@@ -67,12 +67,12 @@ func TestInbound_AcceptedEventIsDeliveredToTheTenantAfterAnOutage(t *testing.T) 
 	if _, err := e.App.Inbound.Handle(bg, ProviderKey, inboundBody(inst.NodeID, inst.AssignmentEpoch, recvEv(inst.ID, "wamid-outage"))); err != nil {
 		t.Fatal(err)
 	}
-	time.Sleep(200 * time.Millisecond)
-	if n := len(e.Receiver.Accepted(hookURL)); n != 0 {
-		t.Fatalf("nothing can be delivered while the broker is down: %d", n)
-	}
+	Eventually(t, 10*time.Second, "the tenant receives the message although the broker is down", func() bool { return len(e.Receiver.Accepted(hookURL)) == 1 })
 	e.Bus.Down.Store(false)
-	Eventually(t, 10*time.Second, "the tenant receives the message", func() bool { return len(e.Receiver.Accepted(hookURL)) == 1 })
+	time.Sleep(200 * time.Millisecond)
+	if n := len(e.Receiver.Accepted(hookURL)); n != 1 {
+		t.Fatalf("the broker coming back must not deliver it again: %d", n)
+	}
 }
 
 // An accepted event that has not been published yet holds the text and the number of the contact: erasing the contact removes it
