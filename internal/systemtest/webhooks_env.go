@@ -107,9 +107,16 @@ func (r *Receiver) DistinctEvents(url string) map[string]int {
 	return out
 }
 
-// StartWebhooks runs the fan-out consumer and the delivery dispatcher (what the worker binary does).
+// StartWebhooks runs the fan-out consumer and the delivery dispatcher (what the worker binary does), and the outbox publisher that
+// puts accepted events on the bus (what the reconciler binary does): inbound events reach the bus through it, as in production.
 func (e *Env) StartWebhooks() {
-	e.StartOutbox() // inbound events reach the bus through the outbox, as in production
+	e.StartOutbox()
+	e.StartWebhookConsumers()
+}
+
+// StartWebhookConsumers runs ONLY the fan-out consumer and the delivery dispatcher, with the outbox publisher left alone: for a test
+// that plays the publisher itself (a crash between "published" and "marked published").
+func (e *Env) StartWebhookConsumers() {
 	e.wg.Add(2)
 	go func() { defer e.wg.Done(); _ = e.Bus.Subscribe(e.ctx, "webhook-fanout", e.FanOut.Handle) }()
 	go func() { defer e.wg.Done(); e.Dispatcher.Run(e.ctx) }()
