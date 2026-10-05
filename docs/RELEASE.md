@@ -24,10 +24,11 @@ version ─┬─ evolution  (workflow evolution-image: build único, SCAN desse
 * **Nenhum placeholder chega a um manifesto.** `deploy/kubernetes/relayplane.yaml` é um *template* (`registry.example.com/relayplane/<componente>:…@sha256:REPLACE…`); o
   `render-release` o transforma em `relayplane-<v>.yaml` e **recusa** produzir algo com placeholder, tag flutuante, digest curto, componente sem imagem ou imagem desconhecida
   (`internal/release`, testado contra o template real do repositório).
+* **O sandbox sem o repositório** (`relayplane-sandbox-<v>.tar.gz`: script, compose e as imagens deste release, mais a do simulador) sai junto; veja [SANDBOX](./SANDBOX.md#sem-clonar-o-repositório).
 * **O resultado fica no release do GitHub** (quando veio de tag) e no artefato do run: `relayplane-<v>.yaml` (Kubernetes) e `images.env` (as mesmas referências para o staging em compose).
   O resumo do run lista os digests.
 
-Primeira vez: os pacotes do GHCR nascem **privados**. Torne-os públicos ou dê ao cluster/host um segredo de pull; e em *Settings → Actions → General* o `GITHUB_TOKEN` precisa de permissão
+Pacotes do GHCR: neste repositório (público) os pacotes publicados são públicos (verificado com `docker manifest inspect` sem login no `0.3.0-rc1`), então qualquer host puxa as imagens sem segredo. Se o repositório for privado, os pacotes nascem privados: torne-os públicos ou dê ao cluster/host um segredo de pull. Em *Settings → Actions → General* o `GITHUB_TOKEN` precisa de permissão
 de escrita em pacotes.
 
 ```bash
