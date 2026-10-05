@@ -25,7 +25,7 @@ Sempre mande `idempotency_key` em envios: repetir a chamada (timeout, retry) dev
 | `message.status` | recibo cru do provedor | normalmente ignora (use `outbound_status`) |
 | `instance.status_changed` | a sessão mudou; `LOGGED_OUT` | `LOGGED_OUT` ⇒ chame `instances.get_qrcode` e peça novo QR ao titular |
 
-Envelope fixo: `schema_version`, `event_id`, `sequence`, `event_type`, `tenant_id`, `instance_id`, `timestamp`, `payload`. O SDK valida e recusa versão que não conhece.
+Envelope fixo: `schema_version` (2), `event_id`, `sequence`, `event_type`, `channel`, `tenant_id`, `instance_id`, `timestamp`, `payload`. O consumidor não vê provedor, nó nem época. O SDK valida e recusa versão que não conhece.
 
 ## 3. Três regras
 

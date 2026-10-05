@@ -41,13 +41,17 @@ type SourceAssignment struct {
 
 // Event is the canonical envelope.
 type Event struct {
-	EventID    string    `json:"event_id"`
-	EventType  Type      `json:"event_type"`
-	Provider   string    `json:"provider"`
+	EventID   string `json:"event_id"`
+	EventType Type   `json:"event_type"`
+	// Provider is INTERNAL (the adapter that produced the event): a consumer is told the CHANNEL, never the provider (see Channel).
+	Provider   string    `json:"provider,omitempty"`
 	TenantID   string    `json:"tenant_id"`
 	InstanceID string    `json:"instance_id"`
 	Timestamp  time.Time `json:"timestamp"`
-	// SourceAssignment identifies the owner that produced the event (nil only for events emitted
+	// Channel is what a tenant is told instead of the provider ("whatsapp"). It exists only on the copy POSTed to a tenant's webhook: it is
+	// derived from Provider there and never stored.
+	Channel string `json:"channel,omitempty"`
+	// SourceAssignment is INTERNAL (it never reaches a tenant): it identifies the owner that produced the event (nil only for events emitted
 	// before this field existed; consumers then fall back to the current assignment).
 	SourceAssignment *SourceAssignment `json:"source_assignment,omitempty"`
 	// TraceParent is the W3C trace context of the request that caused the event, when there is one
@@ -118,7 +122,27 @@ func (e Event) LagOrigin(fallback time.Time) time.Time {
 
 // SchemaVersion is the version of the tenant-facing event envelope and payloads (docs/events/*.json). It changes only
 // for incompatible changes; adding an optional field does not.
-const SchemaVersion = 1
+const SchemaVersion = 2
+
+// ForTenant is the copy of the event that is POSTed to a tenant's webhook: the contract's version and the delivery's sequence number, the
+// CHANNEL instead of the provider, and none of the internal fields (the owner that produced it, when it was observed or accepted).
+// Everything that builds the public envelope goes through here, so the schema tests and the dispatcher cannot drift apart.
+func (e Event) ForTenant(sequence int64) Event {
+	e.SchemaVersion, e.Sequence = SchemaVersion, sequence
+	e.Channel, e.Provider = ChannelOf(e.Provider), ""
+	e.SourceAssignment, e.ObservedAt, e.AcceptedAt = nil, nil, nil
+	return e
+}
+
+// ChannelOf is the public name of the channel a provider serves. The provider (and the node, and the epoch) are not part of the contract: a
+// consumer must not need to know how a channel is implemented, and the same channel can be served by another provider tomorrow.
+func ChannelOf(provider string) string {
+	switch provider {
+	case "evolution-v2":
+		return "whatsapp"
+	}
+	return "other"
+}
 
 // IsGroupMessage reports whether ev is a message.received from a group chat. The payload is a typed struct when the
 // event was just produced and a decoded JSON object after it crossed the bus, so both shapes are handled.

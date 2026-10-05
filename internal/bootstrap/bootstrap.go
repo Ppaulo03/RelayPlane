@@ -124,7 +124,7 @@ func New(ctx context.Context, cfg config.Config, service string) (*Runtime, erro
 	rt.App = app.New(app.Deps{Repos: repos, Providers: reg, Queue: rt.Queue, Bus: rt.Bus, Blob: rt.Blob,
 		Locker: redislock.New(rt.Redis, ""), Idem: idem, Metrics: rt.Metrics, Log: log, Cfg: acfg})
 
-	rt.FanOut = &delivery.FanOut{Repos: repos, Log: log, Metrics: rt.Metrics, ErasureKey: erKey}
+	rt.FanOut = &delivery.FanOut{Repos: repos, Log: log, Metrics: rt.Metrics, ErasureKey: erKey, MaxPendingPerSubscription: cfg.WebhookMaxPendingPerSub}
 	rt.Dispatcher = &delivery.Dispatcher{Repos: repos, ServerKey: subKey, ErasureKey: erKey, Metrics: rt.Metrics, Log: log,
 		Sender:         webhookout.New(webhookout.Config{AllowPrivate: cfg.WebhooksAllowPrivate, AllowInsecure: cfg.WebhooksAllowInsecure}),
 		RequestTimeout: cfg.WebhookDeliveryTimeout, Concurrency: cfg.WebhookDeliveryWorkers, MaxInFlightPerSubscription: cfg.WebhookMaxInFlightPerSub}

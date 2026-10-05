@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://relayplane.dev/schemas/events/v1/events.schema.json",
-  "title": "RelayPlane tenant event (webhook body), schema_version 1",
+  "$id": "https://relayplane.dev/schemas/events/v2/events.schema.json",
+  "title": "RelayPlane tenant event (webhook body), schema_version 2",
   "description": "The JSON body RelayPlane POSTs to a subscription. Incompatible changes bump schema_version; adding an OPTIONAL field does not (consumers must ignore unknown fields, but this schema forbids them so that every addition is written down here).",
   "oneOf": [
     {"$ref": "#/$defs/message_received"},
@@ -13,25 +13,18 @@
   "$defs": {
     "envelope_properties": {
       "properties": {
-        "schema_version": {"const": 1, "description": "Version of this contract."},
+        "schema_version": {"const": 2, "description": "Version of this contract. 2 replaced provider and source_assignment by channel."},
         "event_id": {"type": "string", "minLength": 1, "description": "Stable id of the event: the same on every redelivery. Deduplicate on it."},
         "sequence": {"type": "integer", "minimum": 1, "description": "1, 2, 3... per (subscription, instance), without gaps; a redelivery keeps its number. Reorder by it; a missing number is a delivery you never received (it may be in the dead-letter queue)."},
-        "provider": {"type": "string", "minLength": 1},
+        "channel": {"enum": ["whatsapp", "other"], "description": "The messaging channel the event is about. How it is served (the provider, the node, the epoch) is not part of the contract."},
         "tenant_id": {"type": "string", "minLength": 1},
         "instance_id": {"type": "string", "minLength": 1},
         "timestamp": {"type": "string", "format": "date-time", "description": "message.received: when the provider stamped the message (second resolution; ties are normal). Other events: when RelayPlane observed the fact."},
-        "source_assignment": {
-          "type": "object",
-          "description": "Which node/epoch produced the event.",
-          "properties": {"node_id": {"type": "string"}, "epoch": {"type": "integer"}},
-          "required": ["node_id", "epoch"],
-          "additionalProperties": false
-        },
         "traceparent": {"type": "string", "description": "W3C trace context of the request that caused the event (also sent as the traceparent header)."}
       }
     },
     "envelope_required": {
-      "required": ["schema_version", "event_id", "sequence", "event_type", "provider", "tenant_id", "instance_id", "timestamp", "payload"]
+      "required": ["schema_version", "event_id", "sequence", "event_type", "channel", "tenant_id", "instance_id", "timestamp", "payload"]
     },
 
     "message_received": {

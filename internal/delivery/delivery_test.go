@@ -517,3 +517,82 @@ func TestFanOutDropsTheDeletionNoticeOfAnErasedContact(t *testing.T) {
 		t.Fatalf("a notice accepted after the erasure is new data: %d", n)
 	}
 }
+
+// A consumer that stays down cannot fill the database: past its limit new events are born in the DLQ, with the reason, their sequence
+// numbers kept (nothing is lost silently, the gap is visible) and redeliverable once the consumer is back.
+func TestSubscriptionBacklogLimitSendsTheOverflowToTheDLQ(t *testing.T) {
+	e := newEnv(t)
+	e.fan.MaxPendingPerSubscription = 3
+	e.sub(t, "sub_a", "t1", "https://a.example.com/h")
+	e.sub(t, "sub_b", "t2", "https://b.example.com/h")
+	for i := 1; i <= 5; i++ {
+		_ = e.fan.Handle(bg, event(fmt.Sprintf("evt_%d", i), "t1", "inst_1"))
+	}
+	_ = e.fan.Handle(bg, event("evt_other", "t2", "inst_2"))
+	if n := len(e.deliveries(t, "t1", "sub_a", subscription.DeliveryPending)); n != 3 {
+		t.Fatalf("three wait: %d", n)
+	}
+	dead := e.deliveries(t, "t1", "sub_a", subscription.DeliveryDead)
+	if len(dead) != 2 {
+		t.Fatalf("the overflow is in the DLQ: %d", len(dead))
+	}
+	seqs := map[int64]bool{}
+	for _, d := range dead {
+		seqs[d.Sequence] = true
+		if !strings.Contains(d.LastError, "backlog limit") {
+			t.Errorf("the reason is recorded: %q", d.LastError)
+		}
+	}
+	if !seqs[4] || !seqs[5] {
+		t.Errorf("sequence numbers are kept, gapless: %v", seqs)
+	}
+	if n := len(e.deliveries(t, "t2", "sub_b", subscription.DeliveryPending)); n != 1 {
+		t.Errorf("another tenant's subscription is not affected: %d", n)
+	}
+	// redeliverable from the DLQ
+	if err := e.repos.Deliveries.Requeue(bg, "t1", dead[0].ID, e.clock.Now()); err != nil {
+		t.Fatalf("an overflowed delivery can be redelivered: %v", err)
+	}
+	// 0 = unlimited
+	e2 := newEnv(t)
+	e2.sub(t, "sub_a", "t1", "https://a.example.com/h")
+	for i := 1; i <= 8; i++ {
+		_ = e2.fan.Handle(bg, event(fmt.Sprintf("evt_%d", i), "t1", "inst_1"))
+	}
+	if n := len(e2.deliveries(t, "t1", "sub_a", subscription.DeliveryPending)); n != 8 {
+		t.Errorf("no limit: %d", n)
+	}
+}
+
+// What a tenant is told: the channel, never the provider, the node or the epoch.
+func TestTheWireEnvelopeNamesTheChannelAndHidesTheImplementation(t *testing.T) {
+	e := newEnv(t)
+	e.sub(t, "sub_a", "t1", "https://a.example.com/h")
+	ev := event("evt_wire", "t1", "inst_1")
+	ev.Provider = "evolution-v2"
+	ev.SourceAssignment = &events.SourceAssignment{NodeID: "node-01", Epoch: 7}
+	_ = e.fan.Handle(bg, ev)
+	if _, err := e.disp.RunOnce(bg); err != nil {
+		t.Fatal(err)
+	}
+	if e.sender.count() != 1 {
+		t.Fatalf("sent %d", e.sender.count())
+	}
+	var body map[string]any
+	if err := json.Unmarshal(e.sender.reqs[0].Body, &body); err != nil {
+		t.Fatal(err)
+	}
+	if body["channel"] != "whatsapp" || body["schema_version"] != float64(2) {
+		t.Errorf("channel and version: %v %v", body["channel"], body["schema_version"])
+	}
+	for _, k := range []string{"provider", "source_assignment", "observed_at", "accepted_at"} {
+		if _, ok := body[k]; ok {
+			t.Errorf("%s must not reach the tenant", k)
+		}
+	}
+	// the stored event keeps what the system needs
+	got := e.deliveries(t, "t1", "sub_a", subscription.DeliveryDelivered)
+	if len(got) != 1 || got[0].Event.Provider != "evolution-v2" || got[0].Event.SourceAssignment == nil {
+		t.Errorf("the stored event is unchanged: %+v", got)
+	}
+}

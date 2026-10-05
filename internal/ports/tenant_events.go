@@ -36,6 +36,9 @@ type EventOutboxRepository interface {
 // it: a subscription of another tenant is indistinguishable from a missing one (ErrNotFound).
 type SubscriptionRepository interface {
 	Create(ctx context.Context, s subscription.Subscription) error
+	// CreateIfBelow creates the subscription only if the tenant has fewer than max of them, as ONE atomic step (errs.ErrConflict otherwise):
+	// two requests at the limit cannot both get in. max <= 0 means no limit.
+	CreateIfBelow(ctx context.Context, s subscription.Subscription, max int) error
 	Get(ctx context.Context, tenantID, id string) (*subscription.Subscription, error)
 	// GetByID is for the delivery pipeline, which already holds a trusted subscription id.
 	GetByID(ctx context.Context, id string) (*subscription.Subscription, error)
@@ -48,7 +51,6 @@ type SubscriptionRepository interface {
 	RotateSecret(ctx context.Context, tenantID, id string, at time.Time) (version int, err error)
 	// Delete removes the subscription and its deliveries.
 	Delete(ctx context.Context, tenantID, id string) error
-	CountByTenant(ctx context.Context, tenantID string) (int, error)
 }
 
 // DeliveryRepository persists webhook deliveries. Enqueue is idempotent per (subscription, event): re-consuming an

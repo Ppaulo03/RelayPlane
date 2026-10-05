@@ -21,6 +21,11 @@ groups:
         expr: increase(relayplane_reconciliation_failure_total[10m]) > 5
         labels: {severity: warn}
         annotations: {summary: "Reconciliation passes are failing"}
+      - alert: RelayPlaneWebhookBacklogOverflow
+        expr: increase(relayplane_webhook_backlog_overflow_total[10m]) > 0
+        for: 0m
+        labels: {severity: page}
+        annotations: {summary: "a tenant subscription reached its backlog limit and new events are being sent to its DLQ (WEBHOOK_MAX_PENDING_PER_SUBSCRIPTION): the consumer is down or too slow; redeliver from the DLQ when it is back"}
       - alert: RelayPlaneTenantFanOutStalled
         expr: relayplane_event_outbox_oldest_seconds > 30
         for: 1m
