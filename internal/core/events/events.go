@@ -124,6 +124,12 @@ func (e Event) LagOrigin(fallback time.Time) time.Time {
 // for incompatible changes; adding an optional field does not.
 const SchemaVersion = 2
 
+// NeedsProjection says whether the catalog has something to learn from the event: delivery receipts move outbound messages, and a session
+// state change moves an instance. Every other event is born already projected.
+func NeedsProjection(t Type) bool {
+	return t == MessageStatus || t == InstanceStatusChanged
+}
+
 // ForTenant is the copy of the event that is POSTed to a tenant's webhook: the contract's version and the delivery's sequence number, the
 // CHANNEL instead of the provider, and none of the internal fields (the owner that produced it, when it was observed or accepted).
 // Everything that builds the public envelope goes through here, so the schema tests and the dispatcher cannot drift apart.

@@ -20,6 +20,8 @@ type outboxEvent struct {
 	published  time.Time
 	fanout     time.Time // the tenant's deliveries exist
 	leaseUntil time.Time // a fan-out worker holds it until then
+	projected  time.Time // the catalog applied it (born set when the catalog has nothing to learn from the event)
+	projLease  time.Time // a projector holds it until then
 }
 
 // emitOutbound records the tenant-facing event of a message that just entered m.Status. It runs inside the
@@ -42,7 +44,11 @@ func (s *Store) queueEvent(ev events.Event) {
 			return
 		}
 	}
-	s.eventOutbox = append(s.eventOutbox, &outboxEvent{ev: ev, created: s.Now()})
+	oe := &outboxEvent{ev: ev, created: s.Now()}
+	if !events.NeedsProjection(ev.EventType) {
+		oe.projected = oe.created
+	}
+	s.eventOutbox = append(s.eventOutbox, oe)
 }
 
 // ---- events outbox ----
@@ -85,6 +91,60 @@ func (r eventsRepo) ClaimForFanOut(_ context.Context, limit int, lease time.Dura
 	return out, nil
 }
 
+func (r eventsRepo) ClaimForProjection(_ context.Context, limit int, lease time.Duration) ([]events.Event, error) {
+	r.s.mu.Lock()
+	defer r.s.mu.Unlock()
+	if limit <= 0 {
+		limit = 100
+	}
+	now := r.s.Now()
+	var out []events.Event
+	for _, e := range r.s.eventOutbox {
+		if !e.projected.IsZero() || e.projLease.After(now) {
+			continue
+		}
+		e.projLease = now.Add(lease)
+		out = append(out, e.ev)
+		if len(out) >= limit {
+			break
+		}
+	}
+	return out, nil
+}
+
+func (r eventsRepo) MarkProjected(_ context.Context, ids []string, at time.Time) error {
+	r.s.mu.Lock()
+	defer r.s.mu.Unlock()
+	want := map[string]bool{}
+	for _, id := range ids {
+		want[id] = true
+	}
+	for _, e := range r.s.eventOutbox {
+		if want[e.ev.EventID] && e.projected.IsZero() {
+			e.projected, e.projLease = at, time.Time{}
+		}
+	}
+	return nil
+}
+
+func (r eventsRepo) ProjectionStats(_ context.Context) (int64, time.Duration, error) {
+	r.s.mu.Lock()
+	defer r.s.mu.Unlock()
+	var n int64
+	var oldest time.Duration
+	now := r.s.Now()
+	for _, e := range r.s.eventOutbox {
+		if !e.projected.IsZero() {
+			continue
+		}
+		n++
+		if age := now.Sub(e.created); age > oldest {
+			oldest = age
+		}
+	}
+	return n, oldest, nil
+}
+
 func (r eventsRepo) MarkFannedOut(_ context.Context, ids []string, at time.Time) error {
 	r.s.mu.Lock()
 	defer r.s.mu.Unlock()
@@ -121,7 +181,7 @@ func (r eventsRepo) Purge(_ context.Context, before time.Time) (int64, error) {
 	var keep []*outboxEvent
 	var n int64
 	for _, e := range r.s.eventOutbox {
-		if !e.published.IsZero() && !e.fanout.IsZero() && e.published.Before(before) {
+		if !e.published.IsZero() && !e.fanout.IsZero() && !e.projected.IsZero() && e.published.Before(before) {
 			n++
 			continue
 		}

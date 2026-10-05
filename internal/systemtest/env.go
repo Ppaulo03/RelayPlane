@@ -286,7 +286,7 @@ func (e *Env) StartMedia() {
 func (e *Env) StartProjector() {
 	e.StartOutbox() // inbound events reach the bus through the outbox, as in production
 	e.wg.Add(1)
-	go func() { defer e.wg.Done(); _ = e.Bus.Subscribe(e.ctx, "projector", e.Projector.Handle) }()
+	go func() { defer e.wg.Done(); e.Projector.Run(e.ctx) }() // from the database, as the worker binary does
 }
 
 // Stop halts background consumers (simulating a crash/restart).

@@ -112,3 +112,57 @@ func observedEmittingContract(t *testing.T, f RepoFactory) {
 		t.Errorf("an unchanged write queues no event: %v", got)
 	}
 }
+
+// What the catalog still has to learn is claimed from the outbox like the tenant fan-out: only the events it cares about (receipts, session
+// state), exclusively for the lease, each marked when applied, and an event is purgeable only when published, fanned out AND projected.
+func eventProjectionContract(t *testing.T, f RepoFactory) {
+	fx, ctx := newFixture(t, f), context.Background()
+	fx.tenant(t, "t1")
+	fx.node(t, "node-01", 5)
+	fx.instance(t, "inst_1", "t1")
+	mk := func(id string, typ events.Type) events.Event {
+		return events.Event{EventID: id, EventType: typ, TenantID: "t1", InstanceID: "inst_1", Timestamp: time.Now().UTC(), Payload: map[string]any{"from": "5562"}}
+	}
+	for i, ev := range []events.Event{mk("r1", events.MessageStatus), mk("m1", events.MessageReceived), mk("s1", events.InstanceStatusChanged), mk("r2", events.MessageStatus)} {
+		if o, err := fx.r.Dedup.Accept(ctx, "kp-"+ev.EventID, time.Hour, ev, nil); err != nil || o != 0 {
+			t.Fatalf("accept %d: %v %v", i, o, err)
+		}
+	}
+	ids := func(evs []events.Event) []string {
+		var out []string
+		for _, e := range evs {
+			out = append(out, e.EventID)
+		}
+		return out
+	}
+	if n, _, err := fx.r.Events.ProjectionStats(ctx); err != nil || n != 3 {
+		t.Fatalf("a message.received is born projected, the other three wait: %d %v", n, err)
+	}
+	a, err := fx.r.Events.ClaimForProjection(ctx, 2, time.Minute)
+	if err != nil || len(a) != 2 || a[0].EventID != "r1" || a[1].EventID != "s1" {
+		t.Fatalf("oldest first, only what the catalog cares about: %v %v", ids(a), err)
+	}
+	b, _ := fx.r.Events.ClaimForProjection(ctx, 10, time.Minute)
+	if len(b) != 1 || b[0].EventID != "r2" {
+		t.Fatalf("a claimed event is not handed out again while its lease holds: %v", ids(b))
+	}
+	if err := fx.r.Events.MarkProjected(ctx, []string{"r1", "s1", "r2"}, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if n, _, _ := fx.r.Events.ProjectionStats(ctx); n != 0 {
+		t.Errorf("all applied: %d", n)
+	}
+	// purge needs the three marks
+	if err := fx.r.Events.MarkPublished(ctx, []string{"r1", "m1", "s1", "r2"}, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if n, _ := fx.r.Events.Purge(ctx, time.Now().Add(time.Hour)); n != 0 {
+		t.Errorf("published and projected but not fanned out: kept: purged %d", n)
+	}
+	if err := fx.r.Events.MarkFannedOut(ctx, []string{"r1", "m1", "s1", "r2"}, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if n, _ := fx.r.Events.Purge(ctx, time.Now().Add(time.Hour)); n != 4 {
+		t.Errorf("all three marks: purged %d", n)
+	}
+}
