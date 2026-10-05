@@ -1,6 +1,6 @@
 # Contrato mínimo (o que quem consome precisa saber)
 
-Quem consome o RelayPlane (hoje, o `conversation_agent`) usa **cinco verbos, cinco eventos e três regras**. Todo o resto (Evolution, Baileys, outbox, lease, fencing, nodes) é interno e não faz parte do contrato.
+Quem consome o RelayPlane usa **cinco verbos, cinco eventos e três regras**. Todo o resto (Evolution, Baileys, outbox, lease, fencing, nodes) é interno e não faz parte do contrato.
 Detalhes: [`openapi.yaml`](./openapi.yaml), [`EVENTS.md`](./EVENTS.md), [`events/events.schema.json`](./events/events.schema.json).
 
 ## 1. Cinco verbos
