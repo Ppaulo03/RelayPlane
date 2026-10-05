@@ -192,7 +192,7 @@ func NewEnv(t *testing.T) *Env {
 		Retry: subscription.RetryPolicy{Schedule: []time.Duration{20 * time.Millisecond, 20 * time.Millisecond, 20 * time.Millisecond, 20 * time.Millisecond, 20 * time.Millisecond, 20 * time.Millisecond}},
 		Poll:  5 * time.Millisecond, Breaker: delivery.NewBreaker(1000, time.Millisecond, time.Millisecond)}
 
-	e.MediaIngest = &worker.MediaIngestor{Repos: e.Repos, Providers: reg, Blob: e.Blob, Metrics: e.Metrics, Log: log,
+	e.MediaIngest = &worker.MediaIngestor{Repos: e.Repos, Providers: reg, Blob: e.Blob, ErasureKey: e.App.Deps.Cfg.ErasureKey, Metrics: e.Metrics, Log: log,
 		MaxBytes: cfg.EffectiveInboundMaxBytes(), TTL: cfg.EffectiveInboundTTL(), Policy: cfg.MediaPolicy,
 		Poll: 5 * time.Millisecond, MaxAttempts: 4, Backoff: func(int) time.Duration { return 5 * time.Millisecond }}
 

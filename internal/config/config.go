@@ -97,7 +97,10 @@ type Config struct {
 
 	// Tenant webhook subscriptions. SubscriptionSecret derives the per-subscription signing secrets; when
 	// empty it is derived from WEBHOOK_SECRET (with domain separation).
-	SubscriptionSecret        string
+	SubscriptionSecret string
+	// ErasureKey keys the tombstones of erased contacts; when empty it is derived from WEBHOOK_SECRET. Keep it stable: rotating it makes the
+	// existing tombstones stop matching (data erased long ago could then come back if an old event surfaces).
+	ErasureKey                string
 	WebhooksMaxPerTenant      int
 	WebhooksAllowInsecure     bool // http:// destinations (default: development only)
 	WebhooksAllowPrivate      bool // loopback/private destinations (default: development only)
@@ -131,7 +134,7 @@ func Load() (Config, error) {
 		MigrationVerifyTimeout: getDur("MIGRATION_VERIFY_TIMEOUT", 10*time.Minute),
 		UnknownBarrierTimeout:  getDur("UNKNOWN_BARRIER_TIMEOUT", 0),
 		IdempotencyTTL:         getDur("IDEMPOTENCY_TTL", 24*time.Hour),
-		SubscriptionSecret:     os.Getenv("SUBSCRIPTION_SECRET"),
+		SubscriptionSecret:     os.Getenv("SUBSCRIPTION_SECRET"), ErasureKey: os.Getenv("ERASURE_KEY"),
 		WebhooksMaxPerTenant:   getInt("WEBHOOKS_MAX_PER_TENANT", 10),
 		WebhookDeliveryTimeout: getDur("WEBHOOK_DELIVERY_TIMEOUT", 5*time.Second),
 		WebhookDeliveryWorkers: getInt("WEBHOOK_DELIVERY_WORKERS", 8), WebhookMaxInFlightPerSub: getInt("WEBHOOK_MAX_IN_FLIGHT_PER_SUBSCRIPTION", 32), OutboxInterval: getDur("OUTBOX_INTERVAL", 250*time.Millisecond),
@@ -179,6 +182,9 @@ func (c Config) Validate() error {
 	need("WEBHOOK_SECRET", c.WebhookSecret)
 	if len(missing) > 0 {
 		return fmt.Errorf("missing required configuration: %s", strings.Join(missing, ", "))
+	}
+	if c.Env == "production" && c.ErasureKey != "" && len(c.ErasureKey) < 16 {
+		return fmt.Errorf("ERASURE_KEY must have at least 16 characters in production")
 	}
 	if c.Env == "production" && c.SubscriptionSecret != "" && len(c.SubscriptionSecret) < 16 {
 		return fmt.Errorf("SUBSCRIPTION_SECRET must have at least 16 characters in production")

@@ -5,6 +5,7 @@
 package events
 
 import (
+	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -68,9 +69,27 @@ type Event struct {
 	AcceptedAt *time.Time `json:"accepted_at,omitempty"`
 }
 
-// ContactNumber is the phone number a message.received event is about (the subject of an erasure request); "" for any other event.
+// ErasureSubject is what an erasure tombstone stores in place of a phone number: an HMAC of it with a server-side key, so the table alone
+// cannot be turned back into numbers by trying them all (a phone number has little entropy; a plain hash would not protect it).
+func ErasureSubject(key []byte, number string) string {
+	m := hmac.New(sha256.New, key)
+	m.Write([]byte("relayplane/contact-erasure/v1|" + number))
+	return hex.EncodeToString(m.Sum(nil))
+}
+
+// ErasureSubject is the tombstone subject of the contact this event is about, or "" when it is about nobody.
+func (e Event) ErasureSubject(key []byte) string {
+	n := e.ContactNumber()
+	if n == "" {
+		return ""
+	}
+	return ErasureSubject(key, n)
+}
+
+// ContactNumber is the phone number an inbound event is about (the subject of an erasure request): the author of a message.received or of a
+// message.deleted (both carry the person's number in payload.from); "" for any other event.
 func (e Event) ContactNumber() string {
-	if e.EventType != MessageReceived {
+	if e.EventType != MessageReceived && e.EventType != MessageDeleted {
 		return ""
 	}
 	raw, err := json.Marshal(e.Payload)

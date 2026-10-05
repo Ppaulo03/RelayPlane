@@ -1,6 +1,8 @@
 package events
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"strings"
 	"testing"
@@ -36,5 +38,37 @@ func TestEventCarriesTheSourceAssignment(t *testing.T) {
 	var back Event
 	if err := json.Unmarshal(raw, &back); err != nil || back.SourceAssignment == nil || back.SourceAssignment.Epoch != 10 {
 		t.Fatalf("round trip: %+v %v", back, err)
+	}
+}
+
+func TestErasureSubjectIsKeyedAndNotAPlainHash(t *testing.T) {
+	key := []byte("k1")
+	a := ErasureSubject(key, "5562988887777")
+	if a == "" || a != ErasureSubject(key, "5562988887777") {
+		t.Fatal("the subject of a number is stable for one key")
+	}
+	if a == ErasureSubject([]byte("k2"), "5562988887777") {
+		t.Error("another key, another subject: the table alone must not be enough to try numbers")
+	}
+	sum := sha256.Sum256([]byte("5562988887777"))
+	if a == hex.EncodeToString(sum[:]) {
+		t.Error("it must not be a plain SHA-256 of the number (a phone number has little entropy)")
+	}
+	if ErasureSubject(key, "5562988887777") == ErasureSubject(key, "5562988887778") {
+		t.Error("different numbers, different subjects")
+	}
+}
+
+func TestOnlyInboundMessagesAndTheirDeletionsAreAboutAContact(t *testing.T) {
+	p := map[string]any{"from": "5562988887777"}
+	for _, typ := range []Type{MessageReceived, MessageDeleted} {
+		if got := (Event{EventType: typ, Payload: p}).ContactNumber(); got != "5562988887777" {
+			t.Errorf("%s is about its author: %q", typ, got)
+		}
+	}
+	for _, typ := range []Type{MessageStatus, MessageOutboundStatus, InstanceStatusChanged} {
+		if got := (Event{EventType: typ, Payload: p}).ContactNumber(); got != "" {
+			t.Errorf("%s is about nobody: %q", typ, got)
+		}
 	}
 }

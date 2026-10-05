@@ -99,6 +99,7 @@ func RepositoryContract(t *testing.T, factory RepoFactory) {
 	t.Run("Erasure", func(t *testing.T) { erasureContract(t, factory) })
 	t.Run("DeliveryClaims", func(t *testing.T) { deliveryClaimsContract(t, factory) })
 	t.Run("ErasureTombstone", func(t *testing.T) { erasureTombstoneContract(t, factory) })
+	t.Run("PurgePendingRespectsLease", func(t *testing.T) { purgePendingRespectsLeaseContract(t, factory) })
 	t.Run("EventFanOut", func(t *testing.T) { eventFanOutContract(t, factory) })
 	t.Run("ObservedEmitting", func(t *testing.T) { observedEmittingContract(t, factory) })
 	t.Run("MessageList", func(t *testing.T) { messageListContract(t, factory) })

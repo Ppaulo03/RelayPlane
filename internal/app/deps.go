@@ -22,6 +22,10 @@ import (
 
 // Config holds application-level tunables.
 type Config struct {
+	// ErasureKey keys the tombstones of erased contacts (an HMAC of the number, never the number). It must stay the same for as long as
+	// erasures should keep holding: changing it makes the old tombstones stop matching.
+	ErasureKey []byte
+
 	DefaultProvider string            // e.g. "evolution-v2"
 	ProviderAliases map[string]string // public name -> provider key, e.g. "evolution" -> "evolution-v2"
 

@@ -39,7 +39,7 @@ data:
   # id/endpoint/capacity per node; api_key values come from the Secret (PROVIDER_NODES is assembled by your secret tooling)
 ---
 # Expected Secret `relayplane-secrets` keys: DATABASE_URL, BLOB_STORE_ACCESS_KEY, BLOB_STORE_SECRET_KEY,
-# WEBHOOK_SECRET, SUBSCRIPTION_SECRET (optional), ADMIN_API_KEY, PROVIDER_NODES, EVOLUTION_API_KEY, EVOLUTION_DATABASE_URI_BASE
+# WEBHOOK_SECRET, SUBSCRIPTION_SECRET (optional), ERASURE_KEY (optional, keep it STABLE), ADMIN_API_KEY, PROVIDER_NODES, EVOLUTION_API_KEY, EVOLUTION_DATABASE_URI_BASE
 apiVersion: apps/v1
 kind: Deployment
 metadata: {name: gateway, namespace: relayplane}

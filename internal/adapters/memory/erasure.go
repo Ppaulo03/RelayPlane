@@ -111,12 +111,12 @@ func (r deliveriesRepo) PurgeDead(_ context.Context, before time.Time) (int64, e
 	return n, nil
 }
 
-func (r deliveriesRepo) PurgePending(_ context.Context, before time.Time) (int64, error) {
+func (r deliveriesRepo) PurgePending(_ context.Context, before, now time.Time) (int64, error) {
 	r.s.mu.Lock()
 	defer r.s.mu.Unlock()
 	var n int64
 	for id, d := range r.s.deliveries {
-		if d.Status == subscription.DeliveryPending && d.CreatedAt.Before(before) {
+		if d.Status == subscription.DeliveryPending && d.CreatedAt.Before(before) && !d.leaseUntil.After(now) {
 			delete(r.s.deliveries, id)
 			n++
 		}

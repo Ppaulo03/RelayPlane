@@ -33,6 +33,8 @@ type FanOut struct {
 	Now     func() time.Time
 	Metrics *observability.Metrics
 
+	ErasureKey []byte // keys the erasure tombstones (events.ErasureSubject)
+
 	Batch int           // events claimed per pass (default 100)
 	Lease time.Duration // how long a claimed event is exclusive (default 10s: a worker that dies leaves it to another)
 	Poll  time.Duration // pause when idle (default 100ms)
@@ -104,7 +106,7 @@ func (f *FanOut) Handle(ctx context.Context, ev events.Event) error {
 		return nil
 	}
 	// the contact was erased after this message was accepted: the event was already on its way, it must not bring the data back
-	if gone, err := f.Repos.Erasures.Erased(ctx, ev); err != nil {
+	if gone, err := ports.ErasedEvent(ctx, f.Repos.Erasures, f.ErasureKey, ev); err != nil {
 		return err
 	} else if gone {
 		f.Log.InfoContext(ctx, "event of an erased contact dropped before delivery", "event_id", ev.EventID)
@@ -134,7 +136,7 @@ func (f *FanOut) Handle(ctx context.Context, ev events.Event) error {
 	}
 	// write first, ask after: an erasure that landed while the deliveries were being created marked the contact BEFORE it deleted, so
 	// either it deleted them or this check sees the mark
-	if gone, err := f.Repos.Erasures.Erased(ctx, ev); err != nil {
+	if gone, err := ports.ErasedEvent(ctx, f.Repos.Erasures, f.ErasureKey, ev); err != nil {
 		return err
 	} else if gone {
 		_, err := f.Repos.Deliveries.DeleteByEvent(ctx, ev.EventID)
@@ -148,10 +150,12 @@ type Dispatcher struct {
 	Repos     ports.Repositories
 	Sender    ports.WebhookSender
 	ServerKey []byte
-	Retry     subscription.RetryPolicy
-	Metrics   *observability.Metrics
-	Log       *slog.Logger
-	Now       func() time.Time
+	// ErasureKey keys the erasure tombstones: a delivery of a contact erased after it was claimed is dropped before it is sent.
+	ErasureKey []byte
+	Retry      subscription.RetryPolicy
+	Metrics    *observability.Metrics
+	Log        *slog.Logger
+	Now        func() time.Time
 	// Rand returns a number in [0,1) for retry jitter (default math/rand).
 	Rand func() float64
 
@@ -267,6 +271,16 @@ func (d *Dispatcher) process(ctx context.Context, dl subscription.Delivery) {
 	if sub.Paused {
 		_ = d.Repos.Deliveries.Postpone(rctx, dl.ID, d.now())
 		d.Metrics.WebhookDeliveries.WithLabelValues("postponed").Inc()
+		return
+	}
+	// the contact may have been erased after this delivery was claimed (the erasure deleted the row, but this worker holds a copy of the text):
+	// nothing may go out after the erasure returned. A POST already on the wire cannot be recalled; that limit is part of the contract.
+	if gone, err := ports.ErasedEvent(rctx, d.Repos.Erasures, d.ErasureKey, dl.Event); err != nil {
+		_ = d.Repos.Deliveries.Postpone(rctx, dl.ID, d.now()) // cannot tell: do not send, ask again
+		return
+	} else if gone {
+		_, _ = d.Repos.Deliveries.DeleteByEvent(rctx, dl.EventID)
+		d.Metrics.WebhookDeliveries.WithLabelValues("erased").Inc()
 		return
 	}
 	// the circuit is per SUBSCRIPTION: two tenants that happen to use the same host (a shared automation service) must not trip each other

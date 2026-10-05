@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/relayplane/relayplane/internal/core/errs"
+	"github.com/relayplane/relayplane/internal/core/events"
 )
 
 // ContactService erases what RelayPlane keeps about one person (a phone number) on behalf of a tenant.
@@ -28,10 +29,6 @@ type ErasureReport struct {
 	AttachmentsDeleted int       `json:"attachments_deleted"`
 	ErasedAt           time.Time `json:"erased_at"`
 }
-
-// ErasureTombstoneRetention is how long the mark of an erased contact is kept. It must outlast anything that can be in flight: an event
-// waiting in the broker for a consumer that is down, an attachment waiting for its next attempt.
-const ErasureTombstoneRetention = 30 * 24 * time.Hour
 
 // NormalizeNumber reduces what a caller typed ("+55 (62) 99999-9999") to the digits RelayPlane stores.
 func NormalizeNumber(raw string) (string, error) {
@@ -64,7 +61,7 @@ func (s *ContactService) Erase(ctx context.Context, tenantID, rawNumber string) 
 	rep := &ErasureReport{ErasedAt: at}
 	// mark FIRST: everything that was accepted before this moment and is still on its way (broker, download) is dropped by whoever
 	// holds it, and whoever writes concurrently with the deletes below sees the mark afterwards and cleans up after itself
-	if err := s.d.Repos.Erasures.Mark(ctx, tenantID, number, at); err != nil {
+	if err := s.d.Repos.Erasures.Mark(ctx, tenantID, events.ErasureSubject(s.d.Cfg.ErasureKey, number), at); err != nil {
 		return nil, fmt.Errorf("mark erasure: %w", err)
 	}
 
@@ -149,7 +146,7 @@ func (s *RetentionService) Apply(ctx context.Context, p RetentionPolicy, batch i
 		}
 	}
 	if p.PendingDeliveries > 0 {
-		stale, err := s.d.Repos.Deliveries.PurgePending(ctx, now.Add(-p.PendingDeliveries))
+		stale, err := s.d.Repos.Deliveries.PurgePending(ctx, now.Add(-p.PendingDeliveries), now)
 		if err != nil {
 			return messages, dead, err
 		}
