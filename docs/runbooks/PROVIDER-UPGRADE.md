@@ -14,6 +14,11 @@ O Evolution é uma API **não oficial** sobre o Baileys, que por sua vez imita o
 
 `internal/archtest/supply_chain_test.go` impede imagem oficial sem o ajuste, Baileys abaixo da correção do CVE-2026-48063 e tags flutuantes.
 
+## O que a nossa imagem altera no Evolution (rever a cada atualização)
+
+* **Baileys** `7.0.0-rc13` e dependências corrigidas (veja o Dockerfile).
+* **Busca de foto de perfil** (`deploy/docker/evolution/patch-profile-picture.js`): o Evolution 2.3.7 faz `await` de uma consulta de foto de perfil, sem timeout próprio, para **cada** mensagem tratada (inclusive as que enviamos) e para cada atualização de contato, num laço sequencial. Quando o WhatsApp não responde, vale o timeout padrão do Baileys (60 s) e as mensagens seguintes aparecem **60 s depois**. O patch desliga a busca por padrão (`RELAYPLANE_PROFILE_PICTURE_TIMEOUT_MS` a liga, com limite). É um patch **textual** do build fixado: precisa casar **exatamente uma vez**, senão o build da imagem falha; numa versão nova do Evolution, reveja se o problema ainda existe e se o texto mudou.
+
 ## O que costuma mudar (o que já nos mordeu)
 
 Cada item abaixo foi um defeito real encontrado com o número de teste, e tem fixture ou teste: são os primeiros lugares onde uma versão nova quebra.

@@ -22,6 +22,11 @@ RUN apk add --no-cache 'openssl>=3.5.6-r0' 'libcrypto3>=3.5.6-r0' 'libssl3>=3.5.
  && npm install -g --no-audit --no-fund npm@11.21.0 \
  && rm -rf /evolution/node_modules/tsx/node_modules/@esbuild /root/.npm /tmp/*
 
+# Evolution awaits a profile-picture query (no timeout of its own) for every message it handles, in a sequential loop: when WhatsApp does not
+# answer, messages show up 60 s apart (the Baileys query timeout). RelayPlane does not use pictures: off by default, bounded when enabled.
+COPY patch-profile-picture.js /tmp/patch-profile-picture.js
+RUN node /tmp/patch-profile-picture.js && rm /tmp/patch-profile-picture.js
+
 # the final tree is what ships: check it
 RUN node -e " \
   const cp=require('child_process'); \
@@ -33,4 +38,5 @@ RUN node -e " \
   if (!found.length||bad.length) { console.error('fast-xml-parser: '+JSON.stringify(found)); process.exit(1) } \
   console.log('baileys '+baileys+'; fast-xml-parser '+JSON.stringify(found)); \
   require('/evolution/node_modules/minio'); \
+  if (!require('fs').readFileSync('/evolution/dist/main.js','utf8').includes('RELAYPLANE_PROFILE_PICTURE_TIMEOUT_MS')) { console.error('profile picture patch missing'); process.exit(1) } \
 "

@@ -41,3 +41,10 @@ Os payloads gravados, depois de sanitizados, estão em
 
 Mensagem de enlace/enquete/reação/contato/localização, grupo com menção, mídia recebida de tamanho grande (o vídeo de teste tinha 100 MB),
 perda de conexão sem logout, e o logout com o código corrigido (a causa foi provada pelos timestamps capturados e há teste de regressão).
+
+## Mensagens seguidas aparecendo com 60 s de atraso (observado depois do spike)
+
+**Sintoma:** mensagens enviadas uma após a outra chegavam com 60 s de intervalo.
+**Causa (lida no código da imagem, 2.3.7):** o handler `messages.upsert` do Evolution faz, para cada mensagem, `await this.profilePicture(remoteJid)`, **sem nenhuma condição de configuração**, também para as mensagens enviadas (`fromMe`), dentro de um laço sequencial; o mesmo vale para `contacts.update`. `profilePicture()` chama o Baileys sem timeout e engole o erro, então, quando o WhatsApp não responde, espera o `defaultQueryTimeoutMs` do Baileys (**60 000 ms**). O próprio Baileys documenta um caso em que o servidor nunca responde a essa consulta (o `tctoken` do próprio JID).
+**Correção:** a imagem desliga a busca (RelayPlane não usa foto de perfil) por um patch estrito; veja `runbooks/PROVIDER-UPGRADE.md`. O efeito sobre o atraso de 60 s **ainda precisa ser confirmado com número real** (antes e depois, mesma conversa); a função patchada foi verificada isoladamente contra um cliente que nunca responde (devolve na hora com o padrão; respeita o limite quando ligada).
+

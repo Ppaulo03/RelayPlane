@@ -149,3 +149,19 @@ func TestImagePublishingWorkflowScansBeforePushing(t *testing.T) {
 		t.Error("the Dockerfile must pin the patched Baileys and fail the build when the final tree has another version")
 	}
 }
+
+// Evolution awaits a profile-picture query, with no timeout of its own, for every message it handles; when WhatsApp does not answer, messages
+// sent one after the other show up 60 s apart. The image patches that, and the patch must be strict: it has to match the pinned build exactly once
+// or the image build fails, so an Evolution upgrade cannot ship silently without the review.
+func TestEvolutionImageBoundsTheProfilePictureFetch(t *testing.T) {
+	d := readRepoFile(t, "deploy", "docker", "evolution", "Dockerfile")
+	for _, want := range []string{"COPY patch-profile-picture.js", "RUN node /tmp/patch-profile-picture.js", "RELAYPLANE_PROFILE_PICTURE_TIMEOUT_MS"} {
+		if !strings.Contains(d, want) {
+			t.Errorf("the Evolution Dockerfile lost %q", want)
+		}
+	}
+	p := readRepoFile(t, "deploy", "docker", "evolution", "patch-profile-picture.js")
+	if !strings.Contains(p, "n !== 1") || !strings.Contains(p, "process.exit(1)") || !strings.Contains(p, `"--check"`) {
+		t.Error("the patch must fail the build unless it matches exactly once, and check that the bundle still parses")
+	}
+}
