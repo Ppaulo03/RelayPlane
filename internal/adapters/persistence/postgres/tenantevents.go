@@ -174,6 +174,31 @@ func scanSub(row pgx.Row) (*subscription.Subscription, error) {
 }
 
 func (r subsRepo) Create(ctx context.Context, s subscription.Subscription) error {
+	return insertSubscription(ctx, r.s.pool, s)
+}
+
+// CreateIfBelow serialises the creations of one tenant on its row, so the count and the insert cannot interleave.
+func (r subsRepo) CreateIfBelow(ctx context.Context, s subscription.Subscription, max int) error {
+	if max <= 0 {
+		return insertSubscription(ctx, r.s.pool, s)
+	}
+	return r.s.withTx(ctx, func(tx pgx.Tx) error {
+		var one int
+		if err := tx.QueryRow(ctx, `SELECT 1 FROM tenants WHERE id=$1 FOR UPDATE`, s.TenantID).Scan(&one); err != nil {
+			return fmt.Errorf("%w: tenant %s", errs.ErrNotFound, s.TenantID)
+		}
+		var n int
+		if err := tx.QueryRow(ctx, `SELECT count(*) FROM subscriptions WHERE tenant_id=$1`, s.TenantID).Scan(&n); err != nil {
+			return err
+		}
+		if n >= max {
+			return errs.ErrConflict
+		}
+		return insertSubscription(ctx, tx, s)
+	})
+}
+
+func insertSubscription(ctx context.Context, db execer, s subscription.Subscription) error {
 	types := make([]string, len(s.EventTypes))
 	for i, t := range s.EventTypes {
 		types[i] = string(t)
@@ -185,7 +210,7 @@ func (r subsRepo) Create(ctx context.Context, s subscription.Subscription) error
 	if s.CreatedAt.IsZero() {
 		s.CreatedAt = time.Now().UTC()
 	}
-	_, err := r.s.pool.Exec(ctx, `INSERT INTO subscriptions(id,tenant_id,url,event_types,instance_ids,secret_version,active,created_at,exclude_groups) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+	_, err := db.Exec(ctx, `INSERT INTO subscriptions(id,tenant_id,url,event_types,instance_ids,secret_version,active,created_at,exclude_groups) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
 		s.ID, s.TenantID, s.URL, types, ids, s.SecretVersion, s.Active, s.CreatedAt, s.ExcludeGroups)
 	if name, code := constraint(err); err != nil {
 		switch {
@@ -264,12 +289,6 @@ func (r subsRepo) Delete(ctx context.Context, tenantID, id string) error {
 	return nil
 }
 
-func (r subsRepo) CountByTenant(ctx context.Context, tenantID string) (int, error) {
-	var n int
-	err := r.s.pool.QueryRow(ctx, `SELECT count(*) FROM subscriptions WHERE tenant_id=$1`, tenantID).Scan(&n)
-	return n, err
-}
-
 // ---- deliveries ----
 
 type deliveriesRepo struct{ s *Store }
@@ -318,9 +337,13 @@ func (r deliveriesRepo) Enqueue(ctx context.Context, ds []subscription.Delivery)
 				}
 				return err
 			}
-			tag, err := tx.Exec(ctx, `INSERT INTO webhook_deliveries(id,subscription_id,tenant_id,instance_id,event_id,event_type,event,sequence,status,next_attempt_at,created_at)
-				VALUES($1,$2,$3,$4,$5,$6,$7,$8,'PENDING',$9,$10) ON CONFLICT (subscription_id,event_id) DO NOTHING`,
-				d.ID, d.SubscriptionID, d.TenantID, d.InstanceID, d.EventID, string(d.EventType), raw, last+1, d.NextAttemptAt, d.CreatedAt)
+			status := "PENDING"
+			if d.Status == subscription.DeliveryDead { // born in the DLQ: over the subscription's backlog limit
+				status = "DEAD"
+			}
+			tag, err := tx.Exec(ctx, `INSERT INTO webhook_deliveries(id,subscription_id,tenant_id,instance_id,event_id,event_type,event,sequence,status,last_error,next_attempt_at,created_at)
+				VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) ON CONFLICT (subscription_id,event_id) DO NOTHING`,
+				d.ID, d.SubscriptionID, d.TenantID, d.InstanceID, d.EventID, string(d.EventType), raw, last+1, status, d.LastError, d.NextAttemptAt, d.CreatedAt)
 			if err != nil {
 				return err
 			}

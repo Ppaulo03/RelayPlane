@@ -106,6 +106,7 @@ type Config struct {
 	WebhooksAllowPrivate      bool // loopback/private destinations (default: development only)
 	WebhookDeliveryTimeout    time.Duration
 	WebhookDeliveryWorkers    int
+	WebhookMaxPendingPerSub   int // deliveries a subscription may have waiting before new ones go to its DLQ (0 = unlimited)
 	WebhookMaxInFlightPerSub  int
 	OutboxInterval            time.Duration
 	WebhookDeliveredRetention time.Duration
@@ -137,7 +138,7 @@ func Load() (Config, error) {
 		SubscriptionSecret:     os.Getenv("SUBSCRIPTION_SECRET"), ErasureKey: os.Getenv("ERASURE_KEY"),
 		WebhooksMaxPerTenant:   getInt("WEBHOOKS_MAX_PER_TENANT", 10),
 		WebhookDeliveryTimeout: getDur("WEBHOOK_DELIVERY_TIMEOUT", 5*time.Second),
-		WebhookDeliveryWorkers: getInt("WEBHOOK_DELIVERY_WORKERS", 8), WebhookMaxInFlightPerSub: getInt("WEBHOOK_MAX_IN_FLIGHT_PER_SUBSCRIPTION", 32), OutboxInterval: getDur("OUTBOX_INTERVAL", 250*time.Millisecond),
+		WebhookDeliveryWorkers: getInt("WEBHOOK_DELIVERY_WORKERS", 8), WebhookMaxInFlightPerSub: getInt("WEBHOOK_MAX_IN_FLIGHT_PER_SUBSCRIPTION", 32), WebhookMaxPendingPerSub: getInt("WEBHOOK_MAX_PENDING_PER_SUBSCRIPTION", 100000), OutboxInterval: getDur("OUTBOX_INTERVAL", 250*time.Millisecond),
 
 		WebhookDeliveredRetention: getDur("WEBHOOK_DELIVERED_RETENTION", 7*24*time.Hour),
 	}

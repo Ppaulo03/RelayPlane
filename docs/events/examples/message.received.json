@@ -1,13 +1,12 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "event_id": "evt_01m4234qz0k2d1y9s3xv7t8w6n",
   "sequence": 12,
   "event_type": "message.received",
-  "provider": "evolution-v2",
+  "channel": "whatsapp",
   "tenant_id": "tenant_01m41bacsxnveg6wcrr8ht19av",
   "instance_id": "inst_01m41bad3refzv7nc1h5p7tgf4",
   "timestamp": "2026-10-03T23:11:34Z",
-  "source_assignment": {"node_id": "node-01", "epoch": 1},
   "payload": {
     "provider_message_id": "3EB076A9503CA689E453E4",
     "reply_to_provider_message_id": "3EB0316FBDC6EC84F13164",

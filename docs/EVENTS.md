@@ -9,13 +9,12 @@ são validados contra ele no CI, junto com o que o código realmente emite e com
 
 | Campo | Descrição |
 |---|---|
-| `schema_version` | versão do contrato (hoje `1`). Muda **só** em mudança incompatível; um campo opcional novo não muda a versão |
+| `schema_version` | versão do contrato (hoje `2`). Muda **só** em mudança incompatível; um campo opcional novo não muda a versão |
 | `event_id` | id estável do evento: o mesmo em toda reentrega. **Deduplique por ele** |
 | `sequence` | `1, 2, 3…` por (assinatura, instância), **sem buracos**; uma reentrega mantém o número |
 | `event_type` | `message.received`, `message.status`, `message.outbound_status`, `message.deleted`, `instance.status_changed` |
-| `provider`, `tenant_id`, `instance_id` | origem |
+| `channel`, `tenant_id`, `instance_id` | origem: o **canal** (`whatsapp`; `other` para o que não for) e a instância. Como o canal é servido (provedor, nó, época) **não** faz parte do contrato |
 | `timestamp` | `message.received`: carimbo do **provedor** (resolução de 1 s; empates são normais). Demais: quando o RelayPlane observou o fato |
-| `source_assignment` | `{node_id, epoch}` do dono que produziu o evento (opcional) |
 | `traceparent` | contexto de trace W3C (opcional; também vai no header) |
 | `payload` | específico do tipo (abaixo) |
 
@@ -100,6 +99,8 @@ Isso só vale para eventos processados **em ordem de `sequence`** (use o `Sequen
 
 ## Evolução do contrato
 
+* **`schema_version` 2** (2026-10): `provider` e `source_assignment` **saíram** do envelope (o consumidor não precisa conhecer provedor, nó nem época) e entrou `channel` (`whatsapp`). O restante é igual. Um consumidor que só lê `event_id`, `sequence`, `event_type`, `instance_id`, `timestamp` e `payload` não muda; quem lia `provider` passa a ler `channel`.
+
 * Campo **opcional** novo: entra no schema e nos exemplos, `schema_version` continua igual. O schema proíbe campos não declarados justamente para que
   toda adição seja registrada.
 * Remover/renomear campo, tornar obrigatório um opcional ou mudar o significado: **nova versão**. O SDK recusa (`ValueError`) uma `schema_version` que não entende.
@@ -113,7 +114,7 @@ Isso só vale para eventos processados **em ordem de `sequence`** (use o `Sequen
   "event_id": "evt_01m4234qz0k2d1y9s3xv7t8w6n",
   "sequence": 12,
   "event_type": "message.received",
-  "provider": "evolution-v2",
+  "channel": "whatsapp",
   "tenant_id": "tenant_…",
   "instance_id": "inst_…",
   "timestamp": "2026-10-03T23:11:34Z",

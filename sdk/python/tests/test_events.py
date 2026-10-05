@@ -9,7 +9,7 @@ EXAMPLES = Path(__file__).resolve().parents[3] / "docs" / "events" / "examples"
 
 
 def ev(instance: str, seq: int) -> Event:
-    return Event(event_id=f"e{instance}{seq}", event_type="message.received", sequence=seq, schema_version=1, provider="p", tenant_id="t",
+    return Event(event_id=f"e{instance}{seq}", event_type="message.received", sequence=seq, schema_version=2, channel="whatsapp", tenant_id="t",
                  instance_id=instance, timestamp="2026-10-03T00:00:00Z", payload={})
 
 
@@ -18,12 +18,12 @@ def test_every_published_example_parses():
     assert len(files) >= 6
     for f in files:
         e = Event.from_dict(json.loads(f.read_text(encoding="utf-8")))
-        assert e.sequence >= 1 and e.schema_version == 1 and e.event_type and e.instance_id
+        assert e.sequence >= 1 and e.schema_version == 2 and e.event_type and e.instance_id
 
 
 def test_an_unknown_schema_version_is_refused():
     d = json.loads((EXAMPLES / "message.received.json").read_text(encoding="utf-8"))
-    d["schema_version"] = 2
+    d["schema_version"] = 3
     with pytest.raises(ValueError):
         Event.from_dict(d)
 
@@ -97,7 +97,7 @@ def verdict(event: Event, prompt_id: str, answers: dict) -> "str | None":
 
 
 def _ev(seq, typ, payload):
-    return Event(event_id=f"e{seq}", event_type=typ, sequence=seq, schema_version=1, provider="p", tenant_id="t", instance_id="i",
+    return Event(event_id=f"e{seq}", event_type=typ, sequence=seq, schema_version=2, channel="whatsapp", tenant_id="t", instance_id="i",
                  timestamp="2026-10-03T00:00:00Z", payload=payload)
 
 
@@ -113,3 +113,16 @@ def test_confirmation_recipe_survives_a_revocation():
     verdict(yes, "PROMPT", answers)
     assert verdict(_ev(4, "message.received", {"provider_message_id": "U3", "type": "secretEncrypted", "from": "55"}), "PROMPT", answers) == "ask_again"
     assert answers == {}
+
+
+def test_the_previous_schema_version_is_refused_and_the_channel_is_read():
+    import json
+    import pathlib
+
+    root = pathlib.Path(__file__).resolve().parents[3] / "docs" / "events" / "examples"
+    d = json.loads((root / "message.received.json").read_text(encoding="utf8"))
+    ev = Event.from_dict(d)
+    assert ev.channel == "whatsapp" and not hasattr(ev, "provider")
+    d["schema_version"] = 1  # the version that still carried provider and source_assignment
+    with pytest.raises(ValueError):
+        Event.from_dict(d)

@@ -34,6 +34,10 @@ type FanOut struct {
 	Metrics *observability.Metrics
 
 	ErasureKey []byte // keys the erasure tombstones (events.ErasureSubject)
+	// MaxPendingPerSubscription bounds what a broken consumer can pile up in the database: once a subscription has this many deliveries
+	// waiting, the next ones are created DEAD (in its DLQ, with the reason, redeliverable) instead of PENDING. Their sequence numbers are
+	// kept, so nothing is lost silently: the gap is visible to the consumer. 0 = unlimited.
+	MaxPendingPerSubscription int
 
 	Batch int           // events claimed per pass (default 100)
 	Lease time.Duration // how long a claimed event is exclusive (default 10s: a worker that dies leaves it to another)
@@ -121,12 +125,26 @@ func (f *FanOut) Handle(ctx context.Context, ev events.Event) error {
 		now = f.Now()
 	}
 	var ds []subscription.Delivery
+	var backlog map[string]ports.Backlog
 	for _, s := range subs {
 		if !s.Matches(ev) {
 			continue
 		}
-		ds = append(ds, subscription.Delivery{ID: ids.New("dlv"), SubscriptionID: s.ID, TenantID: ev.TenantID, InstanceID: ev.InstanceID,
-			EventID: ev.EventID, EventType: ev.EventType, Event: ev, Status: subscription.DeliveryPending, CreatedAt: now.UTC(), NextAttemptAt: now.UTC()})
+		d := subscription.Delivery{ID: ids.New("dlv"), SubscriptionID: s.ID, TenantID: ev.TenantID, InstanceID: ev.InstanceID,
+			EventID: ev.EventID, EventType: ev.EventType, Event: ev, Status: subscription.DeliveryPending, CreatedAt: now.UTC(), NextAttemptAt: now.UTC()}
+		if f.MaxPendingPerSubscription > 0 {
+			if backlog == nil {
+				if backlog, err = f.Repos.Deliveries.Backlog(ctx, ev.TenantID, now); err != nil {
+					return err
+				}
+			}
+			if backlog[s.ID].Pending >= int64(f.MaxPendingPerSubscription) {
+				d.Status = subscription.DeliveryDead
+				d.LastError = fmt.Sprintf("subscription backlog limit reached (%d deliveries waiting): not sent; redeliver it when the consumer is back", f.MaxPendingPerSubscription)
+				f.Metrics.WebhookBacklogOverflow.Inc()
+			}
+		}
+		ds = append(ds, d)
 	}
 	if len(ds) == 0 {
 		return nil
@@ -293,8 +311,7 @@ func (d *Dispatcher) process(ctx context.Context, dl subscription.Delivery) {
 		return
 	}
 
-	wire := dl.Event
-	wire.SchemaVersion, wire.Sequence, wire.ObservedAt, wire.AcceptedAt = events.SchemaVersion, dl.Sequence, nil, nil // internal fields never leave
+	wire := dl.Event.ForTenant(dl.Sequence) // the channel, not the provider; no node, no epoch, no internal timestamps
 	body, err := json.Marshal(wire)
 	if err != nil {
 		_ = d.Repos.Deliveries.MarkDead(rctx, dl.ID, "event not serializable: "+err.Error())

@@ -169,9 +169,24 @@ func (r eventsRepo) EraseContact(_ context.Context, tenantID, number string) (in
 
 type subsRepo struct{ s *Store }
 
-func (r subsRepo) Create(_ context.Context, sub subscription.Subscription) error {
+func (r subsRepo) Create(ctx context.Context, sub subscription.Subscription) error {
+	return r.CreateIfBelow(ctx, sub, 0)
+}
+
+func (r subsRepo) CreateIfBelow(_ context.Context, sub subscription.Subscription, max int) error {
 	r.s.mu.Lock()
 	defer r.s.mu.Unlock()
+	if max > 0 {
+		n := 0
+		for _, o := range r.s.subs {
+			if o.TenantID == sub.TenantID {
+				n++
+			}
+		}
+		if n >= max {
+			return errs.ErrConflict
+		}
+	}
 	if _, ok := r.s.tenants[sub.TenantID]; !ok {
 		return fmt.Errorf("%w: tenant %s", errs.ErrNotFound, sub.TenantID)
 	}
@@ -274,12 +289,6 @@ func (r subsRepo) Delete(_ context.Context, tenantID, id string) error {
 	return nil
 }
 
-func (r subsRepo) CountByTenant(_ context.Context, tenantID string) (int, error) {
-	r.s.mu.Lock()
-	defer r.s.mu.Unlock()
-	return len(r.list(tenantID, false)), nil
-}
-
 // ---- deliveries ----
 
 type deliveryRow struct {
@@ -307,7 +316,9 @@ func (r deliveriesRepo) Enqueue(_ context.Context, ds []subscription.Delivery) (
 		if dup {
 			continue
 		}
-		d.Status = subscription.DeliveryPending
+		if d.Status != subscription.DeliveryDead { // a delivery is born PENDING, or DEAD when it is over the subscription's backlog limit
+			d.Status = subscription.DeliveryPending
+		}
 		d.Sequence = r.s.nextDeliverySeq(d.SubscriptionID, d.InstanceID)
 		if d.CreatedAt.IsZero() {
 			d.CreatedAt = r.s.Now()

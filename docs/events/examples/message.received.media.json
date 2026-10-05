@@ -1,9 +1,9 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "event_id": "evt_01m4234r5f6g7h8j9k0m1n2p3q",
   "sequence": 18,
   "event_type": "message.received",
-  "provider": "evolution-v2",
+  "channel": "whatsapp",
   "tenant_id": "tenant_01m41bacsxnveg6wcrr8ht19av",
   "instance_id": "inst_01m41bad3refzv7nc1h5p7tgf4",
   "timestamp": "2026-10-03T23:11:12Z",

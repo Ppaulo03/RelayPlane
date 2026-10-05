@@ -17,7 +17,7 @@ Nenhum componente crítico usa `latest`. Imagens são referenciadas por **tag + 
 | Go (build) | `golang:1.26.5-alpine` | `sha256:0178a641fbb4858c5f1b48e34bdaabe0350a330a1b1149aabd498d0699ff5fb2` |
 | Go (testes com `-race`) | `golang:1.26.5` | `sha256:705e964a93a2fd2e75c7d59bb7d781b57e30f12293ffde5175c69229e18fb678` |
 | Runtime | `gcr.io/distroless/static-debian12:nonroot` | `sha256:afa5c872c891853ca7fcf1f12c3edb23f7eeef36189728842dd51042ff57f7ab` |
-| SDK Python | `relayplane-client 0.10.0` (httpx ≥ 0.27; a versão fica em `relayplane/_version.py` e o `pyproject.toml` deve concordar: há teste) | — |
+| SDK Python | `relayplane-client 0.11.0` (httpx ≥ 0.27; a versão fica em `relayplane/_version.py` e o `pyproject.toml` deve concordar: há teste) | — |
 
 > **Segurança (CVE-2026-48063, CVSS 9.3).** A imagem oficial `v2.3.7` embute Baileys `7.0.0-rc.9`, afetado (faixa `>= 7.0.0-rc.1, < 7.0.0-rc12`:
 > mensagens/`messages.upsert` forjados, corrupção de app-state e histórico falso). Por isso o RelayPlane **não usa** a imagem oficial: o compose

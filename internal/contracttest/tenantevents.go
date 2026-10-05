@@ -198,8 +198,8 @@ func subscriptionsContract(t *testing.T, f RepoFactory) {
 	if err := fx.r.Subscriptions.Create(ctx, newSub("sub_2", "t1")); err != nil {
 		t.Fatal(err)
 	}
-	if n, _ := fx.r.Subscriptions.CountByTenant(ctx, "t1"); n != 2 {
-		t.Errorf("count %d", n)
+	if l, _ := fx.r.Subscriptions.ListByTenant(ctx, "t1"); len(l) != 2 {
+		t.Errorf("listed %d", len(l))
 	}
 	if l, _ := fx.r.Subscriptions.ListActive(ctx, "t1"); len(l) != 2 {
 		t.Errorf("active %d", len(l))

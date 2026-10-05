@@ -33,6 +33,7 @@ data:
   RETENTION_DEAD_DELIVERIES: 720h
   RETENTION_PENDING_DELIVERIES: 720h   # deliveries still waiting (e.g. a subscription left paused) are deleted after this long
   WEBHOOK_MAX_IN_FLIGHT_PER_SUBSCRIPTION: "32"
+  WEBHOOK_MAX_PENDING_PER_SUBSCRIPTION: "100000"   # deliveries a subscription may have waiting; the next ones go to its DLQ (0 = unlimited)
   OUTBOX_INTERVAL: 250ms
   # tenant webhooks: https + public destinations only in production (APP_ENV=production)
   WEBHOOKS_MAX_PER_TENANT: "10"

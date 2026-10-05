@@ -77,15 +77,20 @@ func TestSchemaRejectsBreakingShapes(t *testing.T) {
 	}
 	payload := func(m map[string]any) map[string]any { return m["payload"].(map[string]any) }
 	for name, body := range map[string][]byte{
-		"missing sequence":          mutate(func(m map[string]any) { delete(m, "sequence") }),
-		"sequence 0":                mutate(func(m map[string]any) { m["sequence"] = 0 }),
-		"wrong schema_version":      mutate(func(m map[string]any) { m["schema_version"] = 2 }),
-		"missing from":              mutate(func(m map[string]any) { delete(payload(m), "from") }),
-		"undeclared payload field":  mutate(func(m map[string]any) { payload(m)["surprise"] = 1 }),
-		"undeclared envelope field": mutate(func(m map[string]any) { m["surprise"] = 1 }),
-		"unknown event type":        mutate(func(m map[string]any) { m["event_type"] = "message.exploded" }),
-		"bad timestamp":             mutate(func(m map[string]any) { m["timestamp"] = "yesterday" }),
-		"status enum":               []byte(strings.Replace(string(ex["message.outbound_status.json"]), `"ACCEPTED"`, `"SENT"`, 1)),
+		"missing sequence":           mutate(func(m map[string]any) { delete(m, "sequence") }),
+		"sequence 0":                 mutate(func(m map[string]any) { m["sequence"] = 0 }),
+		"previous schema_version":    mutate(func(m map[string]any) { m["schema_version"] = 1 }),
+		"future schema_version":      mutate(func(m map[string]any) { m["schema_version"] = 3 }),
+		"missing channel":            mutate(func(m map[string]any) { delete(m, "channel") }),
+		"unknown channel":            mutate(func(m map[string]any) { m["channel"] = "telegram" }),
+		"the provider is not public": mutate(func(m map[string]any) { m["provider"] = "evolution-v2" }),
+		"the node is not public":     mutate(func(m map[string]any) { m["source_assignment"] = map[string]any{"node_id": "n", "epoch": 1} }),
+		"missing from":               mutate(func(m map[string]any) { delete(payload(m), "from") }),
+		"undeclared payload field":   mutate(func(m map[string]any) { payload(m)["surprise"] = 1 }),
+		"undeclared envelope field":  mutate(func(m map[string]any) { m["surprise"] = 1 }),
+		"unknown event type":         mutate(func(m map[string]any) { m["event_type"] = "message.exploded" }),
+		"bad timestamp":              mutate(func(m map[string]any) { m["timestamp"] = "yesterday" }),
+		"status enum":                []byte(strings.Replace(string(ex["message.outbound_status.json"]), `"ACCEPTED"`, `"SENT"`, 1)),
 	} {
 		if err := eventschema.Validate(body); err == nil {
 			t.Errorf("%s: must be rejected", name)

@@ -13,7 +13,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-SUPPORTED_SCHEMA_VERSION = 1
+SUPPORTED_SCHEMA_VERSION = 2
 
 
 @dataclass(frozen=True)
@@ -46,7 +46,7 @@ class Event:
     event_type: str
     sequence: int
     schema_version: int
-    provider: str
+    channel: str
     tenant_id: str
     instance_id: str
     timestamp: str
@@ -66,7 +66,7 @@ class Event:
             # an incompatible schema must not be interpreted with the old rules: fail loudly instead of guessing
             raise ValueError(f"unsupported event schema_version {version} (this SDK understands {SUPPORTED_SCHEMA_VERSION})")
         return cls(event_id=d["event_id"], event_type=d["event_type"], sequence=int(d["sequence"]), schema_version=version,
-                   provider=d.get("provider", ""), tenant_id=d["tenant_id"], instance_id=d["instance_id"], timestamp=d["timestamp"],
+                   channel=d.get("channel", ""), tenant_id=d["tenant_id"], instance_id=d["instance_id"], timestamp=d["timestamp"],
                    payload=d.get("payload") or {}, traceparent=d.get("traceparent", ""))
 
 

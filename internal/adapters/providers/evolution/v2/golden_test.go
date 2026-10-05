@@ -85,7 +85,7 @@ func TestRealWebhooksNormalize(t *testing.T) {
 				got[0].Payload = pl
 			}
 			wire, err := json.Marshal(events.Event{EventID: "evt_golden", EventType: got[0].Type, Provider: "evolution-v2", TenantID: "t1",
-				InstanceID: got[0].InstanceID, Timestamp: got[0].Timestamp, Payload: got[0].Payload, SchemaVersion: events.SchemaVersion, Sequence: 1})
+				InstanceID: got[0].InstanceID, Timestamp: got[0].Timestamp, Payload: got[0].Payload}.ForTenant(1))
 			if err != nil {
 				t.Fatal(err)
 			}

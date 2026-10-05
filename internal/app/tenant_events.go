@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"time"
@@ -125,14 +126,16 @@ func (s *SubscriptionService) Create(ctx context.Context, tenantID string, in Cr
 			if _, gerr := s.d.Repos.Subscriptions.Get(ctx, tenantID, id); gerr == nil {
 				return created{ID: id}, nil // resumed after a crash: it was already created
 			}
-			if n, cerr := s.d.Repos.Subscriptions.CountByTenant(ctx, tenantID); cerr != nil {
-				return created{}, cerr
-			} else if n >= c.MaxPerTenant {
-				return created{}, fmt.Errorf("%w: the limit of %d subscriptions per tenant was reached", errs.ErrConflict, c.MaxPerTenant)
-			}
 			sub := subscription.Subscription{ID: id, TenantID: tenantID, URL: in.URL, EventTypes: types, InstanceIDs: in.InstanceIDs,
 				SecretVersion: 1, Active: true, ExcludeGroups: in.ExcludeGroups, CreatedAt: s.d.now().UTC()}
-			return created{ID: id}, s.d.Repos.Subscriptions.Create(ctx, sub)
+			// the count and the insert are ONE step: two concurrent requests at the limit cannot both pass
+			if err := s.d.Repos.Subscriptions.CreateIfBelow(ctx, sub, c.MaxPerTenant); err != nil {
+				if errors.Is(err, errs.ErrConflict) {
+					return created{}, fmt.Errorf("%w: the limit of %d subscriptions per tenant was reached", errs.ErrConflict, c.MaxPerTenant)
+				}
+				return created{}, err
+			}
+			return created{ID: id}, nil
 		})
 	if err != nil {
 		return nil, false, err
