@@ -714,9 +714,9 @@ func (s *Simulator) SentMessages(name string) []Sent {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if inst, ok := s.instances[name]; ok {
-		return append([]Sent{}, inst.sent...) // never nil: the control API answers [] for an empty list, not null
+		return append([]Sent(nil), inst.sent...)
 	}
-	return []Sent{}
+	return nil
 }
 
 // InjectFaults queues failures for the next provider API calls: unavailable | auth | not_found | server_error | ambiguous.
