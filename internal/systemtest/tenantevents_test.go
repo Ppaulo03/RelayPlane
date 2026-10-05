@@ -288,7 +288,7 @@ func TestTenantEvents_RepublishedEventIsStillDeliveredOnce(t *testing.T) {
 	inst := e.CreateInstance(e.Tenant, "a", true)
 	subscribe(t, e, e.Tenant, hookURL, string(events.MessageOutboundStatus))
 	e.StartWorkers(2)
-	e.StartWebhooks() // note: the outbox publisher is NOT running yet
+	e.StartWebhookConsumers() // the outbox publisher must NOT be running: this test plays it
 	r, _, _ := e.SendText(e.Tenant, inst.ID, "oi", "")
 	e.WaitMessage(r.MessageID, messaging.StatusAccepted)
 
