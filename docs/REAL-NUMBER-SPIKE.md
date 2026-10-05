@@ -1,6 +1,6 @@
 # Spike com número real de WhatsApp
 
-Objetivo: **trocar suposições por fatos**. Tudo que o RelayPlane (e o conversation_agent) assume sobre o que a Evolution real envia foi testado só contra um servidor
+Objetivo: **trocar suposições por fatos**. Tudo que o RelayPlane assume sobre o que a Evolution real envia foi testado só contra um servidor
 falso escrito por nós. Este roteiro liga um número descartável a um node real da Evolution e grava o que ela realmente faz.
 
 > **Use um número descartável, não o principal.** A Evolution/Baileys é uma API não oficial: o WhatsApp pode bloquear o número.

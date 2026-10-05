@@ -50,7 +50,7 @@ Legenda: ✅ feito e testado · ⚠️ feito com limitação registrada · ⏭�
 | Carga multi-processo (gateway + workers + reconciler em containers, kill -9 de workers) com verificação do lado do provider | ✅ `make test-load-stack` |
 | Carga com provider real (WhatsApp) | ⏭️ depende de números reais |
 
-## Eventos para o tenant (requisito do conversation_agent)
+## Eventos para o tenant
 
 | Item | Estado |
 |---|---|
