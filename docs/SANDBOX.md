@@ -1,6 +1,6 @@
 # Sandbox: o RelayPlane inteiro sem número de WhatsApp
 
-Para desenvolver e testar um consumidor (como o `conversation_agent`) contra os binários **reais** do RelayPlane (gateway, workers, reconciler, PostgreSQL, Redis,
+Para desenvolver e testar um consumidor (um chatbot, por exemplo) contra os binários **reais** do RelayPlane (gateway, workers, reconciler, PostgreSQL, Redis,
 object store) sem WhatsApp: o nó do provedor é trocado por um **simulador** que se comporta como a Evolution API para o RelayPlane e, do outro lado, deixa você
 fazer o papel do usuário.
 
