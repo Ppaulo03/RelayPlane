@@ -8,6 +8,14 @@ Um envio **ambíguo** não permite saber se o destinatário recebeu: timeout ou 
 (`error_code=AMBIGUOUS_DISPATCH`), ou worker morto no meio do envio (`WORKER_CRASH`). Reenviar pode **duplicar** a mensagem; não reenviar pode **perdê-la**. Por isso o RelayPlane não decide:
 a mensagem fica `UNKNOWN` e as mensagens seguintes **da mesma instância** ficam retidas (ordem estrita) até alguém resolver. Outras instâncias não são afetadas.
 
+## Por que um 500 do provedor vira `UNKNOWN` (e o que isso custa)
+
+Um erro 5xx (ou um timeout) na **resposta de um envio** pode vir depois de o node já ter mandado a mensagem: o RelayPlane não tem como saber, então não reenvia (duplicaria) nem descarta (perderia). Falhas **antes** do envio (sessão fechada, 429, destinatário inválido, 4xx) **não** são ambíguas e seguem o caminho normal de retry ou falha.
+O custo é real: **a instância inteira para** (as mensagens seguintes esperam, na ordem) até alguém decidir, e a resposta daquele turno se perde se ninguém resolver. Em produção, trate como incidente com dono:
+* ligue o alerta `RelayPlaneUnknownMessageWaiting` a um responsável;
+* para respostas de um agente, que são **seguras de repetir** (uma pergunta repetida custa menos que uma conversa parada), use a política `safe_to_repeat` de `relayplane.unknown`: resolve como `not_sent` e o agente reenvia com nova chave;
+* se disponibilidade importa mais que ordem estrita, defina `UNKNOWN_BARRIER_TIMEOUT` (veja abaixo).
+
 ## Como perceber
 
 * Alerta `RelayPlaneUnknownMessageWaiting`: a `UNKNOWN` mais antiga espera há mais de 5 min (`relayplane_unknown_oldest_seconds`).
