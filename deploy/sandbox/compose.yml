@@ -1,0 +1,140 @@
+# RelayPlane sandbox, STANDALONE: the real gateway, workers and reconciler on real PostgreSQL / Redis / an S3 object store, with the
+# WhatsApp provider nodes replaced by the simulator, so an integration can be developed and tested without a phone number.
+#
+# Nothing here needs the repository: it runs from the images a release published (every service is an image reference, no build) and
+# a .env file (sandbox.sh generates it). NEVER use it in production: the simulator is not WhatsApp and the guards of
+# APP_ENV=production are off so that a consumer running on your machine can receive webhooks.
+#
+#   sh sandbox.sh up        # or: docker compose --env-file .env.sandbox --env-file images.env -f compose.yml up -d --wait
+#
+# Gateway    http://127.0.0.1:18080   (admin key: ADMIN_API_KEY in .env.sandbox)
+# Simulator  http://127.0.0.1:18081 and :18082   control API /_sim/... (header: apikey = EVOLUTION_NODE_0N_API_KEY)
+name: relayplane-sandbox
+
+x-relayplane-env: &relayplane-env
+  APP_ENV: development
+  DATABASE_URL: postgres://relayplane@postgres:5432/relayplane?sslmode=disable
+  REDIS_URL: redis://redis:6379/0
+  COMMAND_PARTITIONS: "32"
+  BLOB_STORE_ENDPOINT: rustfs:9000
+  BLOB_STORE_BUCKET: relayplane-media
+  BLOB_STORE_ACCESS_KEY: relayplane
+  BLOB_STORE_SECRET_KEY: ${BLOB_SECRET_KEY:?set BLOB_SECRET_KEY}
+  WEBHOOK_SECRET: ${WEBHOOK_SECRET:?set WEBHOOK_SECRET}
+  WEBHOOK_BASE_URL: http://gateway:8080
+  IDEMPOTENCY_TTL: 24h
+  DEFAULT_PROVIDER: evolution-v2
+  LOG_LEVEL: info
+  # the sandbox is for developing against: no pacing, no per-minute cap
+  RATE_MIN_INTERVAL: 0s
+  RATE_MAX_PER_MINUTE: "0"
+  RATE_MAX_CONCURRENT: "0"
+  RATE_BURST: "0"
+  API_RATE_PER_SECOND: "0"
+  UNKNOWN_BARRIER_TIMEOUT: "0"
+  OUTBOX_INTERVAL: 250ms
+  PROVIDER_NODES: >-
+    [{"id":"node-01","provider":"evolution-v2","endpoint":"http://evolution-node-01:8080","api_key":"${EVOLUTION_NODE_01_API_KEY:?set EVOLUTION_NODE_01_API_KEY}","capacity":100},
+     {"id":"node-02","provider":"evolution-v2","endpoint":"http://evolution-node-02:8080","api_key":"${EVOLUTION_NODE_02_API_KEY:?set EVOLUTION_NODE_02_API_KEY}","capacity":100}]
+
+x-simulator: &simulator
+  image: ${SIMULATOR_IMAGE:?images.env}
+  restart: unless-stopped
+
+services:
+  postgres:
+    image: postgres:17.5-alpine@sha256:6567bca8d7bc8c82c5922425a0baee57be8402df92bae5eacad5f01ae9544daa
+    environment:
+      POSTGRES_USER: relayplane
+      # the database is reachable only from inside this compose network (it publishes no port): nothing to protect with a password in a sandbox
+      POSTGRES_HOST_AUTH_METHOD: trust
+      POSTGRES_DB: relayplane
+    volumes: [pgdata:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U relayplane -d relayplane"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  redis:
+    image: redis:7.4.4-alpine@sha256:ee9e8748ace004102a267f7b8265dab2c618317df22507b89d16a8add7154273
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes: [redisdata:/data]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  rustfs:
+    image: rustfs/rustfs:1.0.1@sha256:1803faef57627e2d9c2e7d89d655d712ddded5389040054987163043fecb6a3c
+    environment:
+      RUSTFS_ACCESS_KEY: relayplane
+      RUSTFS_SECRET_KEY: ${BLOB_SECRET_KEY:?set BLOB_SECRET_KEY}
+    volumes: [blobdata:/data]
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:9000/health/ready >/dev/null"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+
+  evolution-node-01:
+    <<: *simulator
+    hostname: evolution-node-01
+    environment:
+      AUTHENTICATION_API_KEY: ${EVOLUTION_NODE_01_API_KEY:?set EVOLUTION_NODE_01_API_KEY}
+      SIM_AUTO_RECEIPTS: "true"   # every accepted message is reported as delivered shortly after
+      SIM_RECEIPT_DELAY: 300ms
+    ports: ["127.0.0.1:${SIM_NODE_01_PORT:-18081}:8080"]   # control API of node-01: /_sim/...
+
+  evolution-node-02:
+    <<: *simulator
+    hostname: evolution-node-02
+    environment:
+      AUTHENTICATION_API_KEY: ${EVOLUTION_NODE_02_API_KEY:?set EVOLUTION_NODE_02_API_KEY}
+      SIM_AUTO_RECEIPTS: "true"
+      SIM_RECEIPT_DELAY: 300ms
+    ports: ["127.0.0.1:${SIM_NODE_02_PORT:-18082}:8080"]
+
+  gateway:
+    image: ${GATEWAY_IMAGE:?images.env}
+    restart: unless-stopped
+    depends_on:
+      postgres: {condition: service_healthy}
+      redis: {condition: service_healthy}
+      rustfs: {condition: service_healthy}
+      evolution-node-01: {condition: service_started}
+      evolution-node-02: {condition: service_started}
+    environment:
+      <<: *relayplane-env
+      AUTO_MIGRATE: "true"
+      HTTP_PORT: "8080"
+      ADMIN_API_KEY: ${ADMIN_API_KEY:?set ADMIN_API_KEY}
+      BLOB_STORE_PUBLIC_ENDPOINT: localhost:19000
+    ports: ["127.0.0.1:${GATEWAY_PORT:-18080}:8080"]
+
+  worker:
+    image: ${WORKER_IMAGE:?images.env}
+    restart: unless-stopped
+    depends_on:
+      gateway: {condition: service_started}
+    environment:
+      <<: *relayplane-env
+      OPS_PORT: "9090"
+    # the webhook dispatcher runs in the worker: let it reach a consumer running on your machine (http://host.docker.internal:<port>/...)
+    extra_hosts: ["host.docker.internal:host-gateway"]
+
+  reconciler:
+    image: ${RECONCILER_IMAGE:?images.env}
+    restart: unless-stopped
+    depends_on:
+      gateway: {condition: service_started}
+    environment:
+      <<: *relayplane-env
+      OPS_PORT: "9090"
+      RECONCILER_INTERVAL: 2s
+
+volumes:
+  pgdata:
+  redisdata:
+  blobdata:

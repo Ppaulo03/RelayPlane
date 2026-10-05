@@ -53,7 +53,7 @@ jobs:
     strategy:
       fail-fast: true
       matrix:
-        component: [gateway, worker, reconciler]
+        component: [gateway, worker, reconciler, simulator]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - id: name
@@ -99,7 +99,7 @@ jobs:
           EVOLUTION: ${{ needs.evolution.outputs.image }}
         run: |
           mkdir -p dist
-          gateway=$(cat refs/image-gateway.txt); worker=$(cat refs/image-worker.txt); reconciler=$(cat refs/image-reconciler.txt)
+          gateway=$(cat refs/image-gateway.txt); worker=$(cat refs/image-worker.txt); reconciler=$(cat refs/image-reconciler.txt); simulator=$(cat refs/image-simulator.txt)
           go run ./cmd/render-release -in deploy/kubernetes/relayplane.yaml -out "dist/relayplane-$VERSION.yaml" \
             -gateway "$gateway" -worker "$worker" -reconciler "$reconciler" -evolution "$EVOLUTION"
           # the same references for the compose-based staging (deploy/staging/staging.sh up dist/images.env)
@@ -108,7 +108,13 @@ jobs:
             echo "WORKER_IMAGE=$worker"
             echo "RECONCILER_IMAGE=$reconciler"
             echo "EVOLUTION_IMAGE=$EVOLUTION"
+            # the provider simulator of the sandbox (never part of the Kubernetes manifest)
+            echo "SIMULATOR_IMAGE=$simulator"
           } > dist/images.env
+          # the sandbox without the repository: a script, its compose file and the images of this release
+          mkdir -p "sandbox-$VERSION"
+          cp deploy/sandbox/sandbox.sh deploy/sandbox/compose.yml dist/images.env "sandbox-$VERSION/"
+          tar -czf "dist/relayplane-sandbox-$VERSION.tar.gz" "sandbox-$VERSION"
           {
             echo "### Release $VERSION"
             echo
@@ -118,7 +124,7 @@ jobs:
             cat dist/images.env
             echo '```'
             echo
-            echo "Artefacts: relayplane-$VERSION.yaml (Kubernetes) and images.env (compose staging)."
+            echo "Artefacts: relayplane-$VERSION.yaml (Kubernetes), images.env (compose staging) and relayplane-sandbox-$VERSION.tar.gz (the sandbox, without the repository)."
           } >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -131,7 +137,7 @@ jobs:
           VERSION: ${{ needs.version.outputs.version }}
         run: |
           gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --generate-notes \
-            "dist/relayplane-$VERSION.yaml" dist/images.env
+            "dist/relayplane-$VERSION.yaml" dist/images.env "dist/relayplane-sandbox-$VERSION.tar.gz"
 
   # the released images, as published, must start together in the production configuration and pass the smoke test
   staging-smoke:
