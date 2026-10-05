@@ -7,7 +7,7 @@ Legenda: 🔑 precisa de número de WhatsApp real · 👤 decisão ou ação sua
 ## 1. Antes de colocar conversas reais de clientes
 
 - [ ] 🔑 **Validação no aparelho** do que hoje só foi provado com simulador e formatos capturados: mídia nos dois sentidos, resposta citada, "digitando", confirmação de leitura. Repetir também a queda do node com o mesmo banco (reconecta sem QR) com o stack de hoje.
-- [ ] 🔑 **Confirmar a correção do atraso de 60 s** entre mensagens seguidas (busca de foto de perfil do Evolution, desligada na imagem): mesma conversa antes e depois, com a imagem do próximo release; ver `SPIKE-FINDINGS`.
+- [x] 🔑 ~~Confirmar a correção do atraso de 60 s~~ entre mensagens seguidas (busca de foto de perfil do Evolution, desligada na imagem): **confirmado** em 2026-10-05 com número real (antes: degraus de 60 s; depois: 1 a 2 s); ver `SPIKE-FINDINGS`. Falta só chegar a um release (o `0.3.0-rc2` ainda tem a imagem antiga).
 - [ ] 🔑 **Casos do roteiro R22 ainda não vistos:** migração de instância com QR, reação, enquete, localização, queda de conexão **sem** logout, vídeo grande (100 MB) para medir memória do ingestor.
 - [ ] 👤 **Primeiro release oficial:** escolher o número (`0.3.0`?), alinhar `docs/VERSIONS.md` (ainda cita 0.2.0), criar a tag `v<versão>` (gera os artefatos e o release no GitHub). Os candidatos `0.3.0-rc1` e `-rc2` já estão públicos no GHCR: não reutilize esses números.
 - [ ] 👤 **Quem implanta** (decidido: não é do módulo): host, DNS, TLS, segredos, backup e restauração do Postgres e dos bancos dos nodes, e **bloquear `/metrics`** no ingress (está na porta pública do gateway).

@@ -46,5 +46,14 @@ perda de conexão sem logout, e o logout com o código corrigido (a causa foi pr
 
 **Sintoma:** mensagens enviadas uma após a outra chegavam com 60 s de intervalo.
 **Causa (lida no código da imagem, 2.3.7):** o handler `messages.upsert` do Evolution faz, para cada mensagem, `await this.profilePicture(remoteJid)`, **sem nenhuma condição de configuração**, também para as mensagens enviadas (`fromMe`), dentro de um laço sequencial; o mesmo vale para `contacts.update`. `profilePicture()` chama o Baileys sem timeout e engole o erro, então, quando o WhatsApp não responde, espera o `defaultQueryTimeoutMs` do Baileys (**60 000 ms**). O próprio Baileys documenta um caso em que o servidor nunca responde a essa consulta (o `tctoken` do próprio JID).
-**Correção:** a imagem desliga a busca (RelayPlane não usa foto de perfil) por um patch estrito; veja `runbooks/PROVIDER-UPGRADE.md`. O efeito sobre o atraso de 60 s **ainda precisa ser confirmado com número real** (antes e depois, mesma conversa); a função patchada foi verificada isoladamente contra um cliente que nunca responde (devolve na hora com o padrão; respeita o limite quando ligada).
+**Correção:** a imagem desliga a busca (RelayPlane não usa foto de perfil) por um patch estrito; veja `runbooks/PROVIDER-UPGRADE.md`.
+
+**Confirmado com número real (2026-10-05, mesma stack e mesma sessão, só a imagem do node trocada, banco mantido, reconectou sem QR):**
+
+| | Mensagens que chegam juntas (recebimento) | Rajada de 6 envios |
+|---|---|---|
+| **Antes** (sem o patch) | a 1ª chega em ~1 s e **cada uma das seguintes chega 59,9 a 60,0 s depois da anterior**, com atraso acumulado de 23 s até 163 s em relação ao carimbo do provedor (11 mensagens diretas reais capturadas pela tap; as isoladas chegaram em ~1 s) | sem salto de 60 s: ~3 s entre entregas (o ritmo do próprio gateway) |
+| **Depois** (patch) | as 4 mensagens mandadas em seguida chegaram em 1 a 2 s, no máximo 1,1 s entre elas | (não repetida: não havia o que corrigir) |
+
+Ou seja, o atraso aparece no **recebimento** de mensagens próximas (a fila do handler espera a consulta de foto de cada uma, o webhook da mensagem sai antes da espera, por isso é a *seguinte* que atrasa); o envio em rajada não era afetado. Para medir de novo: `python tools/spike/latency.py` (envio) e a tap da stack (recebimento; atraso = hora de chegada do webhook menos `messageTimestamp`).
 
