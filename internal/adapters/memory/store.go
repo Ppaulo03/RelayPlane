@@ -331,7 +331,15 @@ func (r instanceRepo) UpdateDesired(_ context.Context, id string, st instance.De
 	return nil
 }
 
-func (r instanceRepo) SetObserved(_ context.Context, id string, epoch int64, st instance.ObservedState, at time.Time) (bool, error) {
+func (r instanceRepo) SetObserved(ctx context.Context, id string, epoch int64, st instance.ObservedState, at time.Time) (bool, error) {
+	return r.setObserved(id, epoch, st, at, nil)
+}
+
+func (r instanceRepo) SetObservedEmitting(_ context.Context, id string, epoch int64, st instance.ObservedState, at time.Time, ev events.Event) (bool, error) {
+	return r.setObserved(id, epoch, st, at, &ev)
+}
+
+func (r instanceRepo) setObserved(id string, epoch int64, st instance.ObservedState, at time.Time, ev *events.Event) (bool, error) {
 	r.s.mu.Lock()
 	defer r.s.mu.Unlock()
 	i, ok := r.s.instances[id]
@@ -346,6 +354,9 @@ func (r instanceRepo) SetObserved(_ context.Context, id string, epoch int64, st 
 	}
 	if err := i.TransitionObserved(st, at); err != nil {
 		return false, err
+	}
+	if ev != nil {
+		r.s.queueEvent(*ev)
 	}
 	return true, nil
 }

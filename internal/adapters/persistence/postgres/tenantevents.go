@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -69,6 +70,61 @@ func (r eventsRepo) ListUnpublished(ctx context.Context, limit int) ([]events.Ev
 	return out, rows.Err()
 }
 
+func (r eventsRepo) ClaimForFanOut(ctx context.Context, limit int, lease time.Duration) ([]events.Event, error) {
+	if limit <= 0 {
+		limit = 100
+	}
+	now := time.Now()
+	rows, err := r.s.pool.Query(ctx, `
+WITH due AS (
+    SELECT seq FROM event_outbox
+    WHERE fanout_at IS NULL AND (fanout_lease_until IS NULL OR fanout_lease_until <= $1)
+    ORDER BY seq LIMIT $2 FOR UPDATE SKIP LOCKED
+)
+UPDATE event_outbox o SET fanout_lease_until = $1 + make_interval(secs => $3)
+FROM due WHERE o.seq = due.seq
+  -- another claimer may have finished (or leased) the row since this statement's snapshot: the eligibility is checked again at update time
+  AND o.fanout_at IS NULL AND (o.fanout_lease_until IS NULL OR o.fanout_lease_until <= $1)
+RETURNING o.seq, o.event`, now, limit, lease.Seconds())
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	type claimed struct {
+		seq int64
+		ev  events.Event
+	}
+	var got []claimed
+	for rows.Next() {
+		var c claimed
+		var raw []byte
+		if err := rows.Scan(&c.seq, &raw); err != nil {
+			return nil, err
+		}
+		if err := json.Unmarshal(raw, &c.ev); err != nil {
+			return nil, fmt.Errorf("corrupt event_outbox row %d: %w", c.seq, err)
+		}
+		got = append(got, c)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	sort.Slice(got, func(i, j int) bool { return got[i].seq < got[j].seq }) // RETURNING does not promise an order
+	out := make([]events.Event, len(got))
+	for i, c := range got {
+		out[i] = c.ev
+	}
+	return out, nil
+}
+
+func (r eventsRepo) MarkFannedOut(ctx context.Context, ids []string, at time.Time) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	_, err := r.s.pool.Exec(ctx, `UPDATE event_outbox SET fanout_at=$2, fanout_lease_until=NULL WHERE event_id = ANY($1) AND fanout_at IS NULL`, ids, at)
+	return err
+}
+
 func (r eventsRepo) MarkPublished(ctx context.Context, ids []string, at time.Time) error {
 	if len(ids) == 0 {
 		return nil
@@ -78,7 +134,7 @@ func (r eventsRepo) MarkPublished(ctx context.Context, ids []string, at time.Tim
 }
 
 func (r eventsRepo) Purge(ctx context.Context, before time.Time) (int64, error) {
-	tag, err := r.s.pool.Exec(ctx, `DELETE FROM event_outbox WHERE published_at IS NOT NULL AND published_at < $1`, before)
+	tag, err := r.s.pool.Exec(ctx, `DELETE FROM event_outbox WHERE published_at IS NOT NULL AND fanout_at IS NOT NULL AND published_at < $1`, before)
 	return tag.RowsAffected(), err
 }
 
@@ -90,7 +146,7 @@ func (r eventsRepo) EraseContact(ctx context.Context, tenantID, number string) (
 func (r eventsRepo) PendingStats(ctx context.Context) (int64, time.Duration, error) {
 	var n int64
 	var age *float64
-	err := r.s.pool.QueryRow(ctx, `SELECT count(*), extract(epoch FROM now() - min(created_at)) FROM event_outbox WHERE published_at IS NULL`).Scan(&n, &age)
+	err := r.s.pool.QueryRow(ctx, `SELECT count(*), extract(epoch FROM now() - min(created_at)) FROM event_outbox WHERE fanout_at IS NULL`).Scan(&n, &age)
 	if err != nil || age == nil {
 		return n, 0, err
 	}

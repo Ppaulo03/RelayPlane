@@ -191,7 +191,7 @@ func TestInboundMediaJobsAreNeverClaimedTwice(t *testing.T) {
 					mu.Lock()
 					claimed[j.ID]++
 					mu.Unlock()
-					_ = repos.InboundMedia.Done(ctx, j.ID, time.Now())
+					_ = repos.InboundMedia.Complete(ctx, j.ID, j.Event, time.Now())
 				}
 				if len(got) == 0 {
 					empty++

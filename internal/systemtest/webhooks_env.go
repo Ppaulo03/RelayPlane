@@ -118,6 +118,6 @@ func (e *Env) StartWebhooks() {
 // that plays the publisher itself (a crash between "published" and "marked published").
 func (e *Env) StartWebhookConsumers() {
 	e.wg.Add(2)
-	go func() { defer e.wg.Done(); _ = e.Bus.Subscribe(e.ctx, "webhook-fanout", e.FanOut.Handle) }()
+	go func() { defer e.wg.Done(); e.FanOut.Run(e.ctx) }() // from the database, as the worker binary does
 	go func() { defer e.wg.Done(); e.Dispatcher.Run(e.ctx) }()
 }

@@ -32,10 +32,73 @@ type FanOut struct {
 	Log     *slog.Logger
 	Now     func() time.Time
 	Metrics *observability.Metrics
+
+	Batch int           // events claimed per pass (default 100)
+	Lease time.Duration // how long a claimed event is exclusive (default 10s: a worker that dies leaves it to another)
+	Poll  time.Duration // pause when idle (default 100ms)
 }
 
-// Handle is the ports.EventHandler of the "webhook-fanout" consumer group. Returning an error makes the bus
-// redeliver the event; Enqueue is idempotent, so that is always safe.
+func (f *FanOut) defaults() {
+	if f.Batch <= 0 {
+		f.Batch = 100
+	}
+	if f.Lease <= 0 {
+		f.Lease = 10 * time.Second
+	}
+	if f.Poll <= 0 {
+		f.Poll = 100 * time.Millisecond
+	}
+	if f.Log == nil {
+		f.Log = slog.Default()
+	}
+}
+
+// Run turns the accepted events of the event outbox into the tenant's deliveries until ctx is cancelled. It reads the DATABASE, not the
+// broker: the outbox row stays until the deliveries exist, so a broker that loses what it was given loses nothing the tenant is owed.
+func (f *FanOut) Run(ctx context.Context) {
+	f.defaults()
+	for ctx.Err() == nil {
+		n, err := f.RunOnce(ctx)
+		if err != nil && ctx.Err() == nil {
+			f.Log.WarnContext(ctx, "webhook fan-out pass failed", "error", err)
+		}
+		if n == 0 || err != nil {
+			select {
+			case <-ctx.Done():
+			case <-time.After(f.Poll):
+			}
+		}
+	}
+}
+
+// RunOnce claims and fans out one batch, oldest first; it returns how many events it finished. An event that fails stops the batch (the
+// ones after it wait for their turn) and is claimed again when its lease expires: Handle is idempotent, so doing it twice is safe.
+func (f *FanOut) RunOnce(ctx context.Context) (int, error) {
+	f.defaults()
+	evs, err := f.Repos.Events.ClaimForFanOut(ctx, f.Batch, f.Lease)
+	if err != nil || len(evs) == 0 {
+		return 0, err
+	}
+	done := make([]string, 0, len(evs))
+	var herr error
+	for _, ev := range evs {
+		if herr = f.Handle(ctx, ev); herr != nil {
+			break
+		}
+		done = append(done, ev.EventID)
+	}
+	at := time.Now()
+	if f.Now != nil {
+		at = f.Now()
+	}
+	if err := f.Repos.Events.MarkFannedOut(context.WithoutCancel(ctx), done, at.UTC()); err != nil {
+		return len(done), err
+	}
+	return len(done), herr
+}
+
+// Handle creates the deliveries of one event for the tenant's subscriptions. Enqueue is idempotent, so running it again for the same event
+// (a retry after a failure, a worker that died after creating them) is always safe.
 func (f *FanOut) Handle(ctx context.Context, ev events.Event) error {
 	if !subscription.TenantFacing(ev.EventType) || ev.TenantID == "" {
 		return nil

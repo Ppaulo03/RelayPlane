@@ -10,6 +10,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/relayplane/relayplane/internal/core/errs"
+	"github.com/relayplane/relayplane/internal/core/events"
 	"github.com/relayplane/relayplane/internal/core/instance"
 	"github.com/relayplane/relayplane/internal/core/messaging"
 	"github.com/relayplane/relayplane/internal/core/ownership"
@@ -323,6 +324,14 @@ func (r instanceRepo) UpdateDesired(ctx context.Context, id string, st instance.
 }
 
 func (r instanceRepo) SetObserved(ctx context.Context, id string, epoch int64, st instance.ObservedState, at time.Time) (bool, error) {
+	return r.setObserved(ctx, id, epoch, st, at, nil)
+}
+
+func (r instanceRepo) SetObservedEmitting(ctx context.Context, id string, epoch int64, st instance.ObservedState, at time.Time, ev events.Event) (bool, error) {
+	return r.setObserved(ctx, id, epoch, st, at, &ev)
+}
+
+func (r instanceRepo) setObserved(ctx context.Context, id string, epoch int64, st instance.ObservedState, at time.Time, ev *events.Event) (bool, error) {
 	changed := false
 	err := r.s.withTx(ctx, func(tx pgx.Tx) error {
 		var curEpoch int64
@@ -341,8 +350,13 @@ func (r instanceRepo) SetObserved(ctx context.Context, id string, epoch int64, s
 			return fmt.Errorf("%w: %s -> %s", errs.ErrInvalidTransition, cur, st)
 		}
 		changed = true
-		_, err := tx.Exec(ctx, `UPDATE instances SET observed_state=$2, last_status_change=$3, updated_at=$3 WHERE id=$1`, id, string(st), at)
-		return err
+		if _, err := tx.Exec(ctx, `UPDATE instances SET observed_state=$2, last_status_change=$3, updated_at=$3 WHERE id=$1`, id, string(st), at); err != nil {
+			return err
+		}
+		if ev != nil {
+			return insertEventOutbox(ctx, tx, *ev)
+		}
+		return nil
 	})
 	return changed, err
 }

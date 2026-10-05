@@ -105,8 +105,15 @@ func eventOutboxContract(t *testing.T, f RepoFactory) {
 	if n, err := fx.r.Events.Purge(ctx, time.Now().Add(-time.Hour)); err != nil || n != 0 {
 		t.Errorf("recent published events are kept: %d %v", n, err)
 	}
+	// published is not enough: the tenant's deliveries must exist too, or the broker losing the entry would lose the event
+	if n, err := fx.r.Events.Purge(ctx, time.Now().Add(time.Hour)); err != nil || n != 0 {
+		t.Errorf("a published event whose fan-out is not done is kept: %d %v", n, err)
+	}
+	if err := fx.r.Events.MarkFannedOut(ctx, []string{evs[0].EventID}, time.Now()); err != nil {
+		t.Fatal(err)
+	}
 	if n, err := fx.r.Events.Purge(ctx, time.Now().Add(time.Hour)); err != nil || n != 1 {
-		t.Errorf("old published events are purged, unpublished ones never: %d %v", n, err)
+		t.Errorf("old events that were published AND fanned out are purged, unfinished ones never: %d %v", n, err)
 	}
 	if left, _ := fx.r.Events.ListUnpublished(ctx, 10); len(left) != 1 {
 		t.Errorf("an unpublished event must survive purge: %d", len(left))

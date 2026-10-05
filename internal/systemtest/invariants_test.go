@@ -250,6 +250,7 @@ func statusEv(instID, pmid, state string) memory.FakeWebhookEv {
 func TestINV05_DuplicateEventsAreDeduplicated(t *testing.T) {
 	e := NewEnv(t)
 	inst := e.CreateInstance(e.Tenant, "a", true)
+	e.Flush()
 	base := len(e.Bus.Published()) // events already emitted while setting up
 	req := inboundBody(inst.NodeID, inst.AssignmentEpoch, recvEv(inst.ID, "wamid1"))
 	r1, err := e.App.Inbound.Handle(bg, ProviderKey, req)
@@ -532,6 +533,7 @@ func TestINV12_ReconcilerConverges(t *testing.T) {
 		return i.ObservedState == instance.Connected
 	})
 	var changed bool
+	e.Flush()
 	for _, ev := range e.Bus.Published() {
 		if ev.EventType == events.InstanceStatusChanged && ev.InstanceID == inst.ID {
 			changed = true

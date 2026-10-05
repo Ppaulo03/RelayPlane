@@ -32,7 +32,6 @@ type MediaIngestor struct {
 	Repos     ports.Repositories
 	Providers *app.ProviderRegistry
 	Blob      ports.BlobStore
-	Bus       ports.EventBus
 	Metrics   *observability.Metrics
 	Log       *slog.Logger
 	Now       func() time.Time
@@ -158,13 +157,11 @@ func (m *MediaIngestor) handle(ctx context.Context, j media.InboundJob) {
 		m.discard(ctx, j)
 		return
 	}
-	// publish the resolved event, then close the job (a crash in between republishes the same event id: consumers dedupe)
-	if err := m.Bus.Publish(ctx, j.Event); err != nil {
-		m.retry(ctx, j, fmt.Errorf("publish: %w", err))
+	// queue the resolved event in the event outbox and close the job in ONE transaction: the message cannot exist only in the broker. A
+	// crash before it leaves the job open and it is done again (the event id is deterministic, the outbox ignores a repeat).
+	if err := m.Repos.InboundMedia.Complete(ctx, j.ID, j.Event, m.now()); err != nil {
+		m.retry(ctx, j, fmt.Errorf("queue the resolved event: %w", err))
 		return
-	}
-	if err := m.Repos.InboundMedia.Done(ctx, j.ID, m.now()); err != nil {
-		m.Log.WarnContext(ctx, "could not close the inbound media job (it will be republished with the same event id)", "media_id", j.ID, "error", err)
 	}
 }
 

@@ -360,21 +360,16 @@ func (r *Reconciler) record(ctx context.Context, inst *instance.Instance, to ins
 			return err
 		}
 	}
-	changed, err := d.Repos.Instances.SetObserved(ctx, inst.ID, inst.AssignmentEpoch, to, r.Now())
-	if err != nil {
+	// the event is written in the SAME transaction as the state change: the catalog cannot change without the tenant eventually being told
+	ev := events.Event{EventID: ids.New("evt"), EventType: events.InstanceStatusChanged, Provider: inst.Provider,
+		TenantID: inst.TenantID, InstanceID: inst.ID, Timestamp: r.Now().UTC(),
+		SourceAssignment: &events.SourceAssignment{NodeID: inst.NodeID, Epoch: inst.AssignmentEpoch},
+		Payload:          events.InstanceStatusChangedPayload{State: string(to), Reason: "reconciled: " + reason}}
+	if _, err := d.Repos.Instances.SetObservedEmitting(ctx, inst.ID, inst.AssignmentEpoch, to, r.Now(), ev); err != nil {
 		if errors.Is(err, errs.ErrStaleAssignment) {
 			d.Metrics.EpochMismatchTotal.Inc()
 		}
 		return err
-	}
-	if changed {
-		ev := events.Event{EventID: ids.New("evt"), EventType: events.InstanceStatusChanged, Provider: inst.Provider,
-			TenantID: inst.TenantID, InstanceID: inst.ID, Timestamp: r.Now().UTC(),
-			SourceAssignment: &events.SourceAssignment{NodeID: inst.NodeID, Epoch: inst.AssignmentEpoch},
-			Payload:          events.InstanceStatusChangedPayload{State: string(to), Reason: "reconciled: " + reason}}
-		if perr := d.Bus.Publish(ctx, ev); perr != nil {
-			r.Log.WarnContext(ctx, "could not publish status change", "error", perr)
-		}
 	}
 	return nil
 }

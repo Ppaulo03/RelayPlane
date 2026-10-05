@@ -89,8 +89,8 @@ func NewMetrics() *Metrics {
 	m.EventDeliveryLag = prometheus.NewHistogramVec(prometheus.HistogramOpts{Name: "relayplane_event_delivery_lag_seconds",
 		Help:    "Seconds from the moment RelayPlane learned of an event to the consumer's 2xx answer. attempt=first is the healthy-path latency (target p95 < 2s); attempt=recovered waited for the lease of a dead worker; attempt=retry includes the backoff.",
 		Buckets: []float64{0.025, 0.05, 0.1, 0.25, 0.5, 1, 2, 5, 10, 30, 60, 300}}, []string{"event_type", "attempt"})
-	m.EventOutboxPending = prometheus.NewGauge(prometheus.GaugeOpts{Name: "relayplane_event_outbox_pending", Help: "Accepted events (inbound messages, statuses) that are not on the event bus yet."})
-	m.EventOutboxOldest = prometheus.NewGauge(prometheus.GaugeOpts{Name: "relayplane_event_outbox_oldest_seconds", Help: "How long the oldest accepted event has waited to reach the event bus: growing means nobody publishes the outbox."})
+	m.EventOutboxPending = prometheus.NewGauge(prometheus.GaugeOpts{Name: "relayplane_event_outbox_pending", Help: "Accepted events (inbound messages, statuses) whose deliveries for the tenant do not exist yet."})
+	m.EventOutboxOldest = prometheus.NewGauge(prometheus.GaugeOpts{Name: "relayplane_event_outbox_oldest_seconds", Help: "How long the oldest accepted event has waited for its tenant deliveries: growing means no worker is fanning the outbox out."})
 	m.UnknownMessages = prometheus.NewGauge(prometheus.GaugeOpts{Name: "relayplane_unknown_messages", Help: "Outbound messages in UNKNOWN: they wait for a decision (resolve) and hold back the later messages of their instance."})
 	m.UnknownOldest = prometheus.NewGauge(prometheus.GaugeOpts{Name: "relayplane_unknown_oldest_seconds", Help: "How long the oldest UNKNOWN message has been waiting."})
 	m.RetentionApplied = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "relayplane_retention_applied_total", Help: "Records anonymized or deleted by retention."}, []string{"kind"})

@@ -60,6 +60,9 @@ type InstanceRepository interface {
 	// SetObserved records an observed state. It validates the lifecycle
 	// transition and rejects a stale epoch (ErrStaleAssignment).
 	SetObserved(ctx context.Context, id string, epoch int64, state instance.ObservedState, at time.Time) (changed bool, err error)
+	// SetObservedEmitting is SetObserved plus the tenant-facing event of the change, queued in the event outbox in the SAME transaction (only
+	// when the state really changed): the catalog cannot change without the tenant eventually being told.
+	SetObservedEmitting(ctx context.Context, id string, epoch int64, state instance.ObservedState, at time.Time, ev events.Event) (changed bool, err error)
 	SetProviderInstance(ctx context.Context, id string, epoch int64, providerInstanceID string) error
 	// TouchHeartbeat records a provider heartbeat for the given assignment epoch;
 	// a heartbeat from an older assignment is rejected (ErrStaleAssignment).
