@@ -160,3 +160,31 @@ func TestOpenAPIHasNoDuplicateKeys(t *testing.T) {
 		t.Errorf("the parser found only %d paths: this check is not looking at the contract", len(paths))
 	}
 }
+
+// The sandbox that runs WITHOUT the repository must really not need it: no build, no overlay on another compose file, every image from the
+// release, and nothing published to the host beyond the loopback.
+func TestStandaloneSandboxNeedsNothingFromTheRepository(t *testing.T) {
+	c := readRepoFile(t, "deploy", "sandbox", "compose.yml")
+	if regexp.MustCompile(`(?m)^\s+build:`).MatchString(c) || strings.Contains(c, "!override") || strings.Contains(c, "!reset") || strings.Contains(c, "extends:") {
+		t.Error("the standalone sandbox must be self-contained: no build, no overlay, no extends")
+	}
+	for _, v := range []string{"GATEWAY_IMAGE", "WORKER_IMAGE", "RECONCILER_IMAGE", "SIMULATOR_IMAGE"} {
+		if !strings.Contains(c, "${"+v+":?") {
+			t.Errorf("the sandbox must take %s from the release (no default)", v)
+		}
+	}
+	for _, m := range regexp.MustCompile(`(?m)^\s+ports:\s*\["([^"]+)"`).FindAllStringSubmatch(c, -1) {
+		if !strings.HasPrefix(m[1], "127.0.0.1:") {
+			t.Errorf("a sandbox port must be bound to the loopback: %s", m[1])
+		}
+	}
+	if regexp.MustCompile(`(?m)^\s+\./`).MatchString(c) || strings.Contains(c, " - ./") {
+		t.Error("the standalone sandbox mounts nothing from the repository")
+	}
+	r := readRepoFile(t, ".github", "workflows", "release.yml")
+	for _, want := range []string{"simulator]", "SIMULATOR_IMAGE=", "relayplane-sandbox-$VERSION.tar.gz", "deploy/sandbox/sandbox.sh", "deploy/sandbox/compose.yml"} {
+		if !strings.Contains(r, want) {
+			t.Errorf("the release must publish the sandbox bundle: missing %q", want)
+		}
+	}
+}

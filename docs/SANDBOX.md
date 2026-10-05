@@ -11,6 +11,23 @@ make sandbox-down
 make test-sandbox      # up + exemplo + down (é o que o CI roda)
 ```
 
+## Sem clonar o repositório
+
+Cada release publica `relayplane-sandbox-<versão>.tar.gz` (nos artefatos do run e, em release por tag, no release do GitHub). Ele traz o script, o compose e o `images.env` das imagens **daquele release**
+(gateway, worker, reconciler e o simulador, todos por digest; os pacotes do GHCR são públicos), então só precisa de Docker e curl:
+
+```bash
+tar xzf relayplane-sandbox-0.3.0.tar.gz && cd sandbox-0.3.0
+sh sandbox.sh up      # gera .env.sandbox; GATEWAY_PORT, SIM_NODE_01_PORT e SIM_NODE_02_PORT mudam as portas se as padrão (18080-18082) estiverem ocupadas
+sh sandbox.sh info    # URLs e chaves
+sh sandbox.sh down    # remove tudo, inclusive os dados
+```
+
+Sem o script: `docker compose --env-file .env.sandbox --env-file images.env -f compose.yml up -d --wait` (o `.env.sandbox` precisa de `ADMIN_API_KEY`, `WEBHOOK_SECRET`,
+`EVOLUTION_NODE_01_API_KEY`, `EVOLUTION_NODE_02_API_KEY` e `BLOB_SECRET_KEY`). Não depende de nada do repositório (não constrói, não monta arquivos, não usa overlay); um teste de arquitetura garante isso.
+Um consumidor rodando na sua máquina recebe os webhooks em `http://host.docker.internal:<porta>/...`. O que muda em relação ao `make sandbox-up`: usa imagens publicadas em vez de construir do código.
+O `examples/sandbox/quickstart.py` roda igual contra ele (precisa do SDK Python).
+
 Gateway `http://127.0.0.1:18080` · simulador do node-01 `http://127.0.0.1:18081` · node-02 `18082` (header `apikey` = `EVOLUTION_NODE_0X_API_KEY` de `.env.sandbox`).
 
 ## O que o simulador faz
