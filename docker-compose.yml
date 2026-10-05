@@ -20,6 +20,7 @@ x-relayplane-env: &relayplane-env
   WEBHOOK_SECRET: ${WEBHOOK_SECRET:?set WEBHOOK_SECRET}
   WEBHOOK_BASE_URL: http://gateway:8080
   SUBSCRIPTION_SECRET: ${SUBSCRIPTION_SECRET:-}
+  ERASURE_KEY: ${ERASURE_KEY:-}
   IDEMPOTENCY_TTL: ${IDEMPOTENCY_TTL:-24h}
   # tenant webhooks may target private addresses in development; APP_ENV=production forbids it (override explicitly if you must)
   WEBHOOKS_ALLOW_PRIVATE_DESTINATIONS: ${WEBHOOKS_ALLOW_PRIVATE_DESTINATIONS:-}

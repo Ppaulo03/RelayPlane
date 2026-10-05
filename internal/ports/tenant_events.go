@@ -77,8 +77,9 @@ type DeliveryRepository interface {
 	Requeue(ctx context.Context, tenantID, id string, now time.Time) error
 	PurgeDelivered(ctx context.Context, before time.Time) (int64, error)
 	// PurgePending deletes deliveries still PENDING that were created before `before` (a subscription left paused, a consumer that never
-	// comes back): they hold the user's text too. The subscription sees gaps in `sequence`.
-	PurgePending(ctx context.Context, before time.Time) (int64, error)
+	// comes back): they hold the user's text too. The subscription sees gaps in `sequence`. A delivery a dispatcher holds (leased) is left
+	// alone (`now` is the application clock, the one the leases were written with): the next pass gets it.
+	PurgePending(ctx context.Context, before, now time.Time) (int64, error)
 	// PurgeDead deletes dead-lettered deliveries created before `before`: the DLQ keeps the user's text, so it needs a retention.
 	PurgeDead(ctx context.Context, before time.Time) (int64, error)
 	// EraseContact deletes every delivery of the tenant whose event is about the contact (payload.from == number), whatever

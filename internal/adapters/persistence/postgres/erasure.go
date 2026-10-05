@@ -113,8 +113,8 @@ func (r deliveriesRepo) PurgeDead(ctx context.Context, before time.Time) (int64,
 	return tag.RowsAffected(), err
 }
 
-func (r deliveriesRepo) PurgePending(ctx context.Context, before time.Time) (int64, error) {
-	tag, err := r.s.pool.Exec(ctx, `DELETE FROM webhook_deliveries WHERE status='PENDING' AND created_at < $1`, before)
+func (r deliveriesRepo) PurgePending(ctx context.Context, before, now time.Time) (int64, error) {
+	tag, err := r.s.pool.Exec(ctx, `DELETE FROM webhook_deliveries WHERE status='PENDING' AND created_at < $1 AND (lease_until IS NULL OR lease_until <= $2)`, before, now)
 	return tag.RowsAffected(), err
 }
 

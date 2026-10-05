@@ -111,6 +111,8 @@ func New(ctx context.Context, cfg config.Config, service string) (*Runtime, erro
 	acfg.DefaultRate = messaging.RatePolicy{MinInterval: cfg.RateMinInterval, Burst: cfg.RateBurst, MaxPerMinute: cfg.RateMaxPerMinute,
 		MaxConcurrent: cfg.RateMaxConcurrent, Cooldown: cfg.RateCooldown}
 	subKey := subscriptionKey(cfg)
+	erKey := erasureKey(cfg)
+	acfg.ErasureKey = erKey
 	acfg.Subscriptions = app.SubscriptionConfig{ServerKey: subKey, MaxPerTenant: cfg.WebhooksMaxPerTenant,
 		AllowInsecureURLs: cfg.WebhooksAllowInsecure, AllowPrivateDestinations: cfg.WebhooksAllowPrivate}
 
@@ -122,8 +124,8 @@ func New(ctx context.Context, cfg config.Config, service string) (*Runtime, erro
 	rt.App = app.New(app.Deps{Repos: repos, Providers: reg, Queue: rt.Queue, Bus: rt.Bus, Blob: rt.Blob,
 		Locker: redislock.New(rt.Redis, ""), Idem: idem, Metrics: rt.Metrics, Log: log, Cfg: acfg})
 
-	rt.FanOut = &delivery.FanOut{Repos: repos, Log: log, Metrics: rt.Metrics}
-	rt.Dispatcher = &delivery.Dispatcher{Repos: repos, ServerKey: subKey, Metrics: rt.Metrics, Log: log,
+	rt.FanOut = &delivery.FanOut{Repos: repos, Log: log, Metrics: rt.Metrics, ErasureKey: erKey}
+	rt.Dispatcher = &delivery.Dispatcher{Repos: repos, ServerKey: subKey, ErasureKey: erKey, Metrics: rt.Metrics, Log: log,
 		Sender:         webhookout.New(webhookout.Config{AllowPrivate: cfg.WebhooksAllowPrivate, AllowInsecure: cfg.WebhooksAllowInsecure}),
 		RequestTimeout: cfg.WebhookDeliveryTimeout, Concurrency: cfg.WebhookDeliveryWorkers, MaxInFlightPerSubscription: cfg.WebhookMaxInFlightPerSub}
 	return rt, nil
@@ -137,6 +139,16 @@ func subscriptionKey(cfg config.Config) []byte {
 	}
 	m := hmac.New(sha256.New, []byte(cfg.WebhookSecret))
 	m.Write([]byte("relayplane/subscription-server-key/v1"))
+	return m.Sum(nil)
+}
+
+// erasureKey keys the tombstones of erased contacts: ERASURE_KEY when set, otherwise derived from WEBHOOK_SECRET with domain separation.
+func erasureKey(cfg config.Config) []byte {
+	if cfg.ErasureKey != "" {
+		return []byte(cfg.ErasureKey)
+	}
+	m := hmac.New(sha256.New, []byte(cfg.WebhookSecret))
+	m.Write([]byte("relayplane/erasure-key/v1"))
 	return m.Sum(nil)
 }
 

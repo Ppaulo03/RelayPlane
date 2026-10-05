@@ -32,9 +32,11 @@ type MediaIngestor struct {
 	Repos     ports.Repositories
 	Providers *app.ProviderRegistry
 	Blob      ports.BlobStore
-	Metrics   *observability.Metrics
-	Log       *slog.Logger
-	Now       func() time.Time
+	// ErasureKey keys the erasure tombstones (events.ErasureSubject)
+	ErasureKey []byte
+	Metrics    *observability.Metrics
+	Log        *slog.Logger
+	Now        func() time.Time
 
 	MaxBytes int64 // largest attachment that is stored
 	TTL      time.Duration
@@ -168,7 +170,7 @@ func (m *MediaIngestor) handle(ctx context.Context, j media.InboundJob) {
 // erased reports whether the sender of the job's message was erased after the message was accepted. A failed check counts as "no":
 // the job is retried and asked again before anything is published.
 func (m *MediaIngestor) erased(ctx context.Context, j media.InboundJob) bool {
-	gone, err := m.Repos.Erasures.Erased(ctx, j.Event)
+	gone, err := ports.ErasedEvent(ctx, m.Repos.Erasures, m.ErasureKey, j.Event)
 	if err != nil {
 		m.Log.WarnContext(ctx, "could not check the erasure tombstones", "media_id", j.ID, "error", err)
 		return false

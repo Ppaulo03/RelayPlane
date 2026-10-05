@@ -455,3 +455,65 @@ func TestCircuitBreakerIsPerSubscriptionNotPerHost(t *testing.T) {
 		t.Fatalf("tenant 2 must be served although tenant 1's circuit on the same host is open: %d delivered", len(got))
 	}
 }
+
+// acceptedEvent is an inbound message of a contact, accepted "now" (the moment an erasure is compared with).
+func (e *env) acceptedEvent(id, tenant, inst string, typ events.Type) events.Event {
+	at := e.clock.Now().UTC()
+	ev := event(id, tenant, inst)
+	ev.EventType, ev.AcceptedAt = typ, &at
+	if typ == events.MessageDeleted {
+		ev.Payload = events.MessageDeletedPayload{ProviderMessageID: "W" + id, From: "5562988887777"}
+	} else {
+		ev.Payload = events.MessageReceivedPayload{ProviderMessageID: "W" + id, From: "5562988887777", Type: "text", Text: "segredo"}
+	}
+	return ev
+}
+
+func (e *env) erase(t *testing.T, tenant string, at time.Time) {
+	t.Helper()
+	if err := e.repos.Erasures.Mark(bg, tenant, events.ErasureSubject(nil, "5562988887777"), at); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// The erasure came after the dispatcher claimed the delivery (it holds a copy of the text; the erasure deleted the row): nothing may go out
+// after the erasure returned.
+func TestDispatcherDropsAClaimedDeliveryOfAContactErasedAfterTheClaim(t *testing.T) {
+	e := newEnv(t)
+	e.disp.Concurrency = 1 // the second delivery is claimed with the first and waits for its turn
+	e.sub(t, "sub_a", "t1", "https://a.example.com/h")
+	_ = e.fan.Handle(bg, e.acceptedEvent("evt_1", "t1", "inst_1", events.MessageReceived))
+	_ = e.fan.Handle(bg, e.acceptedEvent("evt_2", "t1", "inst_2", events.MessageReceived))
+	e.sender.reply = func(n int, _ ports.WebhookRequest) (int, error) {
+		if n == 1 { // the contact is erased while the first POST is going out
+			e.erase(t, "t1", e.clock.Now().Add(time.Second))
+		}
+		return 200, nil
+	}
+	if _, err := e.disp.RunOnce(bg); err != nil {
+		t.Fatal(err)
+	}
+	if e.sender.count() != 1 {
+		t.Fatalf("the delivery claimed before the erasure must not be sent after it: %d POSTs", e.sender.count())
+	}
+	if n := len(e.deliveries(t, "t1", "sub_a", subscription.DeliveryPending)); n != 0 {
+		t.Errorf("it is dropped, not kept: %d pending", n)
+	}
+}
+
+// A deletion notice carries the author's number too: after the erasure it must not become a delivery.
+func TestFanOutDropsTheDeletionNoticeOfAnErasedContact(t *testing.T) {
+	e := newEnv(t)
+	e.sub(t, "sub_a", "t1", "https://a.example.com/h")
+	e.erase(t, "t1", e.clock.Now().Add(time.Second))
+	_ = e.fan.Handle(bg, e.acceptedEvent("evt_del", "t1", "inst_1", events.MessageDeleted))
+	if n := len(e.deliveries(t, "t1", "sub_a", subscription.DeliveryPending)); n != 0 {
+		t.Fatalf("a message.deleted of an erased contact must not be delivered: %d", n)
+	}
+	// but one that is NEW (accepted after the erasure) is
+	e.clock.Advance(5 * time.Second)
+	_ = e.fan.Handle(bg, e.acceptedEvent("evt_del2", "t1", "inst_1", events.MessageDeleted))
+	if n := len(e.deliveries(t, "t1", "sub_a", subscription.DeliveryPending)); n != 1 {
+		t.Fatalf("a notice accepted after the erasure is new data: %d", n)
+	}
+}

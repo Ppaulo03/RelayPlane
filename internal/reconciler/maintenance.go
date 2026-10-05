@@ -48,9 +48,6 @@ func (r *Reconciler) Maintenance(ctx context.Context) {
 	if _, err := d.Repos.Deliveries.PurgeDelivered(ctx, time.Now().Add(-r.Cfg.DeliveredRetention)); err != nil {
 		r.Log.WarnContext(ctx, "delivered webhook purge failed", "error", err)
 	}
-	if _, err := d.Repos.Erasures.Purge(ctx, time.Now().Add(-app.ErasureTombstoneRetention)); err != nil {
-		r.Log.WarnContext(ctx, "erasure tombstone purge failed", "error", err)
-	}
 	app.RecordDeliveryGauges(ctx, d)
 	app.RecordUnknownGauges(ctx, d)
 	app.RecordEventOutboxGauges(ctx, d)

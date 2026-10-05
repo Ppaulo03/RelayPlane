@@ -54,7 +54,7 @@ func run() error {
 
 	rt.Log.Info("worker started", "version", version, "partitions", cfg.CommandPartitions)
 	var wg sync.WaitGroup
-	ingest := &worker.MediaIngestor{Repos: d.Repos, Providers: d.Providers, Blob: d.Blob, Metrics: rt.Metrics, Log: rt.Log,
+	ingest := &worker.MediaIngestor{Repos: d.Repos, Providers: d.Providers, Blob: d.Blob, ErasureKey: d.Cfg.ErasureKey, Metrics: rt.Metrics, Log: rt.Log,
 		MaxBytes: d.Cfg.EffectiveInboundMaxBytes(), TTL: d.Cfg.EffectiveInboundTTL(), Policy: d.Cfg.MediaPolicy}
 	wg.Add(6)
 	go func() { defer wg.Done(); ingest.Run(ctx) }()
