@@ -1,12 +1,15 @@
 package release_test
 
 import (
+	"bytes"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/relayplane/relayplane/internal/release"
+	"go.yaml.in/yaml/v3"
 )
 
 func digest(c rune) string { return "sha256:" + strings.Repeat(string(c), 64) }
@@ -63,6 +66,36 @@ func TestTheRepositoryManifestRendersToSomethingDeployable(t *testing.T) {
 	}
 	if err := release.Verify(out); err != nil {
 		t.Error(err)
+	}
+}
+
+func TestTheRepositoryManifestIsValidYAMLAndKeepsAvailabilityGuards(t *testing.T) {
+	raw := template(t)
+	dec := yaml.NewDecoder(bytes.NewReader(raw))
+	documents := 0
+	for {
+		var document map[string]any
+		err := dec.Decode(&document)
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			t.Fatalf("manifest document %d is invalid YAML: %v", documents+1, err)
+		}
+		if len(document) != 0 {
+			documents++
+		}
+	}
+	if documents != 12 {
+		t.Fatalf("expected 12 Kubernetes resources, got %d", documents)
+	}
+
+	text := string(raw)
+	if !strings.Contains(text, "updateStrategy: {type: OnDelete}") {
+		t.Error("Evolution must require an explicit, drained pod replacement")
+	}
+	if got := strings.Count(text, "kind: PodDisruptionBudget"); got != 4 {
+		t.Errorf("expected four PodDisruptionBudgets, got %d", got)
 	}
 }
 

@@ -16,10 +16,8 @@ import (
 	"github.com/relayplane/relayplane/internal/ports"
 )
 
-// Projector applies canonical events to the catalog: delivery receipts update
-// outbound messages and instance.status_changed updates observed_state within
-// milliseconds, without waiting for the reconciler (which stays as the safety
-// net for lost events).
+// Projector applies canonical events from the durable database outbox to the catalog: delivery receipts update outbound messages and
+// instance.status_changed updates observed_state within milliseconds, without relying on Redis retaining the event.
 type Projector struct {
 	Repos ports.Repositories
 	Log   *slog.Logger
@@ -29,11 +27,71 @@ type Projector struct {
 	// ReceiptGrace is how long an unknown provider message id is retried: the
 	// receipt may overtake the worker recording ACCEPTED.
 	ReceiptGrace time.Duration
+	Batch        int
+	Lease        time.Duration
+	Poll         time.Duration
 }
 
 // NewProjector returns a projector with defaults.
 func NewProjector(repos ports.Repositories, log *slog.Logger) *Projector {
 	return &Projector{Repos: repos, Log: log, Now: time.Now, ReceiptGrace: time.Minute}
+}
+
+func (p *Projector) defaults() {
+	if p.Batch <= 0 {
+		p.Batch = 100
+	}
+	if p.Lease <= 0 {
+		p.Lease = 10 * time.Second
+	}
+	if p.Poll <= 0 {
+		p.Poll = 100 * time.Millisecond
+	}
+	if p.Now == nil {
+		p.Now = time.Now
+	}
+	if p.Log == nil {
+		p.Log = slog.Default()
+	}
+}
+
+// Run projects durable events until ctx is cancelled. Several workers may run it: claims are exclusive until their lease expires.
+func (p *Projector) Run(ctx context.Context) {
+	p.defaults()
+	for ctx.Err() == nil {
+		n, err := p.RunOnce(ctx)
+		if err != nil && ctx.Err() == nil {
+			p.Log.WarnContext(ctx, "projector pass failed", "error", err)
+		}
+		if n == 0 || err != nil {
+			select {
+			case <-ctx.Done():
+			case <-time.After(p.Poll):
+			}
+		}
+	}
+}
+
+// RunOnce claims and projects one batch in outbox order. Successfully handled events are marked even if a later event fails; the failed
+// event becomes claimable again after its lease. Handle is idempotent, so a crash between the effect and the mark is safe.
+func (p *Projector) RunOnce(ctx context.Context) (int, error) {
+	p.defaults()
+	evs, err := p.Repos.Events.ClaimForProjection(ctx, p.Batch, p.Lease)
+	if err != nil || len(evs) == 0 {
+		return 0, err
+	}
+	done := make([]string, 0, len(evs))
+	var herr error
+	for _, ev := range evs {
+		if herr = p.Handle(ctx, ev); herr != nil {
+			break
+		}
+		done = append(done, ev.EventID)
+	}
+	if err := p.Repos.Events.MarkProjected(context.WithoutCancel(ctx), done, p.Now().UTC()); err != nil {
+		return len(done), err
+	}
+	return len(done), herr
 }
 
 func decode[T any](payload any) (T, error) {
@@ -49,7 +107,7 @@ func decode[T any](payload any) (T, error) {
 	return out, err
 }
 
-// Handle is the ports.EventHandler of the projector consumer group.
+// Handle applies one canonical event. It is intentionally idempotent because a worker may die after the effect and before MarkProjected.
 func (p *Projector) Handle(ctx context.Context, ev events.Event) error {
 	ctx = observability.With(ctx, observability.KeyTenantID, ev.TenantID, observability.KeyInstanceID, ev.InstanceID, observability.KeyProvider, ev.Provider)
 	ctx, span := observability.Start(ctx, "projector.handle")

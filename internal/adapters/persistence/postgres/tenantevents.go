@@ -70,6 +70,71 @@ func (r eventsRepo) ListUnpublished(ctx context.Context, limit int) ([]events.Ev
 	return out, rows.Err()
 }
 
+func (r eventsRepo) ClaimForPublication(ctx context.Context, limit int, lease time.Duration) ([]events.Event, error) {
+	if limit <= 0 {
+		limit = 100
+	}
+	return r.claim(ctx, limit, lease, `
+WITH due AS (
+    SELECT seq FROM event_outbox
+    WHERE published_at IS NULL AND (publish_lease_until IS NULL OR publish_lease_until <= now())
+    ORDER BY seq LIMIT $1 FOR UPDATE SKIP LOCKED
+)
+UPDATE event_outbox o SET publish_lease_until = now() + make_interval(secs => $2)
+FROM due WHERE o.seq = due.seq
+  AND o.published_at IS NULL AND (o.publish_lease_until IS NULL OR o.publish_lease_until <= now())
+RETURNING o.seq, o.event`)
+}
+
+func (r eventsRepo) ClaimForProjection(ctx context.Context, limit int, lease time.Duration) ([]events.Event, error) {
+	if limit <= 0 {
+		limit = 100
+	}
+	return r.claim(ctx, limit, lease, `
+WITH due AS (
+    SELECT seq FROM event_outbox
+    WHERE projected_at IS NULL AND (projection_lease_until IS NULL OR projection_lease_until <= now())
+    ORDER BY seq LIMIT $1 FOR UPDATE SKIP LOCKED
+)
+UPDATE event_outbox o SET projection_lease_until = now() + make_interval(secs => $2)
+FROM due WHERE o.seq = due.seq
+  AND o.projected_at IS NULL AND (o.projection_lease_until IS NULL OR o.projection_lease_until <= now())
+RETURNING o.seq, o.event`)
+}
+
+func (r eventsRepo) claim(ctx context.Context, limit int, lease time.Duration, query string) ([]events.Event, error) {
+	rows, err := r.s.pool.Query(ctx, query, limit, lease.Seconds())
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	type claimed struct {
+		seq int64
+		ev  events.Event
+	}
+	var got []claimed
+	for rows.Next() {
+		var c claimed
+		var raw []byte
+		if err := rows.Scan(&c.seq, &raw); err != nil {
+			return nil, err
+		}
+		if err := json.Unmarshal(raw, &c.ev); err != nil {
+			return nil, fmt.Errorf("corrupt event_outbox row %d: %w", c.seq, err)
+		}
+		got = append(got, c)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	sort.Slice(got, func(i, j int) bool { return got[i].seq < got[j].seq })
+	out := make([]events.Event, len(got))
+	for i, c := range got {
+		out[i] = c.ev
+	}
+	return out, nil
+}
+
 func (r eventsRepo) ClaimForFanOut(ctx context.Context, limit int, lease time.Duration) ([]events.Event, error) {
 	if limit <= 0 {
 		limit = 100
@@ -129,12 +194,20 @@ func (r eventsRepo) MarkPublished(ctx context.Context, ids []string, at time.Tim
 	if len(ids) == 0 {
 		return nil
 	}
-	_, err := r.s.pool.Exec(ctx, `UPDATE event_outbox SET published_at=$2 WHERE event_id = ANY($1) AND published_at IS NULL`, ids, at)
+	_, err := r.s.pool.Exec(ctx, `UPDATE event_outbox SET published_at=$2, publish_lease_until=NULL WHERE event_id = ANY($1) AND published_at IS NULL`, ids, at)
+	return err
+}
+
+func (r eventsRepo) MarkProjected(ctx context.Context, ids []string, at time.Time) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	_, err := r.s.pool.Exec(ctx, `UPDATE event_outbox SET projected_at=$2, projection_lease_until=NULL WHERE event_id = ANY($1) AND projected_at IS NULL`, ids, at)
 	return err
 }
 
 func (r eventsRepo) Purge(ctx context.Context, before time.Time) (int64, error) {
-	tag, err := r.s.pool.Exec(ctx, `DELETE FROM event_outbox WHERE published_at IS NOT NULL AND fanout_at IS NOT NULL AND published_at < $1`, before)
+	tag, err := r.s.pool.Exec(ctx, `DELETE FROM event_outbox WHERE published_at IS NOT NULL AND projected_at IS NOT NULL AND fanout_at IS NOT NULL AND published_at < $1`, before)
 	return tag.RowsAffected(), err
 }
 
@@ -147,6 +220,16 @@ func (r eventsRepo) PendingStats(ctx context.Context) (int64, time.Duration, err
 	var n int64
 	var age *float64
 	err := r.s.pool.QueryRow(ctx, `SELECT count(*), extract(epoch FROM now() - min(created_at)) FROM event_outbox WHERE fanout_at IS NULL`).Scan(&n, &age)
+	if err != nil || age == nil {
+		return n, 0, err
+	}
+	return n, time.Duration(*age * float64(time.Second)), nil
+}
+
+func (r eventsRepo) ProjectionPendingStats(ctx context.Context) (int64, time.Duration, error) {
+	var n int64
+	var age *float64
+	err := r.s.pool.QueryRow(ctx, `SELECT count(*), extract(epoch FROM now() - min(created_at)) FROM event_outbox WHERE projected_at IS NULL`).Scan(&n, &age)
 	if err != nil || age == nil {
 		return n, 0, err
 	}

@@ -98,6 +98,6 @@ informativo (não bloqueia) para nunca serem surpresa. O que bloqueia é `CRITIC
 
 ## Para o time de operação
 
-* **`/metrics` está na porta pública do gateway**, sem autenticação. Bloqueie `/metrics` no ingress ou publique só a porta de operação (os workers e o reconciler já usam `OPS_PORT`).
+* **`/metrics` usa `OPS_PORT` em todos os binários**, separado da API pública do gateway. Restrinja essa porta à rede de observabilidade.
 * O limite de requisições por tenant é **por réplica do gateway**.
 * Postgres é a fonte da verdade: backup e restauração são seus. Redis guarda comandos e eventos em trânsito (`appendonly` ligado no compose).

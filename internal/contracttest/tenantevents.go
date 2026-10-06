@@ -112,8 +112,14 @@ func eventOutboxContract(t *testing.T, f RepoFactory) {
 	if err := fx.r.Events.MarkFannedOut(ctx, []string{evs[0].EventID}, time.Now()); err != nil {
 		t.Fatal(err)
 	}
+	if n, err := fx.r.Events.Purge(ctx, time.Now().Add(time.Hour)); err != nil || n != 0 {
+		t.Errorf("a published and fanned-out event still needed by the projector is kept: %d %v", n, err)
+	}
+	if err := fx.r.Events.MarkProjected(ctx, []string{evs[0].EventID}, time.Now()); err != nil {
+		t.Fatal(err)
+	}
 	if n, err := fx.r.Events.Purge(ctx, time.Now().Add(time.Hour)); err != nil || n != 1 {
-		t.Errorf("old events that were published AND fanned out are purged, unfinished ones never: %d %v", n, err)
+		t.Errorf("old events finished by publication, projection and fan-out are purged: %d %v", n, err)
 	}
 	if left, _ := fx.r.Events.ListUnpublished(ctx, 10); len(left) != 1 {
 		t.Errorf("an unpublished event must survive purge: %d", len(left))

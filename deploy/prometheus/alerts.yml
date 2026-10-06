@@ -31,6 +31,11 @@ groups:
         for: 1m
         labels: {severity: page}
         annotations: {summary: "accepted events have waited over 30 s for their tenant deliveries to be created: no worker is fanning the event outbox out (workers down or the database unreachable). Nothing is lost, it is in the database, but tenants are told late"}
+      - alert: RelayPlaneEventProjectionStalled
+        expr: relayplane_event_projection_oldest_seconds > 30
+        for: 1m
+        labels: {severity: page}
+        annotations: {summary: "accepted events have waited over 30 s for internal projection: delivery receipts and instance state may be late, but remain durable in PostgreSQL"}
       - alert: RelayPlaneUnknownMessageWaiting
         expr: relayplane_unknown_oldest_seconds > 300
         for: 1m

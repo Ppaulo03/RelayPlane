@@ -447,6 +447,25 @@ func TestProjector_LateAndDuplicateEvents(t *testing.T) {
 	}
 }
 
+// Redis may acknowledge an event and lose it before any consumer reads it. The projector reads the database row independently, so the
+// receipt still advances the message and emits the tenant-facing outbound status.
+func TestProjector_BrokerLossAfterPublishDoesNotLoseReceipt(t *testing.T) {
+	e := NewEnv(t)
+	e.StartWorkers(1)
+	inst := e.CreateInstance(e.Tenant, "a", true)
+	r, _, _ := e.SendText(e.Tenant, inst.ID, "hi", "")
+	m := e.WaitMessage(r.MessageID, messaging.StatusAccepted)
+
+	e.Bus.Drop.Store(true)
+	if _, err := e.App.Inbound.Handle(bg, ProviderKey, inboundBody(inst.NodeID, inst.AssignmentEpoch,
+		statusEv(inst.ID, m.ProviderMessageID, "delivered"))); err != nil {
+		t.Fatal(err)
+	}
+	e.Flush() // the broker acknowledges and drops every pending event
+	e.StartProjector()
+	e.WaitMessage(r.MessageID, messaging.StatusDelivered)
+}
+
 // A rolled back transaction leaves nothing behind and the retry succeeds.
 func TestFailure_DatabaseRollbackDuringPlacement(t *testing.T) {
 	e := NewEnv(t)

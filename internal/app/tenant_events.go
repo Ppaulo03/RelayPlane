@@ -20,9 +20,11 @@ import (
 // crash an event may be published twice, never zero times; event ids are deterministic so consumers dedupe.
 type EventOutboxService struct{ d Deps }
 
+const eventPublishLease = 10 * time.Second
+
 // PublishPending publishes up to limit events in order. A publish failure stops at that event so order is kept.
 func (s *EventOutboxService) PublishPending(ctx context.Context, limit int) (int, error) {
-	evs, err := s.d.Repos.Events.ListUnpublished(ctx, limit)
+	evs, err := s.d.Repos.Events.ClaimForPublication(ctx, limit, eventPublishLease)
 	if err != nil || len(evs) == 0 {
 		return 0, err
 	}
@@ -225,11 +227,15 @@ func (s *SubscriptionService) Redeliver(ctx context.Context, tenantID, deliveryI
 // RecordEventOutboxGauges publishes how many accepted events wait to reach the bus and for how long.
 func RecordEventOutboxGauges(ctx context.Context, d Deps) {
 	n, oldest, err := d.Repos.Events.PendingStats(ctx)
-	if err != nil {
-		return
+	if err == nil {
+		d.Metrics.EventOutboxPending.Set(float64(n))
+		d.Metrics.EventOutboxOldest.Set(oldest.Seconds())
 	}
-	d.Metrics.EventOutboxPending.Set(float64(n))
-	d.Metrics.EventOutboxOldest.Set(oldest.Seconds())
+	n, oldest, err = d.Repos.Events.ProjectionPendingStats(ctx)
+	if err == nil {
+		d.Metrics.EventProjectionPending.Set(float64(n))
+		d.Metrics.EventProjectionOldest.Set(oldest.Seconds())
+	}
 }
 
 func RecordDeliveryGauges(ctx context.Context, d Deps) {

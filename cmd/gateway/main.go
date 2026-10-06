@@ -41,10 +41,11 @@ func run() error {
 		return err
 	}
 	defer rt.Close(context.Background())
+	rt.ServeOps(ctx, ":"+cfg.OpsPort)
 	if err := rt.SeedNodes(ctx); err != nil {
 		return err
 	}
-	api := &apihttp.Server{App: rt.App, Metrics: rt.Metrics, Log: rt.Log, Ready: rt.ReadyChecks(), MaxUpload: cfg.MediaMaxBytes,
+	api := &apihttp.Server{App: rt.App, Metrics: rt.Metrics, HideMetrics: true, Log: rt.Log, Ready: rt.ReadyChecks(), MaxUpload: cfg.MediaMaxBytes,
 		TenantRate: apihttp.RateConfig{PerSecond: cfg.APIRatePerSecond, Burst: cfg.APIRateBurst},
 		Auth:       apihttp.KeyAuthenticator{Tenants: rt.App.Tenants, AdminKey: cfg.AdminAPIKey}}
 	srv := &http.Server{Addr: ":" + cfg.HTTPPort, Handler: api.Handler(), ReadHeaderTimeout: 10 * time.Second, IdleTimeout: 120 * time.Second}

@@ -296,6 +296,22 @@ func TestWebhookEndpoint(t *testing.T) {
 	}
 }
 
+func TestMetricsCanBeHiddenFromThePublicListener(t *testing.T) {
+	e := systemtest.NewEnv(t)
+	api := &apihttp.Server{App: e.App, Metrics: e.Metrics, HideMetrics: true,
+		Log: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	srv := httptest.NewServer(api.Handler())
+	defer srv.Close()
+	resp, err := nethttp.Get(srv.URL + "/metrics")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != nethttp.StatusNotFound {
+		t.Fatalf("public /metrics status = %d, want 404", resp.StatusCode)
+	}
+}
+
 func sha256Hex(b []byte) string {
 	s := sha256.Sum256(b)
 	return hex.EncodeToString(s[:])

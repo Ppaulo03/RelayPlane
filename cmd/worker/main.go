@@ -59,7 +59,7 @@ func run() error {
 	wg.Add(6)
 	go func() { defer wg.Done(); ingest.Run(ctx) }()
 	go func() { defer wg.Done(); _ = rt.Queue.Consume(ctx, out.Handle) }()
-	go func() { defer wg.Done(); _ = rt.Bus.Subscribe(ctx, "projector", proj.Handle) }()
+	go func() { defer wg.Done(); proj.Run(ctx) }()
 	go func() { defer wg.Done(); rt.FanOut.Run(ctx) }() // from the database, not from the broker
 	go func() { defer wg.Done(); rt.Dispatcher.Run(ctx) }()
 	go func() {

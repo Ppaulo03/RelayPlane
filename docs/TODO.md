@@ -10,13 +10,11 @@ Legenda: 🔑 precisa de número de WhatsApp real · 👤 decisão ou ação sua
 - [ ] 🔑 **Casos do roteiro R22 ainda não vistos:** migração de instância com QR, reação, enquete, localização, queda de conexão **sem** logout, vídeo grande (100 MB) para medir memória do ingestor.
 - [ ] 🧱👤 **Um release candidato novo** com tudo o que entrou depois do `0.3.0-rc3` (entrega ao tenant pelo banco, apagamento fechado nas bordas, contrato `schema_version` 2, limites de assinatura), validado com número real antes do oficial.
 - [ ] 👤 **Primeiro release oficial:** escolher o número (`0.3.0`?), alinhar `docs/VERSIONS.md` e o `docker-compose.yml` (ainda citam 0.2.0), criar a tag `v<versão>` (gera os artefatos e o release no GitHub). Os candidatos `0.3.0-rc1`, `-rc2` e `-rc3` já estão públicos no GHCR: não reutilize esses números.
-- [ ] 👤 **Quem implanta** (decidido: não é do módulo): host, DNS, TLS, segredos, backup e restauração do Postgres e dos bancos dos nodes, e **bloquear `/metrics`** no ingress (está na porta pública do gateway).
+- [ ] 👤 **Quem implanta** (decidido: não é do módulo): host, DNS, TLS, segredos, backup e restauração do Postgres e dos bancos dos nodes; restringir `OPS_PORT` à rede de observabilidade.
 
 ## 2. Dívidas técnicas conhecidas
 
 Durabilidade e consistência:
-- [ ] 🧱 **O projetor ainda lê do Redis** (é o único consumidor que sobrou). Ele aplica os recibos `delivered`/`read` às mensagens enviadas e, ao fazer isso, é o que gera o `message.outbound_status` para o tenant. Se o Redis perder a entrada antes de o projetor lê-la, o recibo some e o tenant **nunca** recebe `DELIVERED`/`READ` daquela mensagem (a entrega de `message.received` e dos demais eventos não depende mais do Redis). Corrigir como o fan-out: o projetor ler do `event_outbox` com marco próprio (`projected_at`).
-- [ ] 🧱 **Reconcilers duplicados publicam as mesmas linhas do outbox** no Redis (correto sob at-least-once, só tráfego duplicado): claim com `FOR UPDATE SKIP LOCKED`.
 - [ ] 🧱 **Cota de backlog por assinatura só conta entregas** (`WEBHOOK_MAX_PENDING_PER_SUBSCRIPTION`); não limita bytes nem idade além da retenção de pendentes (30 dias). A DLQ também cresce até a retenção dela.
 - [ ] 🧱 **`UNKNOWN` resolvido pelo próprio RelayPlane:** consultar o node (o Evolution expõe consulta de mensagem?) para saber se a mensagem existe e resolver sozinho, em vez de parar a instância até alguém decidir. Só vale se a consulta for confiável; validar com número real.
 - [ ] 🧱 O barramento é Redis Stream com retenção por tamanho (não é log durável). Se for preciso replay histórico grande, trocar o adaptador (Kafka) sem mudar o core.
@@ -27,7 +25,7 @@ Privacidade (apagamento de contato):
 - [ ] 🧱 **`ERASURE_KEY` precisa ficar estável:** trocá-la faz as marcas antigas deixarem de casar. As marcas escritas pelos builds `rc` até o `rc3` (hash simples, sem chave) ficam inertes. Se virar requisito rotacionar a chave, é preciso um esquema de chaves múltiplas.
 
 Qualidade:
-- [ ] 🧱 **Teste instável sob `-race`:** `TestEventDeliveryLag_RetriesAreSeparatedFromTheHealthyPath` falha ~2 em 120 execuções na `main` (a amostra de latência do retry cai no balde de 25 ms, e o teste espera pelo menos 250 ms de backoff). Na falha, os dois pedidos do consumidor aparecem com `At` fora de ordem (o de tentativa 2 *antes* do de tentativa 1); ainda não achei a causa (suspeita: carimbo `At` do `Receiver` de teste, ou relógio). Reproduzir com `go test -race -count=250 -run <teste> ./internal/systemtest` num container Go.
+- [ ] 🧱 **Teste instável sob `-race`:** `TestEventDeliveryLag_RetriesAreSeparatedFromTheHealthyPath` falhou ~2 em 120 execuções na `main` (a amostra de latência do retry cai no balde de 25 ms, e o teste espera pelo menos 250 ms de backoff). Na falha, os dois pedidos do consumidor aparecem com `At` fora de ordem (o de tentativa 2 *antes* do de tentativa 1); ainda não achei a causa (suspeita: carimbo `At` do `Receiver` de teste, ou relógio). Em 2026-10-06, 250 execuções em container Go com `-race` passaram em 98,9 s; manter aberto até explicar a falha histórica ou acumular evidência no CI.
 - [ ] 🧱 **Gate de latência intermitente no CI:** uma vez na `main` o p95 de entrega de status foi 29,7 s (limite 2 s) no job de carga; não reproduzi localmente (p95 < 1 s) e o mesmo código passou no PR. Se voltar, instrumentar a origem (outbox → fan-out → dispatcher) antes de relaxar o limite.
 - [ ] 🔑 **Atualização do Evolution/Baileys:** sempre com número descartável (roteiro em `runbooks/PROVIDER-UPGRADE.md`); não há teste automatizado possível contra o WhatsApp real. O patch da busca de foto de perfil precisa ser revisto a cada versão.
 
@@ -38,10 +36,10 @@ Supply chain:
 
 ## 3. Operação em escala (G3)
 
-- [ ] 🧱 Kubernetes: `PodDisruptionBudget`, `NetworkPolicy`, migração do banco como **Job** (hoje `AUTO_MIGRATE=true` nas réplicas; é seguro por lock consultivo, mas o Job separa responsabilidades no upgrade e no rollback), `updateStrategy: OnDelete` no StatefulSet do Evolution (troca de node sob comando, com `drain`; ver `runbooks/PROVIDER-UPGRADE.md`).
+- [ ] 🧱 Kubernetes: `NetworkPolicy` e migração do banco como **Job** (hoje `AUTO_MIGRATE=true` nas réplicas; é seguro por lock consultivo, mas o Job separa responsabilidades no upgrade e no rollback). `PodDisruptionBudget` e `updateStrategy: OnDelete` do Evolution já estão no manifesto-base.
 - [ ] 🧱 Dashboards e SLOs sobre as métricas que já existem (latência de entrega de eventos, `relayplane_unknown_*`, `relayplane_event_outbox_*`, `relayplane_webhook_backlog_overflow_total`, retenção do barramento).
 - [ ] 👤 Backup e PITR do Postgres; capacidade real (carga em escala, não só o ensaio de 2000 mensagens).
-- [ ] 🧱 Rotação da chave admin e log de auditoria; `govulncheck` no CI (R34).
+- [ ] 🧱 Rotação da chave admin e log de auditoria (R34).
 
 ## 4. Limpeza
 

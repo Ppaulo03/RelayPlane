@@ -1,6 +1,6 @@
-// Package delivery moves tenant-facing events from the event bus to the tenants' webhook destinations:
+// Package delivery moves tenant-facing events from the durable event outbox to the tenants' webhook destinations:
 //
-//	EventBus --FanOut--> webhook_deliveries --Dispatcher--> signed POST (at-least-once, retries, DLQ)
+//	event_outbox --FanOut--> webhook_deliveries --Dispatcher--> signed POST (at-least-once, retries, DLQ)
 //
 // Guarantees: a delivery row is created once per (subscription, event) however many times the bus redelivers the
 // event; a delivery is retried with backoff until it succeeds or lands in the DLQ; a destination that keeps failing

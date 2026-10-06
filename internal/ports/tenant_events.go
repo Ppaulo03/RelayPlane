@@ -14,15 +14,23 @@ import (
 type EventOutboxRepository interface {
 	// ListUnpublished returns events not yet published, oldest first.
 	ListUnpublished(ctx context.Context, limit int) ([]events.Event, error)
+	// ClaimForPublication leases unpublished events, oldest first. The lease prevents several reconcilers from publishing the same row
+	// concurrently; a publisher that dies leaves the row to be claimed again.
+	ClaimForPublication(ctx context.Context, limit int, lease time.Duration) ([]events.Event, error)
 	// MarkPublished records the publication of the given event ids.
 	MarkPublished(ctx context.Context, eventIDs []string, at time.Time) error
+	// ClaimForProjection leases events whose internal effects have not been applied yet, oldest first. Projection is independent from
+	// broker publication so losing Redis cannot lose a delivery receipt or instance status update.
+	ClaimForProjection(ctx context.Context, limit int, lease time.Duration) ([]events.Event, error)
+	// MarkProjected records that the internal projector applied (or deliberately ignored) the given events.
+	MarkProjected(ctx context.Context, eventIDs []string, at time.Time) error
 	// ClaimForFanOut leases up to limit events whose deliveries for the tenant do not exist yet, oldest first. The lease keeps other
 	// workers off them for `lease`; a worker that dies leaves them to be claimed again.
 	ClaimForFanOut(ctx context.Context, limit int, lease time.Duration) ([]events.Event, error)
 	// MarkFannedOut records that the deliveries of the given events exist. An event leaves the outbox's purge window only after this AND
-	// MarkPublished.
+	// MarkPublished and MarkProjected.
 	MarkFannedOut(ctx context.Context, eventIDs []string, at time.Time) error
-	// Purge deletes events that were published AND fanned out before `before`.
+	// Purge deletes events that were published, projected AND fanned out before `before`.
 	Purge(ctx context.Context, before time.Time) (int64, error)
 	// EraseContact deletes the events of the tenant that are about the contact (payload.from == number), published or not:
 	// an accepted inbound event waits here until it is published, and keeps the text and the number while it does.
@@ -30,6 +38,8 @@ type EventOutboxRepository interface {
 	// PendingStats counts the accepted events whose deliveries for the tenant do not exist yet and the age of the oldest one (by the
 	// store's clock). A growing age means nobody is fanning the outbox out (the worker is down): accepted events are safe but late.
 	PendingStats(ctx context.Context) (count int64, oldest time.Duration, err error)
+	// ProjectionPendingStats is the equivalent backlog for internal catalog projection.
+	ProjectionPendingStats(ctx context.Context) (count int64, oldest time.Duration, err error)
 }
 
 // SubscriptionRepository persists tenant webhook subscriptions. Every method that takes a tenant id is scoped by

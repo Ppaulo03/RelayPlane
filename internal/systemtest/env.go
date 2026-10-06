@@ -235,7 +235,7 @@ func (e *Env) MustTenant(name string) string {
 	return tn.ID
 }
 
-// StartWorkers launches n outbound consumers and the projector.
+// StartWorkers launches n outbound consumers. StartProjector controls the independent durable projector.
 func (e *Env) StartWorkers(n int) {
 	for i := 0; i < n; i++ {
 		e.wg.Add(1)
@@ -243,13 +243,27 @@ func (e *Env) StartWorkers(n int) {
 	}
 }
 
-// Flush publishes, now, the events waiting in the event outbox (an accepted inbound event reaches the bus through it).
+// Flush publishes, now, the events waiting in the event outbox (an accepted inbound event reaches the bus through it). A background
+// reconciler may already hold a publication lease, so completion is defined by the persisted unpublished set becoming empty rather than
+// by this caller claiming zero rows.
 func (e *Env) Flush() {
+	e.T.Helper()
+	deadline := time.Now().Add(15 * time.Second) // also bounds recovery from the 10 s publication lease
 	for {
-		n, err := e.App.EventOutbox.PublishPending(e.ctx, 100)
-		if err != nil || n == 0 {
+		if _, err := e.App.EventOutbox.PublishPending(e.ctx, 100); err != nil {
+			e.T.Fatalf("flush event outbox: %v", err)
+		}
+		left, err := e.Repos.Events.ListUnpublished(e.ctx, 1)
+		if err != nil {
+			e.T.Fatalf("inspect event outbox after flush: %v", err)
+		}
+		if len(left) == 0 {
 			return
 		}
+		if time.Now().After(deadline) {
+			e.T.Fatalf("event outbox did not drain; oldest unpublished event: %s", left[0].EventID)
+		}
+		time.Sleep(5 * time.Millisecond)
 	}
 }
 
@@ -282,11 +296,11 @@ func (e *Env) StartMedia() {
 	go func() { defer e.wg.Done(); e.MediaIngest.Run(e.ctx) }()
 }
 
-// StartProjector launches the event projector consumer.
+// StartProjector launches the durable database projector. The outbox publisher still runs because tests also exercise the internal bus.
 func (e *Env) StartProjector() {
-	e.StartOutbox() // inbound events reach the bus through the outbox, as in production
+	e.StartOutbox()
 	e.wg.Add(1)
-	go func() { defer e.wg.Done(); _ = e.Bus.Subscribe(e.ctx, "projector", e.Projector.Handle) }()
+	go func() { defer e.wg.Done(); e.Projector.Run(e.ctx) }()
 }
 
 // Stop halts background consumers (simulating a crash/restart).

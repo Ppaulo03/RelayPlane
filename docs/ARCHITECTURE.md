@@ -25,7 +25,7 @@ cmd/{gateway,worker,reconciler} ─ bootstrap ─┬─ adapters/providers/evolu
 ```
 CONTROL  desired_state ─▶ Reconciler ─▶ MessagingProvider.GetInstanceState ─▶ observed_state
 COMMAND  API ─▶ CommandQueue ─▶ Worker ─▶ MessagingProvider
-EVENT    Provider ─▶ Webhook ─▶ auth/ownership ─▶ normalize ─▶ ACCEPT (dedupe + event_outbox, 1 transação) ─▶ 200 ─▶ { fan-out do worker (banco) ─▶ webhook_deliveries ─▶ tenant | outbox publisher ─▶ EventBus ─▶ Projector }
+EVENT    Provider ─▶ Webhook ─▶ auth/ownership ─▶ normalize ─▶ ACCEPT (dedupe + event_outbox, 1 transação) ─▶ 200 ─▶ { fan-out ─▶ webhook_deliveries ─▶ tenant | projector ─▶ catálogo | publisher ─▶ EventBus }
 ```
 
 O estado pode mudar por **evento do provider** (`instance.status_changed`, milissegundos) ou por
@@ -132,8 +132,8 @@ após o claim) vira `UNKNOWN` — nunca reenvia às cegas.
   reserva da chave; se o processo morre, o retry retoma com o mesmo id (create/send/delete/migrate são idempotentes por id).
 * Dedupe inbound: chave `instance|event_type|provider_message_id|state` (sent/delivered/read **não** colapsam);
   **aceite durável e atômico** (`Deduplicator.Accept`): a chave de dedupe e o evento (ou o job do anexo, que publica o evento depois de resolvido)
-  são gravados na MESMA transação; o 200 ao provedor significa "aceito de forma durável". O evento chega ao barramento pelo outbox
-  transacional (`event_outbox`): o worker cria as entregas do tenant **lendo o banco** (o Redis não está nesse caminho) e o reconciler publica no barramento só para os consumidores internos; então a indisponibilidade ou a perda de dados do Redis, ou a queda do
+  são gravados na MESMA transação; o 200 ao provedor significa "aceito de forma durável". O outbox
+  transacional (`event_outbox`) alimenta de forma independente o fan-out do tenant (`fanout_at`), o projector interno (`projected_at`) e a publicação no barramento (`published_at`); então a indisponibilidade ou a perda de dados do Redis, ou a queda do
   processo depois do aceite só atrasam o evento, nunca o perdem (antes, o protocolo `Begin → publish → Commit` deixava uma janela em que um
   crash fazia o reenvio do provedor parecer duplicata de um evento que ninguém enfileirou). `event_id` determinístico permite dedupe a jusante. Estado de conexão usa o timestamp do evento como id (CONNECTED pode ocorrer de novo).
 * Rate limit (`core/messaging.RatePolicy`): `MinInterval, Burst, MaxPerMinute, MaxConcurrent, Cooldown`. A hierarquia

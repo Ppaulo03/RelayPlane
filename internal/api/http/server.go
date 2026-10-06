@@ -73,12 +73,15 @@ type ReadyCheck struct {
 
 // Server wires the HTTP API.
 type Server struct {
-	App       *app.App
-	Auth      Authenticator
-	Metrics   *observability.Metrics
-	Log       *slog.Logger
-	Ready     []ReadyCheck
-	MaxUpload int64 // bytes accepted by PUT /media/{id}/content
+	App     *app.App
+	Auth    Authenticator
+	Metrics *observability.Metrics
+	// HideMetrics keeps HTTP instrumentation enabled without mounting /metrics on this listener. Production binaries expose metrics on
+	// their separate OPS_PORT instead.
+	HideMetrics bool
+	Log         *slog.Logger
+	Ready       []ReadyCheck
+	MaxUpload   int64 // bytes accepted by PUT /media/{id}/content
 	// TenantRate limits the requests of each tenant (zero value: unlimited).
 	TenantRate RateConfig
 
@@ -151,7 +154,7 @@ func (s *Server) Handler() nethttp.Handler {
 		writeJSON(w, 200, map[string]string{"status": "alive"})
 	})
 	mux.HandleFunc("GET /health/ready", s.ready)
-	if s.Metrics != nil {
+	if s.Metrics != nil && !s.HideMetrics {
 		mux.Handle("GET /metrics", s.Metrics.Handler())
 	}
 

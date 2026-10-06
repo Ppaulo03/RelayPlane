@@ -35,6 +35,8 @@ type Metrics struct {
 	WebhookBacklogOverflow prometheus.Counter       // deliveries created DEAD because their subscription was over its backlog limit
 	EventOutboxPending     prometheus.Gauge         // accepted events not yet on the bus
 	EventOutboxOldest      prometheus.Gauge         // seconds the oldest of them has waited
+	EventProjectionPending prometheus.Gauge         // accepted events not yet applied to the catalog
+	EventProjectionOldest  prometheus.Gauge         // seconds the oldest projection has waited
 	UnknownMessages        prometheus.Gauge         // messages waiting for a decision (UNKNOWN)
 	UnknownOldest          prometheus.Gauge         // seconds the oldest UNKNOWN has been waiting
 	RetentionApplied       *prometheus.CounterVec   // records changed by retention (messages|dead_deliveries)
@@ -93,6 +95,8 @@ func NewMetrics() *Metrics {
 	m.WebhookBacklogOverflow = prometheus.NewCounter(prometheus.CounterOpts{Name: "relayplane_webhook_backlog_overflow_total", Help: "Deliveries created DEAD (in the DLQ) because their subscription already had its maximum of deliveries waiting."})
 	m.EventOutboxPending = prometheus.NewGauge(prometheus.GaugeOpts{Name: "relayplane_event_outbox_pending", Help: "Accepted events (inbound messages, statuses) whose deliveries for the tenant do not exist yet."})
 	m.EventOutboxOldest = prometheus.NewGauge(prometheus.GaugeOpts{Name: "relayplane_event_outbox_oldest_seconds", Help: "How long the oldest accepted event has waited for its tenant deliveries: growing means no worker is fanning the outbox out."})
+	m.EventProjectionPending = prometheus.NewGauge(prometheus.GaugeOpts{Name: "relayplane_event_projection_pending", Help: "Accepted events whose internal effects have not been projected into the catalog yet."})
+	m.EventProjectionOldest = prometheus.NewGauge(prometheus.GaugeOpts{Name: "relayplane_event_projection_oldest_seconds", Help: "How long the oldest accepted event has waited for internal projection."})
 	m.UnknownMessages = prometheus.NewGauge(prometheus.GaugeOpts{Name: "relayplane_unknown_messages", Help: "Outbound messages in UNKNOWN: they wait for a decision (resolve) and hold back the later messages of their instance."})
 	m.UnknownOldest = prometheus.NewGauge(prometheus.GaugeOpts{Name: "relayplane_unknown_oldest_seconds", Help: "How long the oldest UNKNOWN message has been waiting."})
 	m.RetentionApplied = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "relayplane_retention_applied_total", Help: "Records anonymized or deleted by retention."}, []string{"kind"})
@@ -126,7 +130,7 @@ func NewMetrics() *Metrics {
 		m.InstancesTotal, m.InstancesConnected, m.ProviderNodesTotal, m.ProviderNodeHealth, m.OutboundQueueDepth,
 		m.OutboundRetryTotal, m.OutboundDLQTotal, m.OutboundMessages, m.InboundEventsTotal, m.InboundDuplicates,
 		m.OwnershipViolation, m.StaleCommandTotal, m.EpochMismatchTotal, m.ReconciliationTotal, m.ReconciliationFail,
-		m.ReconciliationDrift, m.RateLimitWait, m.BlobBytes, m.WebhookBacklogOverflow, m.EventOutboxPending, m.EventOutboxOldest, m.UnknownMessages, m.UnknownOldest, m.EventDeliveryLag, m.RetentionApplied, m.RateLimited, m.InboundMedia, m.InboundMediaPending, m.BlobCleanupTotal, m.ProviderLatency, m.HTTPRequests,
+		m.ReconciliationDrift, m.RateLimitWait, m.BlobBytes, m.WebhookBacklogOverflow, m.EventOutboxPending, m.EventOutboxOldest, m.EventProjectionPending, m.EventProjectionOldest, m.UnknownMessages, m.UnknownOldest, m.EventDeliveryLag, m.RetentionApplied, m.RateLimited, m.InboundMedia, m.InboundMediaPending, m.BlobCleanupTotal, m.ProviderLatency, m.HTTPRequests,
 		m.HTTPLatency, m.MigrationBlockedTotal, m.BarrierDeferrals, m.OutboxPublished,
 	} {
 		f(c)

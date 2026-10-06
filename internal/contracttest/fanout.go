@@ -58,15 +58,71 @@ func eventFanOutContract(t *testing.T, f RepoFactory) {
 	if err := fx.r.Events.MarkPublished(ctx, []string{"e1", "e2", "e3"}, time.Now()); err != nil {
 		t.Fatal(err)
 	}
+	if err := fx.r.Events.MarkProjected(ctx, []string{"e1", "e2", "e3"}, time.Now()); err != nil {
+		t.Fatal(err)
+	}
 	// ... and an event the broker took but whose deliveries do not exist is kept too (this is the row that saves it from a broker that lost it)
 	if n, _ := fx.r.Events.Purge(ctx, time.Now().Add(time.Hour)); n != 2 {
-		t.Errorf("only published AND fanned-out events are purged: %d", n)
+		t.Errorf("only published, projected AND fanned-out events are purged: %d", n)
 	}
 	// a lease that ran out gives the event to another worker (the first one died)
 	time.Sleep(30 * time.Millisecond)
 	short, err := fx.r.Events.ClaimForFanOut(ctx, 10, 10*time.Millisecond)
 	if err != nil || len(short) != 0 {
 		t.Fatalf("e3 is still leased by the earlier claim: %v %v", ids(short), err)
+	}
+}
+
+// Publication, internal projection and tenant fan-out consume the same durable row independently. Each claim is exclusive, recovers after
+// its lease and no row is purgeable until all three consumers finished it.
+func eventOutboxConsumersContract(t *testing.T, f RepoFactory) {
+	fx, ctx := newFixture(t, f), context.Background()
+	fx.tenant(t, "t1")
+	fx.node(t, "node-01", 5)
+	fx.instance(t, "inst_1", "t1")
+	makeEvent := func(id string) events.Event {
+		return events.Event{EventID: id, EventType: events.MessageStatus, TenantID: "t1", InstanceID: "inst_1", Timestamp: time.Now().UTC()}
+	}
+	for _, id := range []string{"e1", "e2"} {
+		if _, err := fx.r.Dedup.Accept(ctx, "k-"+id, time.Hour, makeEvent(id), nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	pub1, err := fx.r.Events.ClaimForPublication(ctx, 1, 20*time.Millisecond)
+	if err != nil || len(pub1) != 1 || pub1[0].EventID != "e1" {
+		t.Fatalf("first publisher claim: %+v %v", pub1, err)
+	}
+	pub2, _ := fx.r.Events.ClaimForPublication(ctx, 10, 20*time.Millisecond)
+	if len(pub2) != 1 || pub2[0].EventID != "e2" {
+		t.Fatalf("publisher claims are exclusive and ordered: %+v", pub2)
+	}
+	time.Sleep(30 * time.Millisecond)
+	if retried, _ := fx.r.Events.ClaimForPublication(ctx, 1, time.Minute); len(retried) != 1 || retried[0].EventID != "e1" {
+		t.Fatalf("an expired publisher claim is recovered: %+v", retried)
+	}
+	if err := fx.r.Events.MarkPublished(ctx, []string{"e1"}, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+
+	projected, err := fx.r.Events.ClaimForProjection(ctx, 10, time.Minute)
+	if err != nil || len(projected) != 2 || projected[0].EventID != "e1" || projected[1].EventID != "e2" {
+		t.Fatalf("projection is independent and ordered: %+v %v", projected, err)
+	}
+	if err := fx.r.Events.MarkProjected(ctx, []string{"e1"}, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if n, age, err := fx.r.Events.ProjectionPendingStats(ctx); err != nil || n != 1 || age < 0 {
+		t.Fatalf("projection backlog reports the unfinished row: %d %v %v", n, age, err)
+	}
+	if err := fx.r.Events.MarkFannedOut(ctx, []string{"e1"}, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if n, err := fx.r.Events.Purge(ctx, time.Now().Add(time.Hour)); err != nil || n != 1 {
+		t.Fatalf("only the row finished by all consumers is purgeable: %d %v", n, err)
+	}
+	if left, _ := fx.r.Events.ListUnpublished(ctx, 10); len(left) != 1 || left[0].EventID != "e2" {
+		t.Fatalf("unfinished publication survives: %+v", left)
 	}
 }
 

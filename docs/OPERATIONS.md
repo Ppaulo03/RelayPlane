@@ -10,7 +10,7 @@
 | `evolution-node-XX` | **exatamente 1 por identidade** | Singleton stateful. Escalar = **adicionar** `node-03`, `node-04`… (novo container, novo banco, nova entrada em `PROVIDER_NODES`), nunca replicar. |
 | `postgres`, `redis`, object store | conforme provedor | PostgreSQL é a fonte de verdade; Redis guarda comandos/eventos em trânsito; o object store guarda mídia (qualquer backend S3). |
 
-Portas: gateway `HTTP_PORT` (8080); worker/reconciler expõem `/metrics` e `/health/*` em `OPS_PORT` (9090).
+Portas: gateway atende a API em `HTTP_PORT` (8080); gateway, worker e reconciler expõem `/metrics` e `/health/*` separadamente em `OPS_PORT` (9090). O gateway não monta `/metrics` na porta pública.
 
 ## Eventos para o tenant (webhooks de saída)
 
@@ -18,8 +18,8 @@ O tenant se inscreve com `POST /api/v1/subscriptions {url, event_types?, instanc
 e o `timestamp` do envelope é o carimbo do **provedor**), `message.outbound_status` (`ACCEPTED`, `DELIVERED`, `READ`, `FAILED`, `UNKNOWN` das mensagens que ele enviou,
 com `accepted_at` e `sequence_no`), `message.status`, `message.deleted` e `instance.status_changed`. QR codes e violações de ownership nunca saem da plataforma.
 
-**Caminho:** a mudança de status da mensagem grava o evento na tabela `event_outbox` **na mesma transação** → o reconciler publica no bus (a cada ~1 s) → o worker (`webhook-fanout`)
-cria uma entrega por assinatura (`UNIQUE(subscription_id, event_id)`: reentrega do bus nunca duplica) → o dispatcher faz o POST assinado.
+**Caminho:** a mudança de status da mensagem grava o evento na tabela `event_outbox` **na mesma transação** → o worker (`webhook-fanout`)
+cria uma entrega por assinatura diretamente do banco (`UNIQUE(subscription_id, event_id)`) → o dispatcher faz o POST assinado.
 
 * **Assinatura:** `X-RelayPlane-Signature: v1=<hex>` = HMAC-SHA256(`<timestamp>.<body>`) com o segredo `whsec_…` (mostrado só na criação e na rotação; derivado de `SUBSCRIPTION_SECRET`/`WEBHOOK_SECRET`, não fica no banco).
   O consumidor deve rejeitar timestamps fora de ~5 min e **deduplicar por `X-RelayPlane-Event-Id`**. `POST …/rotate-secret` emite outro segredo; por 24 h as requisições levam as duas assinaturas.
@@ -194,10 +194,11 @@ sozinha; a mensagem segue `UNKNOWN` e a ordem relativa a ela deixa de ser garant
 
 ### Outbox de eventos (mensagens recebidas e status)
 Todo evento público para o tenant (mensagem recebida, recibo, mudança de sessão, status de envio, mídia resolvida, reconciliação) **nasce no `event_outbox`**, na mesma transação do fato que o produz (a chave de dedupe, a mudança de estado, o fechamento do job de mídia), e só então o provedor recebe 200. Nenhuma regra de domínio publica direto no Redis.
-Dois consumidores leem essa tabela, cada um com o seu marco:
+Três consumidores leem essa tabela, cada um com o seu marco e lease recuperável:
 * **o worker** cria as entregas do tenant a partir do **banco** (`fanout_at`; não passa pelo Redis). Por isso **o worker precisa estar rodando** para o tenant ser avisado, e uma queda ou perda do Redis não atrasa nem perde nada para ele. Métricas: `relayplane_event_outbox_pending` e `relayplane_event_outbox_oldest_seconds` (eventos aceitos sem entrega criada); alerta `RelayPlaneTenantFanOutStalled` (> 30 s);
-* **o reconciler** publica no barramento a cada `OUTBOX_INTERVAL` (padrão 250 ms) para os consumidores **internos** (`published_at`); alerta `RelayPlaneEventOutboxStalled`.
-Uma linha só é purgada (depois de 24 h) quando os dois marcos existem: a entrega ao tenant não depende de nenhuma cópia que viva só no Redis.
+* **o worker/projector** aplica recibos e mudanças de sessão ao catálogo diretamente do banco (`projected_at`), portanto perder o Redis não perde `DELIVERED`/`READ`; monitore `relayplane_event_projection_pending` e `relayplane_event_projection_oldest_seconds` (`RelayPlaneEventProjectionStalled`);
+* **o reconciler** publica no barramento a cada `OUTBOX_INTERVAL` (padrão 250 ms) para extensões internas (`published_at`); várias réplicas disputam as linhas com claim, sem publicação concorrente da mesma linha. Alerta: `RelayPlaneEventOutboxStalled`.
+Uma linha só é purgada (depois de 24 h) quando os três marcos existem.
 
 ### Outbox
 `outbox` guarda cada comando aceito até a publicação (gateway publica de imediato; o reconciler varre a cada 1 s e republica comandos

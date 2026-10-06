@@ -102,6 +102,7 @@ func RepositoryContract(t *testing.T, factory RepoFactory) {
 	t.Run("PurgePendingRespectsLease", func(t *testing.T) { purgePendingRespectsLeaseContract(t, factory) })
 	t.Run("SubscriptionLimit", func(t *testing.T) { subscriptionLimitContract(t, factory) })
 	t.Run("EventFanOut", func(t *testing.T) { eventFanOutContract(t, factory) })
+	t.Run("EventOutboxConsumers", func(t *testing.T) { eventOutboxConsumersContract(t, factory) })
 	t.Run("ObservedEmitting", func(t *testing.T) { observedEmittingContract(t, factory) })
 	t.Run("MessageList", func(t *testing.T) { messageListContract(t, factory) })
 	t.Run("APIKeys", func(t *testing.T) { apiKeysContract(t, factory) })

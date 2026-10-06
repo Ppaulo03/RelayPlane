@@ -7,7 +7,7 @@ CHAOS_KILL ?= 0
 GODIGEST = golang:1.26.5@sha256:705e964a93a2fd2e75c7d59bb7d781b57e30f12293ffde5175c69229e18fb678
 INFRA    = deploy/docker/compose.infra.yml
 
-.PHONY: sandbox-up sandbox-down sandbox-example test-sandbox test-load-stack test-load test-chaos test-integration-s3 fmt fmt-check vet build test test-integration test-race sdk-test infra-up infra-down up down evolution-image
+.PHONY: sandbox-up sandbox-down sandbox-example test-sandbox test-load-stack test-load test-chaos test-integration-s3 fmt fmt-check vet vuln build test test-integration test-race sdk-test infra-up infra-down up down evolution-image
 
 # fmt rewrites files; fmt-check only reports (tests must never modify the working tree)
 fmt:
@@ -19,6 +19,11 @@ fmt-check:
 vet:
 	$(GO) vet ./...
 	$(GO) vet -tags integration ./...
+
+# Pin the scanner for reproducible CI; its database is the canonical Go vulnerability database.
+GOVULNCHECK_VERSION ?= v1.8.0
+vuln:
+	$(GO) run golang.org/x/vuln/cmd/govulncheck@$(GOVULNCHECK_VERSION) ./...
 
 build:
 	$(GO) build ./...
