@@ -184,3 +184,14 @@ func TestThereIsNoEventBroker(t *testing.T) {
 		return nil
 	})
 }
+
+// Dependencies of the Evolution image that the release scan found CRITICAL with a fix are pinned by an override in the single recorded
+// install, and the build checks the FINAL tree for them (an override that did not take would otherwise ship silently).
+func TestEvolutionImagePinsTheDependenciesTheScanFlagged(t *testing.T) {
+	d := readRepoFile(t, "deploy", "docker", "evolution", "Dockerfile")
+	for _, want := range []string{`"overrides.fast-xml-parser=5.3.5"`, `"overrides.proxy-addr=2.0.8"`, "npm ls fast-xml-parser --all --json", "npm ls proxy-addr --all --json"} {
+		if !strings.Contains(d, want) {
+			t.Errorf("the Evolution Dockerfile lost %q", want)
+		}
+	}
+}
