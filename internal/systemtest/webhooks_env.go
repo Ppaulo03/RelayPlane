@@ -59,23 +59,25 @@ func (r *Receiver) Send(_ context.Context, req ports.WebhookRequest) (int, error
 		r.schemaErrs = append(r.schemaErrs, fmt.Sprintf("%v: %s", err, req.Body))
 		r.mu.Unlock()
 	}
+	// the request is recorded (without a status yet) BEFORE the endpoint decides its answer: two requests at the same time must get
+	// different numbers, not both "the first"
 	r.mu.Lock()
-	n := 0
+	n := 1
 	for _, x := range r.reqs {
 		if x.URL == req.URL {
 			n++
 		}
 	}
-	n++
+	slot := len(r.reqs)
+	r.reqs = append(r.reqs, rec)
 	behave := r.Behave
 	r.mu.Unlock()
 	status, err := 200, error(nil)
 	if behave != nil {
 		status, err = behave(n, rec)
 	}
-	rec.Status = status
 	r.mu.Lock()
-	r.reqs = append(r.reqs, rec)
+	r.reqs[slot].Status = status
 	r.mu.Unlock()
 	return status, err
 }

@@ -20,6 +20,18 @@ type lagHistogram struct {
 	buckets map[float64]uint64
 }
 
+// watchWallClock returns a function that says whether the wall clock jumped, relative to the monotonic clock, since the call. The delivery
+// lag is a difference of WALL timestamps (one is stored with the event), so a VM that steps its clock back during a test (Docker Desktop
+// does, now and then) makes the measured lag shorter than the backoff that really passed. Seen in the failing runs: a delivery recorded
+// as delivered before it was created.
+func watchWallClock() func() bool {
+	wall0, mono0 := time.Now().Round(0), time.Now()
+	return func() bool {
+		step := time.Now().Round(0).Sub(wall0) - time.Since(mono0)
+		return step > 50*time.Millisecond || step < -50*time.Millisecond
+	}
+}
+
 func readLag(t *testing.T, e *Env, attempt string) (map[string]*lagHistogram, *lagHistogram) {
 	t.Helper()
 	fams, err := e.Metrics.Registry.Gather()
@@ -140,6 +152,7 @@ func TestEventDeliveryLag_IsMeasuredForEveryKindAndStaysUnderTheTarget(t *testin
 // A consumer that fails once is retried: that delivery shows up under attempt=retry (with the backoff in it), and does not
 // pollute the first-attempt latency that the SLO is about.
 func TestEventDeliveryLag_RetriesAreSeparatedFromTheHealthyPath(t *testing.T) {
+	clockStepped := watchWallClock()
 	e := NewEnv(t)
 	inst := e.CreateInstance(e.Tenant, "a", true)
 	subscribe(t, e, e.Tenant, hookURL, string(events.MessageReceived))
@@ -164,6 +177,9 @@ func TestEventDeliveryLag_RetriesAreSeparatedFromTheHealthyPath(t *testing.T) {
 		t.Fatalf("one delivery, on its retry: first=%d retry=%d", first.count, retry.count)
 	}
 	if retry.quantileBound(1) < 0.25 {
+		if clockStepped() {
+			t.Skip("the wall clock stepped while the test ran (a VM clock sync): a latency measured with it cannot show the backoff")
+		}
 		t.Errorf("the lag of a retried delivery includes the backoff: bucket %.3fs", retry.quantileBound(1))
 	}
 }
