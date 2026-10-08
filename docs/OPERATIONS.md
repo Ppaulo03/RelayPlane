@@ -57,8 +57,7 @@ cria uma entrega por assinatura (`UNIQUE(subscription_id, event_id)`: reentrega 
   devolve contagens, nunca o número. **O que estava em voo não volta:** o apagamento deixa uma **marca** (`contact_erasures`: só um **HMAC** do número com `ERASURE_KEY`, nunca o número, e **guardada para sempre**: uma linha pequena por contato, e nada limita a idade de um evento que chega a um consumidor, então qualquer prazo tornaria a garantia falsa depois dele): um evento aceito *antes* do pedido que ainda estava
   no Redis, no outbox, no fan-out ou **já arrendado por um dispatcher** (a entrega é descartada antes do POST), um `message.deleted` do contato, ou um anexo que estava sendo baixado, é descartado por quem o segura (e o arquivo já gravado é removido) em vez de recriar o dado depois do pedido. **Limite:** um POST que já saiu para a rede antes de o apagamento retornar não pode ser recolhido. **`ERASURE_KEY` precisa ficar estável** (vazia, deriva do `WEBHOOK_SECRET`): trocá-la faz as marcas antigas deixarem de casar, e um evento muito antigo que reaparecer não seria reconhecido. Uma mensagem que a
   pessoa manda **depois** do pedido é dado novo e é entregue normalmente. A marca vale pelo relógio dos serviços (aceite e pedido): mantenha-os sincronizados (NTP).
-  **O que isso não alcança** (e deve constar na sua política): as entradas já gravadas nas streams transitórias do Redis (comandos e eventos em trânsito, aparadas por tamanho
-  em `EVENT_BUS_RETENTION`; elas são descartadas ao serem consumidas, mas ficam no Redis até lá), a cópia do comando de uma mensagem que está nas mãos do provedor no instante do pedido (some quando ela resolve), o estado do próprio WhatsApp/Evolution,
+  **O que isso não alcança** (e deve constar na sua política): as entradas já gravadas nas streams transitórias do Redis (comandos de envio em trânsito), a cópia do comando de uma mensagem que está nas mãos do provedor no instante do pedido (some quando ela resolve), o estado do próprio WhatsApp/Evolution,
   os logs (não carregam texto nem o número) e os backups do banco. Uma subscription que ainda não recebera eventos apagados verá **buracos em `sequence`**: depois de um apagamento
   isso é esperado.
 * **Latência de entrega (R12):** `relayplane_event_delivery_lag_seconds{event_type,attempt}` é o tempo entre o RelayPlane **saber** do evento e o `2xx` do consumidor
@@ -194,24 +193,14 @@ sozinha; a mensagem segue `UNKNOWN` e a ordem relativa a ela deixa de ser garant
 
 ### Outbox de eventos (mensagens recebidas e status)
 Todo evento público para o tenant (mensagem recebida, recibo, mudança de sessão, status de envio, mídia resolvida, reconciliação) **nasce no `event_outbox`**, na mesma transação do fato que o produz (a chave de dedupe, a mudança de estado, o fechamento do job de mídia), e só então o provedor recebe 200. Nenhuma regra de domínio publica direto no Redis.
-Três etapas leem essa tabela, cada uma com o seu marco:
+Duas etapas leem essa tabela, cada uma com o seu marco, e nenhuma passa pelo Redis:
 * **o worker** cria as entregas do tenant a partir do **banco** (`fanout_at`; não passa pelo Redis). Por isso **o worker precisa estar rodando** para o tenant ser avisado, e uma queda ou perda do Redis não atrasa nem perde nada para ele. Métricas: `relayplane_event_outbox_pending` e `relayplane_event_outbox_oldest_seconds` (eventos aceitos sem entrega criada); alerta `RelayPlaneTenantFanOutStalled` (> 30 s);
 * **o projetor** (também no worker) aplica ao catálogo o que ele precisa aprender: os **recibos** `delivered`/`read` (que movem a mensagem e geram o `message.outbound_status` do tenant) e as mudanças de estado da sessão (`projected_at`; eventos que o catálogo não usa já nascem projetados). Também lê do **banco**: um recibo que o Redis perdesse deixaria a mensagem `ACCEPTED` para sempre. Métrica `relayplane_event_projection_oldest_seconds`; alerta `RelayPlaneProjectionStalled` (> 60 s);
-* **o reconciler** publica no barramento a cada `OUTBOX_INTERVAL` (padrão 250 ms) para os consumidores **internos** (`published_at`); alerta `RelayPlaneEventOutboxStalled`.
-Hoje **nenhum consumidor lê o barramento** (a publicação no Redis ficou como transporte para consumidores internos futuros). Uma linha só é purgada (depois de 24 h) quando os três marcos existem (publicada, entregas criadas, projetada): a entrega ao tenant não depende de nenhuma cópia que viva só no Redis.
+Uma linha só é purgada (depois de 24 h) quando os dois marcos existem (entregas criadas e projetada): a entrega ao tenant não depende de nenhuma cópia que viva só no Redis. O `published_at` das versões anteriores ficou na tabela sem uso.
 
 ### Outbox
 `outbox` guarda cada comando aceito até a publicação (gateway publica de imediato; o reconciler varre a cada 1 s e republica comandos
 perdidos pelo broker). Entradas despachadas são purgadas após 24 h. Backlog crescente ⇒ broker indisponível: o accept continua funcionando.
-
-### Retenção do EventBus (SLA)
-O stream de eventos é cortado por tamanho (`EVENT_BUS_RETENTION`, padrão 100 000 eventos, corte aproximado). **Contrato:** um consumer group só
-não perde eventos enquanto seu *lag* ficar abaixo da retenção. Dimensione assim: `retenção ≥ taxa_pico_de_eventos/s × pior_indisponibilidade_tolerada_s × 2`
-(ex.: 50 ev/s e 30 min de indisponibilidade tolerada ⇒ 180 000). Métricas: `relayplane_eventbus_stream_length`, `…_retention_entries`,
-`…_consumer_lag{group}`, `…_oldest_pending_seconds{group}`, `…_events_lost{group}` e `…_trim_risk` (pior lag ÷ retenção; ≥ 1 = perda).
-Alertas (`deploy/prometheus/alerts.yml`): aviso em 50 %, página em 90 %, página imediata se `events_lost > 0`. Se um group perdeu eventos,
-reconstrua o estado a partir do catálogo (o Reconciler já corrige `observed_state`; mensagens recebidas perdidas não são recuperáveis do
-bus: tratar como incidente). Para um log de eventos durável de verdade, o caminho é trocar o adapter do EventBus (Kafka) sem mudar o core.
 
 ### DLQ de comandos
 Mensagens que esgotaram os retries ficam `FAILED/RETRIES_EXHAUSTED` no catálogo e o comando em `relayplane:dlq`:

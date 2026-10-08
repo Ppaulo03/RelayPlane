@@ -165,3 +165,22 @@ func TestEvolutionImageBoundsTheProfilePictureFetch(t *testing.T) {
 		t.Error("the patch must fail the build unless it matches exactly once, and check that the bundle still parses")
 	}
 }
+
+// Events do not travel on a broker: the event outbox in the database is the event stream (the fan-out and the projector read it from there).
+// A second copy of an event that lives only in a broker was the source of the durability bugs of the review; this keeps it from creeping back.
+func TestThereIsNoEventBroker(t *testing.T) {
+	root := repoRoot(t)
+	banned := regexp.MustCompile(`ports\.EventBus|EventBusStats|EventBusInspector|\.Bus\.Publish|redisstreams\.NewBus`)
+	_ = filepath.WalkDir(filepath.Join(root, "internal"), func(path string, d os.DirEntry, err error) error {
+		if err != nil || d.IsDir() || !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") || strings.HasSuffix(path, "supply_chain_test.go") {
+			return nil
+		}
+		b, _ := os.ReadFile(path)
+		for i, line := range strings.Split(string(b), "\n") {
+			if banned.MatchString(line) {
+				t.Errorf("%s:%d: events must go through the event outbox, not a broker: %s", filepath.Base(path), i+1, strings.TrimSpace(line))
+			}
+		}
+		return nil
+	})
+}

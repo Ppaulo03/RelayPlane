@@ -285,9 +285,8 @@ func TestE2E_DefinitionOfDone(t *testing.T) {
 	if hr2, _ := e.App.Inbound.Handle(bg, ProviderKey, hook); hr2.Duplicates != 2 || hr2.Published != 0 {
 		t.Fatalf("duplicate webhook: %+v", hr2)
 	}
-	e.Flush()
 	var received *events.Event
-	for _, ev := range e.Bus.Published() {
+	for _, ev := range e.OutboxEvents() {
 		if ev.EventType == events.MessageReceived {
 			ev := ev
 			received = &ev

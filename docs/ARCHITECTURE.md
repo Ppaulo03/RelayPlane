@@ -12,7 +12,7 @@ A dependência aponta sempre para dentro: `adapters → ports ← core`. Isto é
 
 ```
 cmd/{gateway,worker,reconciler} ─ bootstrap ─┬─ adapters/providers/evolution/v2   (MessagingProvider, WebhookAdapter)
-                                             ├─ adapters/messaging/redisstreams   (CommandQueue, EventBus)
+                                             ├─ adapters/messaging/redisstreams   (CommandQueue)
                                              ├─ adapters/persistence/postgres     (repositories, idempotency, dedup)
                                              ├─ adapters/blob/s3                  (BlobStore)
                                              └─ adapters/lock/redislock           (Locker)
@@ -25,7 +25,7 @@ cmd/{gateway,worker,reconciler} ─ bootstrap ─┬─ adapters/providers/evolu
 ```
 CONTROL  desired_state ─▶ Reconciler ─▶ MessagingProvider.GetInstanceState ─▶ observed_state
 COMMAND  API ─▶ CommandQueue ─▶ Worker ─▶ MessagingProvider
-EVENT    Provider ─▶ Webhook ─▶ auth/ownership ─▶ normalize ─▶ ACCEPT (dedupe + event_outbox, 1 transação) ─▶ 200 ─▶ { fan-out do worker (banco) ─▶ webhook_deliveries ─▶ tenant | outbox publisher ─▶ EventBus ─▶ Projector }
+EVENT    Provider ─▶ Webhook ─▶ auth/ownership ─▶ normalize ─▶ ACCEPT (dedupe + event_outbox, 1 transação) ─▶ 200 ─▶ { fan-out do worker ─▶ webhook_deliveries ─▶ tenant | projetor do worker ─▶ catálogo }  (os dois leem o `event_outbox` do banco)
 ```
 
 O estado pode mudar por **evento do provider** (`instance.status_changed`, milissegundos) ou por
@@ -132,9 +132,8 @@ após o claim) vira `UNKNOWN` — nunca reenvia às cegas.
   reserva da chave; se o processo morre, o retry retoma com o mesmo id (create/send/delete/migrate são idempotentes por id).
 * Dedupe inbound: chave `instance|event_type|provider_message_id|state` (sent/delivered/read **não** colapsam);
   **aceite durável e atômico** (`Deduplicator.Accept`): a chave de dedupe e o evento (ou o job do anexo, que publica o evento depois de resolvido)
-  são gravados na MESMA transação; o 200 ao provedor significa "aceito de forma durável". O evento chega ao barramento pelo outbox
-  transacional (`event_outbox`): o worker cria as entregas do tenant **lendo o banco** (o Redis não está nesse caminho) e o reconciler publica no barramento só para os consumidores internos; então a indisponibilidade ou a perda de dados do Redis, ou a queda do
-  processo depois do aceite só atrasam o evento, nunca o perdem (antes, o protocolo `Begin → publish → Commit` deixava uma janela em que um
+  são gravados na MESMA transação; o 200 ao provedor significa "aceito de forma durável". O evento fica no outbox transacional (`event_outbox`), que **é** o fluxo de eventos: o worker cria as entregas do tenant **lendo o banco** (`fanout_at`) e o projetor aplica ao catálogo os recibos e as mudanças de estado da sessão (`projected_at`). **O Redis não está no caminho dos eventos** (só a fila de comandos usa Redis), então a indisponibilidade ou a perda de dados do Redis, ou a queda do
+  processo depois do aceite, só atrasam o evento, nunca o perdem (antes, o protocolo `Begin → publish → Commit` deixava uma janela em que um
   crash fazia o reenvio do provedor parecer duplicata de um evento que ninguém enfileirou). `event_id` determinístico permite dedupe a jusante. Estado de conexão usa o timestamp do evento como id (CONNECTED pode ocorrer de novo).
 * Rate limit (`core/messaging.RatePolicy`): `MinInterval, Burst, MaxPerMinute, MaxConcurrent, Cooldown`. A hierarquia
   `global < tenant < instance` é de **herança de política** (*merge* campo a campo em `ResolvePolicy`): o valor mais específico

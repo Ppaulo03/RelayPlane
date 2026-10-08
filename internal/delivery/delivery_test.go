@@ -134,7 +134,7 @@ func TestFanOutIsTenantIsolatedFilteredAndIdempotent(t *testing.T) {
 	}
 	for _, internal := range []events.Event{
 		{EventID: "q", EventType: events.InstanceQRCodeUpdated, TenantID: "t1", InstanceID: "i"},
-		{EventID: "o", EventType: events.OwnershipViolation, TenantID: "t1", InstanceID: "i"},
+		{EventID: "o", EventType: events.Type("internal.example"), TenantID: "t1", InstanceID: "i"},
 		{EventID: "n", EventType: events.MessageReceived, TenantID: "", InstanceID: "i"},
 	} {
 		if err := e.fan.Handle(bg, internal); err != nil {

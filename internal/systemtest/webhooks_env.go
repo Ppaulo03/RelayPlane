@@ -107,10 +107,8 @@ func (r *Receiver) DistinctEvents(url string) map[string]int {
 	return out
 }
 
-// StartWebhooks runs the fan-out consumer and the delivery dispatcher (what the worker binary does), and the outbox publisher that
-// puts accepted events on the bus (what the reconciler binary does): inbound events reach the bus through it, as in production.
+// StartWebhooks runs the fan-out and the delivery dispatcher (what the worker binary does).
 func (e *Env) StartWebhooks() {
-	e.StartOutbox()
 	e.StartWebhookConsumers()
 }
 

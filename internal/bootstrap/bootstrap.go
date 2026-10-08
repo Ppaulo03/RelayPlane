@@ -40,7 +40,6 @@ type Runtime struct {
 	Store   *postgres.Store
 	Redis   *redis.Client
 	Queue   *redisstreams.Queue
-	Bus     *redisstreams.Bus
 	Blob    *s3.Store
 
 	// FanOut and Dispatcher deliver tenant-facing events to webhook subscriptions (run by the worker).
@@ -81,7 +80,6 @@ func New(ctx context.Context, cfg config.Config, service string) (*Runtime, erro
 		Partitions: cfg.CommandPartitions, InlineMaxBytes: cfg.MediaInlineMaxBytes, LeaseTTL: cfg.CommandLeaseTTL}); err != nil {
 		return nil, fmt.Errorf("command queue: %w", err)
 	}
-	rt.Bus = redisstreams.NewBus(rt.Redis, redisstreams.BusConfig{MaxLen: int64(cfg.EventBusRetention)})
 	if rt.Blob, err = s3.New(ctx, s3.Config{Endpoint: cfg.BlobEndpoint, PublicEndpoint: cfg.BlobPublicEndpoint, AccessKey: cfg.BlobAccessKey,
 		SecretKey: cfg.BlobSecretKey, Bucket: cfg.BlobBucket, UseSSL: cfg.BlobUseSSL, PublicUseSSL: cfg.BlobPublicUseSSL, LifecycleDays: cfg.BlobLifecycleDays}); err != nil {
 		return nil, fmt.Errorf("blob store: %w", err)
@@ -121,7 +119,7 @@ func New(ctx context.Context, cfg config.Config, service string) (*Runtime, erro
 	if cfg.IdempotencyTTL > 0 {
 		idem.TTL = cfg.IdempotencyTTL
 	}
-	rt.App = app.New(app.Deps{Repos: repos, Providers: reg, Queue: rt.Queue, Bus: rt.Bus, Blob: rt.Blob,
+	rt.App = app.New(app.Deps{Repos: repos, Providers: reg, Queue: rt.Queue, Blob: rt.Blob,
 		Locker: redislock.New(rt.Redis, ""), Idem: idem, Metrics: rt.Metrics, Log: log, Cfg: acfg})
 
 	rt.FanOut = &delivery.FanOut{Repos: repos, Log: log, Metrics: rt.Metrics, ErasureKey: erKey, MaxPendingPerSubscription: cfg.WebhookMaxPendingPerSub}

@@ -5,7 +5,6 @@ package observability
 import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
-	"github.com/relayplane/relayplane/internal/ports"
 	"net/http"
 )
 
@@ -50,12 +49,9 @@ type Metrics struct {
 	MigrationBlockedTotal  prometheus.Counter
 	BarrierDeferrals       *prometheus.CounterVec // by reason (unknown|unresolved)
 	OutboxPublished        prometheus.Counter
-	BusLength              prometheus.Gauge
-	BusRetention           prometheus.Gauge
 	BusConsumerLag         *prometheus.GaugeVec // by group
 	BusOldestPending       *prometheus.GaugeVec // by group, seconds
 	BusEventsLost          *prometheus.GaugeVec // by group: events trimmed before the group read them
-	BusTrimRisk            prometheus.Gauge     // worst lag / retention; >= 1 means data loss
 
 	WebhookDeliveries    *prometheus.CounterVec // by result (delivered|retry|dead|postponed)
 	WebhookLatency       prometheus.Histogram   // seconds per delivery attempt
@@ -63,7 +59,6 @@ type Metrics struct {
 	WebhookDead          prometheus.Gauge       // deliveries in the DLQ
 	WebhookOldestPending prometheus.Gauge       // age (s) of the oldest pending delivery
 	WebhookBreakersOpen  prometheus.Gauge       // destinations whose circuit is open
-	EventOutboxPublished prometheus.Counter     // tenant-facing events moved from the outbox to the bus
 }
 
 // NewMetrics registers all collectors on a fresh registry.
@@ -112,21 +107,13 @@ func NewMetrics() *Metrics {
 
 	m.BarrierDeferrals = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "relayplane_outbound_barrier_deferrals_total", Help: "Dispatches deferred by the per-instance ordering barrier."}, []string{"reason"})
 	m.OutboxPublished = prometheus.NewCounter(prometheus.CounterOpts{Name: "relayplane_outbox_published_total", Help: "Commands published from the transactional outbox."})
-	m.BusLength = prometheus.NewGauge(prometheus.GaugeOpts{Name: "relayplane_eventbus_stream_length", Help: "Events currently retained by the event bus."})
-	m.BusRetention = prometheus.NewGauge(prometheus.GaugeOpts{Name: "relayplane_eventbus_retention_entries", Help: "Configured event bus retention (approximate maximum length)."})
-	m.BusConsumerLag = prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "relayplane_eventbus_consumer_lag", Help: "Events a consumer group has not been delivered yet."}, []string{"group"})
-	m.BusOldestPending = prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "relayplane_eventbus_oldest_pending_seconds", Help: "Age of the oldest unacknowledged event per group."}, []string{"group"})
-	m.BusEventsLost = prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "relayplane_eventbus_events_lost", Help: "Events trimmed away before the consumer group read them."}, []string{"group"})
-	m.BusTrimRisk = prometheus.NewGauge(prometheus.GaugeOpts{Name: "relayplane_eventbus_trim_risk", Help: "Worst consumer lag as a fraction of the retention; >= 1 means events were lost."})
 	m.WebhookDeliveries = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "relayplane_webhook_deliveries_total", Help: "Webhook delivery attempts by result."}, []string{"result"})
 	m.WebhookLatency = prometheus.NewHistogram(prometheus.HistogramOpts{Name: "relayplane_webhook_delivery_seconds", Help: "Latency of webhook POSTs.", Buckets: prometheus.DefBuckets})
 	m.WebhookPending = prometheus.NewGauge(prometheus.GaugeOpts{Name: "relayplane_webhook_pending", Help: "Webhook deliveries waiting to be (re)tried."})
 	m.WebhookDead = prometheus.NewGauge(prometheus.GaugeOpts{Name: "relayplane_webhook_dead", Help: "Webhook deliveries in the DLQ."})
 	m.WebhookOldestPending = prometheus.NewGauge(prometheus.GaugeOpts{Name: "relayplane_webhook_oldest_pending_seconds", Help: "Age of the oldest pending webhook delivery."})
 	m.WebhookBreakersOpen = prometheus.NewGauge(prometheus.GaugeOpts{Name: "relayplane_webhook_circuit_open", Help: "Destinations whose circuit breaker is open."})
-	m.EventOutboxPublished = prometheus.NewCounter(prometheus.CounterOpts{Name: "relayplane_event_outbox_published_total", Help: "Tenant-facing events published from the transactional outbox."})
-	for _, c := range []prometheus.Collector{m.WebhookDeliveries, m.WebhookLatency, m.WebhookPending, m.WebhookDead, m.WebhookOldestPending, m.WebhookBreakersOpen, m.EventOutboxPublished,
-		m.BusLength, m.BusRetention, m.BusConsumerLag, m.BusOldestPending, m.BusEventsLost, m.BusTrimRisk,
+	for _, c := range []prometheus.Collector{m.WebhookDeliveries, m.WebhookLatency, m.WebhookPending, m.WebhookDead, m.WebhookOldestPending, m.WebhookBreakersOpen,
 		m.InstancesTotal, m.InstancesConnected, m.ProviderNodesTotal, m.ProviderNodeHealth, m.OutboundQueueDepth,
 		m.OutboundRetryTotal, m.OutboundDLQTotal, m.OutboundMessages, m.InboundEventsTotal, m.InboundDuplicates,
 		m.OwnershipViolation, m.StaleCommandTotal, m.EpochMismatchTotal, m.ReconciliationTotal, m.ReconciliationFail,
@@ -136,21 +123,6 @@ func NewMetrics() *Metrics {
 		f(c)
 	}
 	return m
-}
-
-// RecordBusStats publishes the event bus retention health.
-func (m *Metrics) RecordBusStats(s ports.EventBusStats) {
-	m.BusLength.Set(float64(s.Length))
-	m.BusRetention.Set(float64(s.Retention))
-	m.BusConsumerLag.Reset()
-	m.BusOldestPending.Reset()
-	m.BusEventsLost.Reset()
-	for _, g := range s.Groups {
-		m.BusConsumerLag.WithLabelValues(g.Name).Set(float64(g.Lag))
-		m.BusOldestPending.WithLabelValues(g.Name).Set(g.OldestPending.Seconds())
-		m.BusEventsLost.WithLabelValues(g.Name).Set(float64(g.Lost))
-	}
-	m.BusTrimRisk.Set(s.TrimRisk())
 }
 
 // Handler serves /metrics.

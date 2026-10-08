@@ -43,7 +43,6 @@ type Env struct {
 	Repos      ports.Repositories
 	Queue      ports.CommandQueue
 	QueueFault *FaultyQueue // wraps the queue: tests can make publishes fail or vanish
-	Bus        *RecBus
 	Blob       ports.BlobStore
 	Locker     ports.Locker
 	Provider   *memory.FakeProvider
@@ -71,7 +70,6 @@ type Backend struct {
 	Store  *memory.Store
 	Repos  ports.Repositories
 	Queue  ports.CommandQueue
-	Bus    ports.EventBus
 	Blob   ports.BlobStore
 	Locker ports.Locker
 }
@@ -84,43 +82,7 @@ func memoryBackend() *Backend {
 	st := memory.NewStore()
 	return &Backend{Store: st, Repos: st.Repositories(),
 		Queue: memory.NewQueue(memory.QueueConfig{Partitions: 8, InlineMaxBytes: InlineLimit, DefaultRetryDelay: time.Millisecond}),
-		Bus:   memory.NewBus(), Blob: memory.NewBlob(), Locker: memory.NewLocker()}
-}
-
-// RecBus records everything published through it.
-type RecBus struct {
-	ports.EventBus
-	mu  sync.Mutex
-	log []events.Event
-	// Down makes Publish fail (the broker is unavailable).
-	Down atomic.Bool
-	// Drop makes Publish "succeed" and lose the event (the broker answered OK and then lost its data, e.g. a Redis wiped before any
-	// consumer read the entry).
-	Drop atomic.Bool
-}
-
-// Publish implements ports.EventBus.
-func (b *RecBus) Publish(ctx context.Context, ev events.Event) error {
-	if b.Down.Load() {
-		return errors.New("event bus unavailable")
-	}
-	if b.Drop.Load() {
-		return nil
-	}
-	if err := b.EventBus.Publish(ctx, ev); err != nil {
-		return err
-	}
-	b.mu.Lock()
-	b.log = append(b.log, ev)
-	b.mu.Unlock()
-	return nil
-}
-
-// Published returns the events published so far.
-func (b *RecBus) Published() []events.Event {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	return append([]events.Event(nil), b.log...)
+		Blob:  memory.NewBlob(), Locker: memory.NewLocker()}
 }
 
 // FaultyQueue decorates a CommandQueue with broker faults.
@@ -155,7 +117,6 @@ func NewEnv(t *testing.T) *Env {
 	e.Store, e.Repos, e.Queue, e.Blob, e.Locker = be.Store, be.Repos, be.Queue, be.Blob, be.Locker
 	e.QueueFault = &FaultyQueue{CommandQueue: be.Queue}
 	e.Queue = e.QueueFault
-	e.Bus = &RecBus{EventBus: be.Bus}
 	e.Provider = memory.NewFakeProvider()
 	e.Metrics = observability.NewMetrics()
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
@@ -169,7 +130,7 @@ func NewEnv(t *testing.T) *Env {
 	cfg.Subscriptions = app.SubscriptionConfig{ServerKey: SubscriptionKey, AllowInsecureURLs: true, AllowPrivateDestinations: true}
 	idem := idempotency.NewService(e.Repos.Idempotency)
 	idem.StaleAfter = 50 * time.Millisecond
-	e.App = app.New(app.Deps{Repos: e.Repos, Providers: reg, Queue: e.Queue, Bus: e.Bus, Blob: e.Blob, Locker: e.Locker,
+	e.App = app.New(app.Deps{Repos: e.Repos, Providers: reg, Queue: e.Queue, Blob: e.Blob, Locker: e.Locker,
 		Idem: idem, Metrics: e.Metrics, Log: log, Cfg: cfg})
 
 	e.Worker = worker.NewOutbound(e.Repos, reg, e.Blob, e.Metrics, log)
@@ -243,17 +204,16 @@ func (e *Env) StartWorkers(n int) {
 	}
 }
 
-// Flush publishes, now, the events waiting in the event outbox (an accepted inbound event reaches the bus through it).
-func (e *Env) Flush() {
-	for {
-		n, err := e.App.EventOutbox.PublishPending(e.ctx, 100)
-		if err != nil || n == 0 {
-			return
-		}
+// OutboxEvents is every event the system has accepted so far, in order (the event outbox IS the event stream).
+func (e *Env) OutboxEvents() []events.Event {
+	evs, err := e.Repos.Events.ListAll(context.Background(), 100000)
+	if err != nil {
+		e.T.Fatal(err)
 	}
+	return evs
 }
 
-// StartOutbox runs the outbox dispatcher loop (what the reconciler binary does every second). Calling it twice starts one loop.
+// StartOutbox runs the command outbox dispatcher loop (what the reconciler binary does every second). Calling it twice starts one loop.
 func (e *Env) StartOutbox() {
 	e.outboxOnce.Do(e.startOutbox)
 }
@@ -266,7 +226,6 @@ func (e *Env) startOutbox() {
 		defer t.Stop()
 		for {
 			_, _ = e.App.Outbox.DispatchPending(e.ctx, 100)
-			_, _ = e.App.EventOutbox.PublishPending(e.ctx, 100)
 			select {
 			case <-e.ctx.Done():
 				return
@@ -284,7 +243,6 @@ func (e *Env) StartMedia() {
 
 // StartProjector launches the event projector consumer.
 func (e *Env) StartProjector() {
-	e.StartOutbox() // inbound events reach the bus through the outbox, as in production
 	e.wg.Add(1)
 	go func() { defer e.wg.Done(); e.Projector.Run(e.ctx) }() // from the database, as the worker binary does
 }

@@ -281,29 +281,6 @@ func TestInboundMedia_ProviderRetryOfTheSameWebhookIsIdempotent(t *testing.T) {
 	}
 }
 
-// A broker outage while an attachment is resolved holds nothing back: the resolved event is queued in the database with the closing of
-// the job, the tenant gets exactly one event, and the attachment is downloaded once.
-func TestInboundMedia_BusOutageDoesNotHoldTheTenantNorRepeatTheDownload(t *testing.T) {
-	f := newMediaFixture(t)
-	bus := f.e.Bus
-	bus.Down.Store(true)
-	f.e.StartMedia()
-	f.receive("WA-OUT", attachment("audio", "audio/ogg", "", []byte("voice"), nil))
-	Eventually(t, 10*time.Second, "the attachment is downloaded while the bus is down", func() bool { return f.e.Provider.MediaDownloadCalls() >= 1 })
-	m, _ := f.delivered(1) // while the bus is still down
-	bus.Down.Store(false)
-	if m.Status != events.MediaReady {
-		t.Errorf("%+v", m)
-	}
-	f.settle()
-	if n := f.e.Provider.MediaDownloadCalls(); n != 1 {
-		t.Errorf("the bytes were fetched %d times: only the publish may repeat", n)
-	}
-	if n := len(f.e.Receiver.Accepted(hookURL)); n != 1 {
-		t.Errorf("delivered %d times", n)
-	}
-}
-
 func TestInboundMedia_LimitsAreAdvertised(t *testing.T) {
 	e := NewEnv(t)
 	l := e.App.Limits()

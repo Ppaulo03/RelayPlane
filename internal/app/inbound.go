@@ -24,7 +24,7 @@ import (
 
 // InboundService handles provider webhooks. The request path does the minimum:
 // authenticate, validate ownership, normalize, dedupe, publish. Business
-// reactions happen in EventBus consumers.
+// reactions happen in the consumers of the event outbox (the tenant fan-out and the projector).
 type InboundService struct{ d Deps }
 
 // InboundResult summarises one webhook request.
@@ -114,13 +114,6 @@ func (s *InboundService) violation(ctx context.Context, inst *instance.Instance,
 	s.d.Metrics.OwnershipViolation.Inc()
 	s.d.Log.ErrorContext(ctx, "OWNERSHIP_VIOLATION", "claimed_node", claim.NodeID, "claimed_epoch", claim.Epoch,
 		"owner_node", inst.NodeID, "assignment_epoch", inst.AssignmentEpoch, "error", cause)
-	ev := events.Event{EventID: ids.New("evt"), EventType: events.OwnershipViolation, Provider: inst.Provider,
-		TenantID: inst.TenantID, InstanceID: inst.ID, Timestamp: s.d.now().UTC(),
-		Payload: map[string]any{"claimed_node": claim.NodeID, "claimed_epoch": claim.Epoch,
-			"owner_node": inst.NodeID, "assignment_epoch": inst.AssignmentEpoch}}
-	if err := s.d.Bus.Publish(ctx, ev); err != nil {
-		s.d.Log.WarnContext(ctx, "could not publish ownership violation event", "error", err)
-	}
 }
 
 // ---- nodes ----

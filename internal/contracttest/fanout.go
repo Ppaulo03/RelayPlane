@@ -51,16 +51,10 @@ func eventFanOutContract(t *testing.T, f RepoFactory) {
 	if n, _, _ := fx.r.Events.PendingStats(ctx); n != 1 {
 		t.Errorf("one left to fan out: %d", n)
 	}
-	// the broker publication is a different fact: a fanned-out event that the broker has not taken yet is not purgeable
-	if n, _ := fx.r.Events.Purge(ctx, time.Now().Add(time.Hour)); n != 0 {
-		t.Errorf("an event the broker has not taken is kept: purged %d", n)
-	}
-	if err := fx.r.Events.MarkPublished(ctx, []string{"e1", "e2", "e3"}, time.Now()); err != nil {
-		t.Fatal(err)
-	}
-	// ... and an event the broker took but whose deliveries do not exist is kept too (this is the row that saves it from a broker that lost it)
+	// fanned out is not enough while the catalog has something to learn from the event (these are not projector events: born projected);
+	// and an event whose deliveries do not exist is kept whatever else is done: that row is what saves it from any loss elsewhere
 	if n, _ := fx.r.Events.Purge(ctx, time.Now().Add(time.Hour)); n != 2 {
-		t.Errorf("only published AND fanned-out events are purged: %d", n)
+		t.Errorf("only fanned-out events are purged (e3 is not): %d", n)
 	}
 	// a lease that ran out gives the event to another worker (the first one died)
 	time.Sleep(30 * time.Millisecond)
@@ -152,17 +146,14 @@ func eventProjectionContract(t *testing.T, f RepoFactory) {
 	if n, _, _ := fx.r.Events.ProjectionStats(ctx); n != 0 {
 		t.Errorf("all applied: %d", n)
 	}
-	// purge needs the three marks
-	if err := fx.r.Events.MarkPublished(ctx, []string{"r1", "m1", "s1", "r2"}, time.Now()); err != nil {
-		t.Fatal(err)
-	}
+	// purge needs both marks: fanned out AND projected
 	if n, _ := fx.r.Events.Purge(ctx, time.Now().Add(time.Hour)); n != 0 {
-		t.Errorf("published and projected but not fanned out: kept: purged %d", n)
+		t.Errorf("projected but not fanned out: kept: purged %d", n)
 	}
 	if err := fx.r.Events.MarkFannedOut(ctx, []string{"r1", "m1", "s1", "r2"}, time.Now()); err != nil {
 		t.Fatal(err)
 	}
 	if n, _ := fx.r.Events.Purge(ctx, time.Now().Add(time.Hour)); n != 4 {
-		t.Errorf("all three marks: purged %d", n)
+		t.Errorf("both marks: purged %d", n)
 	}
 }

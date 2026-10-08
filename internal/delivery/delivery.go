@@ -1,6 +1,6 @@
-// Package delivery moves tenant-facing events from the event bus to the tenants' webhook destinations:
+// Package delivery moves tenant-facing events from the event outbox (the database) to the tenants' webhook destinations:
 //
-//	EventBus --FanOut--> webhook_deliveries --Dispatcher--> signed POST (at-least-once, retries, DLQ)
+//	event_outbox --FanOut--> webhook_deliveries --Dispatcher--> signed POST (at-least-once, retries, DLQ)
 //
 // Guarantees: a delivery row is created once per (subscription, event) however many times the bus redelivers the
 // event; a delivery is retried with backoff until it succeeds or lands in the DLQ; a destination that keeps failing
@@ -26,7 +26,7 @@ import (
 	"github.com/relayplane/relayplane/internal/ports"
 )
 
-// FanOut is the EventBus consumer that turns one event into one delivery per matching subscription.
+// FanOut turns each event of the event outbox into one delivery per matching subscription.
 type FanOut struct {
 	Repos   ports.Repositories
 	Log     *slog.Logger

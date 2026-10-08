@@ -33,9 +33,6 @@ type Config struct {
 	AutoMigrate bool
 	RedisURL    string
 
-	// EventBusRetention is how many events the bus keeps (approximate stream cap). A consumer group
-	// that falls further behind than this loses events: size it for the worst consumer outage.
-	EventBusRetention int
 	CommandPartitions int
 	CommandLeaseTTL   time.Duration
 
@@ -118,7 +115,7 @@ func Load() (Config, error) {
 	c := Config{
 		Env: get("APP_ENV", "development"), HTTPPort: get("HTTP_PORT", "8080"), OpsPort: get("OPS_PORT", "9090"),
 		DatabaseURL: os.Getenv("DATABASE_URL"), AutoMigrate: getBool("AUTO_MIGRATE", false), RedisURL: get("REDIS_URL", "redis://localhost:6379/0"),
-		EventBusRetention: getInt("EVENT_BUS_RETENTION", 100000), CommandPartitions: getInt("COMMAND_PARTITIONS", 32), CommandLeaseTTL: getDur("COMMAND_LEASE_TTL", 15*time.Second),
+		CommandPartitions: getInt("COMMAND_PARTITIONS", 32), CommandLeaseTTL: getDur("COMMAND_LEASE_TTL", 15*time.Second),
 		BlobEndpoint: os.Getenv("BLOB_STORE_ENDPOINT"), BlobPublicEndpoint: os.Getenv("BLOB_STORE_PUBLIC_ENDPOINT"),
 		BlobBucket: get("BLOB_STORE_BUCKET", "relayplane-media"), BlobAccessKey: os.Getenv("BLOB_STORE_ACCESS_KEY"), BlobSecretKey: os.Getenv("BLOB_STORE_SECRET_KEY"),
 		BlobUseSSL: getBool("BLOB_STORE_USE_SSL", false), BlobPublicUseSSL: getBool("BLOB_STORE_PUBLIC_USE_SSL", false), BlobLifecycleDays: getInt("BLOB_STORE_LIFECYCLE_DAYS", 7),

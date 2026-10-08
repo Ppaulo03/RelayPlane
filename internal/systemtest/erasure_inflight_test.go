@@ -21,20 +21,18 @@ func counter(t *testing.T, e *Env, outcome string) float64 {
 	return m.GetCounter().GetValue()
 }
 
-// An event accepted before the erasure that is still waiting (here: in the outbox, the broker being down) does not come back to the tenant
-// after the contact was erased. A message the contact sends AFTER the erasure is new data and is delivered.
+// An event accepted before the erasure that is still waiting for its deliveries does not come back to the tenant after the contact was
+// erased. A message the contact sends AFTER the erasure is new data and is delivered.
 func TestErasure_ANewMessageAfterTheErasureIsStillDelivered(t *testing.T) {
-	f := newMediaFixtureWith(t, nil)
-	e := f.e
-	e.Bus.Down.Store(true)
-	f.receiveFrom(erasedNumber, "WA-OLD", "segredo de antes", nil)
-	if waiting, _ := e.Repos.Events.ListUnpublished(bg, 100); len(waiting) == 0 {
-		t.Fatal("the accepted event waits to be published")
-	}
+	e := NewEnv(t)
+	inst := e.CreateInstance(e.Tenant, "a", true)
+	subscribe(t, e, e.Tenant, hookURL, string(events.MessageReceived))
+	f := &mediaFixture{t: t, e: e, inst: inst}
+	f.receiveFrom(erasedNumber, "WA-OLD", "segredo de antes", nil) // accepted, nobody has fanned it out yet
 	if _, err := e.App.Contacts.Erase(bg, e.Tenant, erasedNumber); err != nil {
 		t.Fatal(err)
 	}
-	e.Bus.Down.Store(false)
+	e.StartWebhooks()
 	time.Sleep(300 * time.Millisecond)
 	if n := len(e.Receiver.Accepted(hookURL)); n != 0 {
 		t.Fatalf("the erased contact's event reached the tenant: %d", n)
@@ -42,32 +40,6 @@ func TestErasure_ANewMessageAfterTheErasureIsStillDelivered(t *testing.T) {
 	time.Sleep(10 * time.Millisecond)
 	f.receiveFrom(erasedNumber, "WA-NEW", "oi de novo", nil)
 	Eventually(t, 10*time.Second, "a message sent after the erasure is delivered", func() bool { return len(e.Receiver.Accepted(hookURL)) == 1 })
-}
-
-// The fan-out had the event in hand when the erasure came: the tombstone is checked after the deliveries are written too.
-func TestErasure_TheFanOutDropsWhatItHeldWhenTheErasureCame(t *testing.T) {
-	e := NewEnv(t)
-	inst := e.CreateInstance(e.Tenant, "a", true)
-	subscribe(t, e, e.Tenant, hookURL, string(events.MessageReceived))
-	e.StartOutbox()
-	f := &mediaFixture{t: t, e: e, inst: inst}
-	f.receiveFrom(erasedNumber, "WA-HELD", "segredo", nil)
-	e.Flush() // the event is on the bus: accepted, published, not yet fanned out
-	if _, err := e.App.Contacts.Erase(bg, e.Tenant, erasedNumber); err != nil {
-		t.Fatal(err)
-	}
-	e.StartWebhooks() // the fan-out now receives the old event
-	time.Sleep(400 * time.Millisecond)
-	if n := len(e.Receiver.Accepted(hookURL)); n != 0 {
-		t.Fatalf("the event of an erased contact was delivered: %d", n)
-	}
-	if bl, _ := e.App.Subscriptions.Backlog(bg, e.Tenant); len(bl) > 0 {
-		for id, b := range bl {
-			if b.Pending != 0 {
-				t.Fatalf("a delivery of the erased contact was created for %s: %+v", id, b)
-			}
-		}
-	}
 }
 
 // The erasure arrives while the attachment is being downloaded: what the download stores afterwards is removed and nothing is published.

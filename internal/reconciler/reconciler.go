@@ -95,10 +95,6 @@ func (r *Reconciler) runOutbox(ctx context.Context) {
 		if _, err := r.App.Outbox.DispatchPending(ctx, r.Cfg.BatchSize); err != nil {
 			r.Log.WarnContext(ctx, "outbox pass failed", "error", err)
 		}
-		// tenant-facing events written together with message status changes
-		if _, err := r.App.EventOutbox.PublishPending(ctx, r.Cfg.BatchSize); err != nil {
-			r.Log.WarnContext(ctx, "event outbox pass failed", "error", err)
-		}
 		select {
 		case <-ctx.Done():
 			return
