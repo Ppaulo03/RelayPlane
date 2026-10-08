@@ -17,7 +17,6 @@ import (
 type outboxEvent struct {
 	ev         events.Event
 	created    time.Time
-	published  time.Time
 	fanout     time.Time // the tenant's deliveries exist
 	leaseUntil time.Time // a fan-out worker holds it until then
 	projected  time.Time // the catalog applied it (born set when the catalog has nothing to learn from the event)
@@ -55,16 +54,14 @@ func (s *Store) queueEvent(ev events.Event) {
 
 type eventsRepo struct{ s *Store }
 
-func (r eventsRepo) ListUnpublished(_ context.Context, limit int) ([]events.Event, error) {
+func (r eventsRepo) ListAll(_ context.Context, limit int) ([]events.Event, error) {
 	r.s.mu.Lock()
 	defer r.s.mu.Unlock()
 	var out []events.Event
 	for _, e := range r.s.eventOutbox {
-		if e.published.IsZero() {
-			out = append(out, e.ev)
-			if limit > 0 && len(out) >= limit {
-				break
-			}
+		out = append(out, e.ev)
+		if limit > 0 && len(out) >= limit {
+			break
 		}
 	}
 	return out, nil
@@ -160,28 +157,13 @@ func (r eventsRepo) MarkFannedOut(_ context.Context, ids []string, at time.Time)
 	return nil
 }
 
-func (r eventsRepo) MarkPublished(_ context.Context, ids []string, at time.Time) error {
-	r.s.mu.Lock()
-	defer r.s.mu.Unlock()
-	want := map[string]bool{}
-	for _, id := range ids {
-		want[id] = true
-	}
-	for _, e := range r.s.eventOutbox {
-		if want[e.ev.EventID] && e.published.IsZero() {
-			e.published = at
-		}
-	}
-	return nil
-}
-
 func (r eventsRepo) Purge(_ context.Context, before time.Time) (int64, error) {
 	r.s.mu.Lock()
 	defer r.s.mu.Unlock()
 	var keep []*outboxEvent
 	var n int64
 	for _, e := range r.s.eventOutbox {
-		if !e.published.IsZero() && !e.fanout.IsZero() && !e.projected.IsZero() && e.published.Before(before) {
+		if !e.fanout.IsZero() && !e.projected.IsZero() && e.fanout.Before(before) {
 			n++
 			continue
 		}

@@ -745,7 +745,7 @@ func dedupContract(t *testing.T, f RepoFactory) {
 			Timestamp: time.Now().UTC(), Payload: map[string]any{"text": "oi"}}
 	}
 	pending := func() []string {
-		evs, err := fx.r.Events.ListUnpublished(ctx, 100)
+		evs, err := fx.r.Events.ListAll(ctx, 100)
 		if err != nil {
 			t.Fatal(err)
 		}

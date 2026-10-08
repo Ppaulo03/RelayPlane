@@ -377,21 +377,12 @@ func TestWebhook_OwnershipViolationAndAuth(t *testing.T) {
 	if testutilCounter(e, "relayplane_ownership_violation_total") != 1 {
 		t.Error("metric missing")
 	}
-	var violation bool
-	for _, ev := range e.Bus.Published() {
-		if ev.EventType == events.OwnershipViolation {
-			violation = true
-		}
-	}
-	if !violation {
-		t.Error("violation must be visible on the event bus")
-	}
 	// right node, stale epoch (old owner still talking after a migration)
 	if _, err := e.App.Inbound.Handle(bg, ProviderKey, inboundBody(inst.NodeID, inst.AssignmentEpoch+5, recvEv(inst.ID, "w2"))); !errors.Is(err, errs.ErrOwnershipViolation) {
 		t.Fatalf("stale epoch claim: %v", err)
 	}
 	// nothing was published for rejected requests
-	for _, ev := range e.Bus.Published() {
+	for _, ev := range e.OutboxEvents() {
 		if ev.EventType == events.MessageReceived {
 			t.Fatal("rejected webhook leaked an event")
 		}
@@ -498,9 +489,8 @@ func TestFailure_ReconcilerRestartIsIdempotent(t *testing.T) {
 	if got.ObservedState != instance.Connected {
 		t.Fatalf("observed %s", got.ObservedState)
 	}
-	e.Flush() // the reconciler's events go through the outbox
 	changes := 0
-	for _, ev := range e.Bus.Published() {
+	for _, ev := range e.OutboxEvents() {
 		if ev.EventType == events.InstanceStatusChanged && ev.InstanceID == inst.ID {
 			changes++
 		}
@@ -770,8 +760,7 @@ func TestProjector_StaleEventOfPreviousOwnerNeverAffectsTheNewAssignment(t *test
 		t.Fatal(err)
 	}
 	var carried bool
-	e.Flush()
-	for _, ev := range e.Bus.Published() {
+	for _, ev := range e.OutboxEvents() {
 		if ev.EventType == events.InstanceStatusChanged && ev.SourceAssignment != nil &&
 			ev.SourceAssignment.NodeID == inst.NodeID && ev.SourceAssignment.Epoch == 1 {
 			carried = true

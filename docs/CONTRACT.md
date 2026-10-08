@@ -41,7 +41,7 @@ Envelope fixo: `schema_version` (2), `event_id`, `sequence`, `event_type`, `chan
 
 ## 5. O que o consumidor **não** precisa saber
 
-Evolution/Baileys e suas versões, nodes, fencing e epochs, outbox, leases, partições, retenção do barramento, migrações. Se algum desses vazar para o seu código, isso é um defeito do RelayPlane, não uso incorreto.
+Evolution/Baileys e suas versões, nodes, fencing e epochs, outbox, leases, partições, migrações. Se algum desses vazar para o seu código, isso é um defeito do RelayPlane, não uso incorreto.
 
 ## 6. Garantias e limites **hoje** (honestos)
 

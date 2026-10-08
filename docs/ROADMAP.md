@@ -13,7 +13,7 @@ Legenda: ✅ feito e testado · ⚠️ feito com limitação registrada · ⏭�
 | Placement atômico, sticky, drain | ✅ | contrato com concorrência real (PostgreSQL) |
 | Ownership, `assignment_epoch`, fencing lógico e físico, `MIGRATION_BLOCKED` | ✅ | `app/migration.go`, `Reassign` valida `OLD_OWNER_FENCED` na transação |
 | Adapter Evolution v2 (client, auth, DTOs, mapping, webhook, capabilities, erros, compat) | ⚠️ | ver "Riscos conhecidos" |
-| Redis Streams: CommandQueue particionada + EventBus | ✅ | contrato executado contra Redis real |
+| Redis Streams: CommandQueue particionada | ✅ | contrato executado contra Redis real |
 | Worker outbound (CAS, ordering, retry/backoff, DLQ, UNKNOWN) | ✅ | |
 | Idempotência (create/send/delete/migrate) | ✅ | |
 | Rate limit configurável com hierarquia | ⚠️ | estado por worker (ver abaixo) |
@@ -36,7 +36,7 @@ Legenda: ✅ feito e testado · ⚠️ feito com limitação registrada · ⏭�
 | Epoch de origem nos eventos canônicos; projector rejeita evento stale | ✅ |
 | Estados terminais de operação imutáveis | ✅ |
 | Orçamento de retry durável (PostgreSQL) | ✅ |
-| Retenção do EventBus configurável + lag/trim/perda + alertas | ✅ (definir o SLA de retenção do seu volume; Kafka como evolução) |
+| Eventos pelo banco (`event_outbox` como fluxo de eventos; sem barramento) | ✅ | o Redis ficou só com a fila de comandos |
 | `UNKNOWN` estrito por padrão | ✅ (`UNKNOWN_BARRIER_TIMEOUT` positivo = escolha explícita de disponibilidade) |
 | `AWAITING_PAIRING` na migração | ✅ |
 | `LookupInstance` (identidade do provider) | ✅ |
@@ -92,7 +92,7 @@ Legenda: ✅ feito e testado · ⚠️ feito com limitação registrada · ⏭�
 |---|---|
 | Adapter `evolution/v3`, blue/green de providers | Não existe v3 pinável; o desenho de versionamento já suporta (PROVIDER-ADAPTERS) |
 | Failover automático | Exige fencing verificável do owner antigo (não existe na Evolution sem destruir sessão); explicitamente fora da v1 |
-| Adapters RabbitMQ / Kafka | Contratos prontos (`CommandQueue`/`EventBus`) e suítes de contrato reutilizáveis; implementar quando houver necessidade |
+| Adapters RabbitMQ / Kafka | Contrato pronto (`CommandQueue`) e suítes de contrato reutilizáveis; implementar quando houver necessidade |
 | Adapter filesystem de blobs | Somente dev/testes; o adapter em memória cobre os testes |
 | Consumo de eventos pelo SDK (`consumer`) | O DoD termina em "publicar evento canônico"; falta definir o canal de entrega às aplicações (stream ACL por tenant, webhook de saída ou SSE) |
 | RBAC além de `tenant`/`admin` | `Principal.Role` é o ponto de extensão |

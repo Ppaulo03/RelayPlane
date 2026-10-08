@@ -56,7 +56,6 @@ func init() {
 			t.Skipf("s3 unavailable: %v", err)
 		}
 		return &Backend{Repos: st.Repositories(), Queue: q,
-			Bus:  redisstreams.NewBus(rdb, redisstreams.BusConfig{Prefix: prefix, Block: 30 * time.Millisecond, ReclaimIdle: 200 * time.Millisecond}),
 			Blob: blob, Locker: redislock.New(rdb, prefix)}
 	}
 }

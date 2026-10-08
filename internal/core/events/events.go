@@ -1,4 +1,4 @@
-// Package events defines the canonical event model published on the EventBus.
+// Package events defines the canonical event model: the facts RelayPlane accepts (stored in the event outbox) and the copy a tenant receives.
 //
 // Downstream consumers only ever see these types; raw provider payloads never
 // leave the provider adapter.
@@ -21,7 +21,6 @@ const (
 	MessageStatus         Type = "message.status"
 	InstanceStatusChanged Type = "instance.status_changed"
 	InstanceQRCodeUpdated Type = "instance.qrcode_updated"
-	OwnershipViolation    Type = "ownership.violation"
 	// MessageOutboundStatus reports the lifecycle of a message the TENANT sent through RelayPlane
 	// (ACCEPTED, DELIVERED, READ, FAILED, UNKNOWN), keyed by the RelayPlane message id.
 	MessageOutboundStatus Type = "message.outbound_status"

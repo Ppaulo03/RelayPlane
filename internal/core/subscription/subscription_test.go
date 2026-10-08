@@ -24,7 +24,7 @@ func TestMatchesRespectsTenantFiltersAndVisibility(t *testing.T) {
 	if s.Matches(ev("t2", "i1", events.MessageReceived)) {
 		t.Fatal("TENANT ISOLATION: another tenant's event must never match")
 	}
-	if s.Matches(ev("t1", "i1", events.InstanceQRCodeUpdated)) || s.Matches(ev("t1", "i1", events.OwnershipViolation)) {
+	if s.Matches(ev("t1", "i1", events.InstanceQRCodeUpdated)) || s.Matches(ev("t1", "i1", events.Type("internal.example"))) {
 		t.Error("QR and ownership events are internal and never delivered")
 	}
 	byType := Subscription{TenantID: "t1", Active: true, EventTypes: []events.Type{events.MessageOutboundStatus}}

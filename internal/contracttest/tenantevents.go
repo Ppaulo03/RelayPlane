@@ -43,13 +43,13 @@ func eventOutboxContract(t *testing.T, f RepoFactory) {
 	if got, _ := fx.r.Messages.Get(ctx, "msg_1"); got.TraceParent != m.TraceParent {
 		t.Errorf("the trace context of the send is persisted with the message: %q", got.TraceParent)
 	}
-	if evs, _ := fx.r.Events.ListUnpublished(ctx, 10); len(evs) != 0 {
+	if evs, _ := fx.r.Events.ListAll(ctx, 10); len(evs) != 0 {
 		t.Fatalf("QUEUED/DISPATCHING are internal: nothing is announced yet, got %d", len(evs))
 	}
 	if _, err := fx.r.Messages.Transition(ctx, "msg_1", []messaging.Status{messaging.StatusQueued}, messaging.StatusDispatching, ports.MessagePatch{BumpAttempt: true}); err != nil {
 		t.Fatal(err)
 	}
-	if evs, _ := fx.r.Events.ListUnpublished(ctx, 10); len(evs) != 0 {
+	if evs, _ := fx.r.Events.ListAll(ctx, 10); len(evs) != 0 {
 		t.Fatalf("DISPATCHING is internal, got %d events", len(evs))
 	}
 
@@ -60,7 +60,7 @@ func eventOutboxContract(t *testing.T, f RepoFactory) {
 	if acc.AcceptedAt.IsZero() {
 		t.Error("ACCEPTED must stamp accepted_at")
 	}
-	evs, err := fx.r.Events.ListUnpublished(ctx, 10)
+	evs, err := fx.r.Events.ListAll(ctx, 10)
 	if err != nil || len(evs) != 1 {
 		t.Fatalf("ACCEPTED must produce exactly one event: %d %v", len(evs), err)
 	}
@@ -86,7 +86,7 @@ func eventOutboxContract(t *testing.T, f RepoFactory) {
 	if applied, _ := fx.r.Messages.ApplyProviderStatus(ctx, "inst_1", "WAID1", messaging.StatusAccepted); applied {
 		t.Fatal("a regression must not apply")
 	}
-	evs, _ = fx.r.Events.ListUnpublished(ctx, 10)
+	evs, _ = fx.r.Events.ListAll(ctx, 10)
 	if len(evs) != 2 || outboundStatusPayload(t, evs[1]).Status != "DELIVERED" {
 		t.Fatalf("expected ACCEPTED then DELIVERED, got %d events", len(evs))
 	}
@@ -94,29 +94,21 @@ func eventOutboxContract(t *testing.T, f RepoFactory) {
 		t.Error("each status is its own fact with its own id")
 	}
 
-	// publication bookkeeping
-	if err := fx.r.Events.MarkPublished(ctx, []string{evs[0].EventID}, time.Now()); err != nil {
-		t.Fatal(err)
-	}
-	left, _ := fx.r.Events.ListUnpublished(ctx, 10)
-	if len(left) != 1 || left[0].EventID != evs[1].EventID {
-		t.Fatalf("published events leave the unpublished list, order preserved: %+v", left)
-	}
-	if n, err := fx.r.Events.Purge(ctx, time.Now().Add(-time.Hour)); err != nil || n != 0 {
-		t.Errorf("recent published events are kept: %d %v", n, err)
-	}
-	// published is not enough: the tenant's deliveries must exist too, or the broker losing the entry would lose the event
+	// retention bookkeeping: an event is forgotten only once its deliveries exist (outbound statuses are born projected)
 	if n, err := fx.r.Events.Purge(ctx, time.Now().Add(time.Hour)); err != nil || n != 0 {
-		t.Errorf("a published event whose fan-out is not done is kept: %d %v", n, err)
+		t.Errorf("an event whose fan-out is not done is kept: %d %v", n, err)
 	}
 	if err := fx.r.Events.MarkFannedOut(ctx, []string{evs[0].EventID}, time.Now()); err != nil {
 		t.Fatal(err)
 	}
-	if n, err := fx.r.Events.Purge(ctx, time.Now().Add(time.Hour)); err != nil || n != 1 {
-		t.Errorf("old events that were published AND fanned out are purged, unfinished ones never: %d %v", n, err)
+	if n, err := fx.r.Events.Purge(ctx, time.Now().Add(-time.Hour)); err != nil || n != 0 {
+		t.Errorf("recent finished events are kept: %d %v", n, err)
 	}
-	if left, _ := fx.r.Events.ListUnpublished(ctx, 10); len(left) != 1 {
-		t.Errorf("an unpublished event must survive purge: %d", len(left))
+	if n, err := fx.r.Events.Purge(ctx, time.Now().Add(time.Hour)); err != nil || n != 1 {
+		t.Errorf("old finished events are purged, unfinished ones never: %d %v", n, err)
+	}
+	if left, _ := fx.r.Events.ListAll(ctx, 10); len(left) != 1 || left[0].EventID != evs[1].EventID {
+		t.Errorf("an unfinished event must survive purge, order preserved: %+v", left)
 	}
 }
 
@@ -139,7 +131,7 @@ func eventOutboxFailureStatesContract(t *testing.T, f RepoFactory) {
 			t.Fatal(err)
 		}
 	}
-	evs, _ := fx.r.Events.ListUnpublished(ctx, 10)
+	evs, _ := fx.r.Events.ListAll(ctx, 10)
 	if len(evs) != 2 || outboundStatusPayload(t, evs[0]).Status != "FAILED" || outboundStatusPayload(t, evs[1]).Status != "UNKNOWN" {
 		t.Fatalf("FAILED and UNKNOWN are announced: %+v", evs)
 	}

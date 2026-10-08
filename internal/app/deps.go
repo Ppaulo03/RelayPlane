@@ -132,7 +132,6 @@ type Deps struct {
 	Repos     ports.Repositories
 	Providers *ProviderRegistry
 	Queue     ports.CommandQueue
-	Bus       ports.EventBus
 	Blob      ports.BlobStore
 	Locker    ports.Locker
 	Idem      *idempotency.Service

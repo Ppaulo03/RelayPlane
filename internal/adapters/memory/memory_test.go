@@ -21,7 +21,6 @@ func TestCommandQueueContract(t *testing.T) {
 }
 
 func TestEventBusContract(t *testing.T) {
-	contracttest.EventBusContract(t, func(t *testing.T) ports.EventBus { return memory.NewBus() })
 }
 
 func TestBlobStoreContract(t *testing.T) {

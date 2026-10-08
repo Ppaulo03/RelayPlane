@@ -51,11 +51,11 @@ func insertEventOutbox(ctx context.Context, tx pgx.Tx, ev events.Event) error {
 
 type eventsRepo struct{ s *Store }
 
-func (r eventsRepo) ListUnpublished(ctx context.Context, limit int) ([]events.Event, error) {
+func (r eventsRepo) ListAll(ctx context.Context, limit int) ([]events.Event, error) {
 	if limit <= 0 {
 		limit = 100
 	}
-	rows, err := r.s.pool.Query(ctx, `SELECT event FROM event_outbox WHERE published_at IS NULL ORDER BY seq LIMIT $1`, limit)
+	rows, err := r.s.pool.Query(ctx, `SELECT event FROM event_outbox ORDER BY seq LIMIT $1`, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -194,16 +194,8 @@ func (r eventsRepo) MarkFannedOut(ctx context.Context, ids []string, at time.Tim
 	return err
 }
 
-func (r eventsRepo) MarkPublished(ctx context.Context, ids []string, at time.Time) error {
-	if len(ids) == 0 {
-		return nil
-	}
-	_, err := r.s.pool.Exec(ctx, `UPDATE event_outbox SET published_at=$2 WHERE event_id = ANY($1) AND published_at IS NULL`, ids, at)
-	return err
-}
-
 func (r eventsRepo) Purge(ctx context.Context, before time.Time) (int64, error) {
-	tag, err := r.s.pool.Exec(ctx, `DELETE FROM event_outbox WHERE published_at IS NOT NULL AND fanout_at IS NOT NULL AND projected_at IS NOT NULL AND published_at < $1`, before)
+	tag, err := r.s.pool.Exec(ctx, `DELETE FROM event_outbox WHERE fanout_at IS NOT NULL AND projected_at IS NOT NULL AND fanout_at < $1`, before)
 	return tag.RowsAffected(), err
 }
 

@@ -10,12 +10,11 @@ import (
 
 // EventOutboxRepository is the transactional outbox of events derived from database state (today: outbound
 // message status changes). Rows are written by the repository in the SAME transaction as the state change, so a
-// status change can never be lost between the database and the event bus.
+// status change can never be lost. The outbox IS the event stream: the tenant fan-out and the catalog projector read it from here.
 type EventOutboxRepository interface {
-	// ListUnpublished returns events not yet published, oldest first.
-	ListUnpublished(ctx context.Context, limit int) ([]events.Event, error)
-	// MarkPublished records the publication of the given event ids.
-	MarkPublished(ctx context.Context, eventIDs []string, at time.Time) error
+	// ListAll returns the events in the outbox, oldest first, whatever their state (inspection and tests: the consumers claim their work
+	// with ClaimForFanOut and ClaimForProjection).
+	ListAll(ctx context.Context, limit int) ([]events.Event, error)
 	// ClaimForFanOut leases up to limit events whose deliveries for the tenant do not exist yet, oldest first. The lease keeps other
 	// workers off them for `lease`; a worker that dies leaves them to be claimed again.
 	ClaimForFanOut(ctx context.Context, limit int, lease time.Duration) ([]events.Event, error)
@@ -26,12 +25,12 @@ type EventOutboxRepository interface {
 	// ProjectionStats counts the events the catalog has not applied yet and the age of the oldest (by the store's clock).
 	ProjectionStats(ctx context.Context) (count int64, oldest time.Duration, err error)
 	// MarkFannedOut records that the deliveries of the given events exist. An event leaves the outbox's purge window only after this AND
-	// MarkPublished.
+	// MarkProjected.
 	MarkFannedOut(ctx context.Context, eventIDs []string, at time.Time) error
-	// Purge deletes events that were published, fanned out AND projected before `before`.
+	// Purge deletes events that were fanned out AND projected before `before`.
 	Purge(ctx context.Context, before time.Time) (int64, error)
-	// EraseContact deletes the events of the tenant that are about the contact (payload.from == number), published or not:
-	// an accepted inbound event waits here until it is published, and keeps the text and the number while it does.
+	// EraseContact deletes the events of the tenant that are about the contact (payload.from == number), whatever their state:
+	// an accepted inbound event waits here until its deliveries exist, and keeps the text and the number while it does.
 	EraseContact(ctx context.Context, tenantID, number string) (int64, error)
 	// PendingStats counts the accepted events whose deliveries for the tenant do not exist yet and the age of the oldest one (by the
 	// store's clock). A growing age means nobody is fanning the outbox out (the worker is down): accepted events are safe but late.

@@ -5,7 +5,6 @@ import (
 	"time"
 
 	"github.com/relayplane/relayplane/internal/app"
-	"github.com/relayplane/relayplane/internal/ports"
 )
 
 // Maintenance performs housekeeping that keeps the platform self-healing:
@@ -73,15 +72,6 @@ func (r *Reconciler) RefreshGauges(ctx context.Context) {
 		d.Metrics.InstancesTotal.WithLabelValues(string(st)).Set(float64(n))
 	}
 	d.Metrics.InstancesConnected.Set(float64(counts["CONNECTED"]))
-	if insp, ok := d.Bus.(ports.EventBusInspector); ok {
-		if st, err := insp.Stats(ctx); err == nil {
-			d.Metrics.RecordBusStats(st)
-			if risk := st.TrimRisk(); risk >= 0.5 {
-				r.Log.WarnContext(ctx, "event bus consumers are far behind the retention window", "trim_risk", risk,
-					"length", st.Length, "retention", st.Retention)
-			}
-		}
-	}
 	if depth, err := d.Queue.Depth(ctx); err == nil {
 		d.Metrics.OutboundQueueDepth.Set(float64(depth))
 	}

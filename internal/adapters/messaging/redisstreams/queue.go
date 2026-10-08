@@ -1,4 +1,5 @@
-// Package redisstreams implements CommandQueue and EventBus on Redis Streams.
+// Package redisstreams implements the CommandQueue on Redis Streams. (Events do not travel on Redis: the event outbox in the database is
+// the event stream.)
 //
 // Ordering strategy (adapter detail, not part of the port contract):
 //

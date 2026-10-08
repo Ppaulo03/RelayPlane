@@ -15,35 +15,11 @@ import (
 	"github.com/relayplane/relayplane/internal/ports"
 )
 
-// EventOutboxService publishes the events that were written to the database in the same transaction as the state
-// change that produced them (outbound message statuses). It is the second half of a transactional outbox: after a
-// crash an event may be published twice, never zero times; event ids are deterministic so consumers dedupe.
+// EventOutboxService maintains the event outbox. The outbox is the event stream itself (the tenant fan-out and the projector read it from
+// the database), so there is nothing to publish: it only has to forget what everybody is done with.
 type EventOutboxService struct{ d Deps }
 
-// PublishPending publishes up to limit events in order. A publish failure stops at that event so order is kept.
-func (s *EventOutboxService) PublishPending(ctx context.Context, limit int) (int, error) {
-	evs, err := s.d.Repos.Events.ListUnpublished(ctx, limit)
-	if err != nil || len(evs) == 0 {
-		return 0, err
-	}
-	done := make([]string, 0, len(evs))
-	var perr error
-	for _, ev := range evs {
-		if perr = s.d.Bus.Publish(ctx, ev); perr != nil {
-			break
-		}
-		done = append(done, ev.EventID)
-	}
-	if len(done) > 0 {
-		if err := s.d.Repos.Events.MarkPublished(ctx, done, s.d.now()); err != nil {
-			return len(done), err
-		}
-		s.d.Metrics.EventOutboxPublished.Add(float64(len(done)))
-	}
-	return len(done), perr
-}
-
-// Purge deletes published events older than olderThan.
+// Purge deletes events that were fanned out and projected more than olderThan ago.
 func (s *EventOutboxService) Purge(ctx context.Context, olderThan time.Duration) (int64, error) {
 	return s.d.Repos.Events.Purge(ctx, s.d.now().Add(-olderThan))
 }
