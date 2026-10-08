@@ -11,7 +11,8 @@ WORKDIR /evolution
 # ONE installation, recorded in package.json (so nothing later removes it):
 #  * baileys >= 7.0.0-rc12 (CVE-2026-48063)
 #  * fast-xml-parser (CVE-2026-25896, fixed in 5.3.5 / 4.5.4): 5.3.5 everywhere, except inside the minio client, which is on the 4.x line
-RUN npm pkg set "dependencies.baileys=${BAILEYS_VERSION}" "overrides.fast-xml-parser=5.3.5" "overrides.minio.fast-xml-parser=4.5.4" \
+#  * proxy-addr (CVE-2026-90711, fixed in 2.0.8): a transitive dependency of express that the release scan of 0.3.0-rc4 found CRITICAL
+RUN npm pkg set "dependencies.baileys=${BAILEYS_VERSION}" "overrides.fast-xml-parser=5.3.5" "overrides.minio.fast-xml-parser=4.5.4" "overrides.proxy-addr=2.0.8" \
  && npm install --no-audit --no-fund
 
 # Other CRITICAL findings of the stock image that have a fix:
@@ -36,6 +37,9 @@ RUN node -e " \
   const found=[]; (function walk(n,path){ for (const [k,v] of Object.entries(n.dependencies||{})) { if (k==='fast-xml-parser') found.push([path.concat(k).join('>'),v.version]); walk(v,path.concat(k)) } })(tree,[]); \
   const bad=found.filter(([p,v])=>!(p.startsWith('minio>')?v==='4.5.4':v==='5.3.5')); \
   if (!found.length||bad.length) { console.error('fast-xml-parser: '+JSON.stringify(found)); process.exit(1) } \
+  const pa=[]; const pt=JSON.parse(cp.execSync('npm ls proxy-addr --all --json',{cwd:'/evolution',maxBuffer:1<<26}).toString()); \
+  (function walk(n,path){ for (const [k,v] of Object.entries(n.dependencies||{})) { if (k==='proxy-addr') pa.push([path.concat(k).join('>'),v.version]); walk(v,path.concat(k)) } })(pt,[]); \
+  if (!pa.length||pa.some(([p,v])=>v!=='2.0.8')) { console.error('proxy-addr: '+JSON.stringify(pa)); process.exit(1) } \
   console.log('baileys '+baileys+'; fast-xml-parser '+JSON.stringify(found)); \
   require('/evolution/node_modules/minio'); \
   if (!require('fs').readFileSync('/evolution/dist/main.js','utf8').includes('RELAYPLANE_PROFILE_PICTURE_TIMEOUT_MS')) { console.error('profile picture patch missing'); process.exit(1) } \
