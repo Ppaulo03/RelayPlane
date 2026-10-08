@@ -8,19 +8,25 @@ Como o RelayPlane vira imagens imutáveis, como essas imagens sobem num ambiente
 Empurrar uma tag `v<versão>` (ou rodar o workflow `release` manualmente informando a versão) dispara `.github/workflows/release.yml`:
 
 ```
-version ─┬─ evolution  (workflow evolution-image: build único, SCAN desse build, publica esse build)
-         └─ images ×3  (gateway, worker, reconciler: build único, SCAN desse build, publica esse build com proveniência e SBOM)
-                 │
-             manifests   cmd/render-release: relayplane-<v>.yaml com TODA imagem fixada por digest + images.env
+version ─ scan ×5 ─────────────────────────────┐   fase 1: cada imagem (gateway, worker, reconciler, simulador, Evolution) é construída UMA vez,
+          build único, SCAN desse build,       │           escaneada e guardada como artefato. Sem permissão de escrever pacotes.
+          guarda o arquivo OCI                 │
+                                               ▼   (só começa se TODOS os scans passaram)
+          publish ×5 ──────────────────────────┐   fase 2: envia exatamente os bytes escaneados e confere o digest no registro
+                                               ▼
+             manifests   cmd/render-release: relayplane-<v>.yaml com TODA imagem fixada por digest + images.env + o sandbox
                  │
           staging-smoke  sobe as imagens publicadas em modo produção e roda o smoke
 ```
 
-* **Nada é publicado sem passar no scan, e o que é escaneado é exatamente o que é publicado.** Cada imagem é construída **uma vez**, para um arquivo OCI no runner (com proveniência e SBOM);
-  o Trivy (gravidade `CRITICAL`, só o que tem correção) escaneia **esse arquivo**; só então o `crane push` envia **esses mesmos bytes** e a ação confere que o digest que o registro devolve é o digest que foi
-  escaneado. Tudo isso vive numa única ação composta (`.github/actions/build-scan-push`), usada pelo release e pelo workflow da imagem Evolution; `internal/archtest` falha se algum workflow voltar a
-  construir para dar `push` (um segundo build publicaria algo que ninguém escaneou) ou se a ordem construir → escanear → publicar for invertida. Nada sai do runner antes do scan: não há candidata no registro.
+* **Um release é publicado inteiro ou não é publicado.** O job `scan` (uma imagem por vez, em matriz) **não tem permissão de escrever pacotes**: constrói a imagem uma vez, para um arquivo OCI (com proveniência e SBOM), roda o Trivy
+  (gravidade `CRITICAL`, só o que tem correção) **nesse arquivo** e o guarda como artefato com o digest escaneado. O job `publish` só começa quando **todas** as imagens passaram (`needs: scan` espera a matriz inteira); ele baixa o arquivo, confere
+  que o digest é o escaneado, faz o `crane push` **desses mesmos bytes** e confere que o digest que o registro devolve é o digest que foi escaneado. Se o scan de uma imagem reprova, **nada é publicado** (o `0.3.0-rc4` mostrou o contrário no
+  desenho antigo: o Evolution reprovou depois de as outras quatro imagens já estarem no registro). As duas fases vivem em ações compostas (`.github/actions/build-scan` e `.github/actions/publish`); `internal/archtest` falha se
+  algum workflow voltar a construir para dar `push`, se o job de scan ganhar permissão de escrita, se o `publish` deixar de depender do `scan` ou se um componente deixar de passar pelas duas fases.
   A política é `ignore-unfixed: true` (um CRITICAL sem correção disponível não bloqueia; é uma escolha de risco consciente) e o scan olha o sistema operacional e as dependências da imagem, não a sua configuração.
+  Resta o caso de uma falha **durante** a publicação (o registro fora do ar no meio): os pushes são verificados um a um, mas uma interrupção ali ainda pode deixar um release parcial.
+* **Ensaio sem publicar:** `gh workflow run release.yml -f version=<v> -f publish=false` (pela execução manual) constrói e escaneia todas as imagens e **não publica nada**: responde "este commit pode virar release?".
 * **Nenhum placeholder chega a um manifesto.** `deploy/kubernetes/relayplane.yaml` é um *template* (`registry.example.com/relayplane/<componente>:…@sha256:REPLACE…`); o
   `render-release` o transforma em `relayplane-<v>.yaml` e **recusa** produzir algo com placeholder, tag flutuante, digest curto, componente sem imagem ou imagem desconhecida
   (`internal/release`, testado contra o template real do repositório).

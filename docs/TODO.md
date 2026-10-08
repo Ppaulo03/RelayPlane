@@ -30,7 +30,7 @@ Qualidade:
 
 Supply chain:
 - [ ] 👤 O scan usa `ignore-unfixed: true` (um CRITICAL sem correção disponível não bloqueia): escolha de risco consciente, documentada no `RELEASE.md`.
-- [ ] 🧱 **Um release pode terminar meio publicado:** cada imagem é escaneada e publicada no seu próprio job, então se o scan de uma falha depois de as outras terem sido publicadas (foi o caso do `0.3.0-rc4`: o Evolution reprovou no scan, gateway, worker, reconciler e simulator já estavam no registro, sem manifesto), sobra uma versão parcial e pública. Fazer o release em duas fases: todos os scans primeiro (passando o arquivo OCI entre jobs) e só então todas as publicações; ou, no mínimo, `evolution` antes das demais.
+- [ ] 🧱 Uma falha **durante** a publicação (a fase 2 do release: registro fora do ar no meio dos pushes) ainda pode deixar um release parcial; os pushes são verificados um a um, mas não há como desfazer os que já saíram. Se isso importar, o passo seguinte é publicar tudo por digest sem tags e só então promover as tags.
 - [ ] 🧱 Há achados `HIGH` na árvore de dependências do Evolution (axios, brace-expansion…) que este repositório não corrige sem um fork; o workflow só os lista.
 - [ ] 🧱 O runner `ubuntu-latest` migra para Ubuntu 26 em 2026-10-19 (aviso do GitHub): rodar o CI e o release nele antes disso.
 

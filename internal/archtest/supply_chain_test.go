@@ -138,8 +138,8 @@ func TestImagePublishingWorkflowScansBeforePushing(t *testing.T) {
 		t.Skip("no image workflow")
 	}
 	s := string(b)
-	if !strings.Contains(s, "./.github/actions/build-scan-push") {
-		t.Error("the Evolution image must be built, scanned and published by the composite action")
+	if !strings.Contains(s, "./.github/actions/build-scan") || !strings.Contains(s, "./.github/actions/publish") {
+		t.Error("the standalone Evolution workflow must build and scan with build-scan and publish with publish")
 	}
 	if !strings.Contains(s, "7.0.0-rc13") {
 		t.Error("the workflow must guard the patched Baileys pin")

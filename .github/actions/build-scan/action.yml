@@ -1,0 +1,101 @@
+# Phase 1 of a release: build an image ONCE, scan that build, and keep it for the publish phase. Nothing is pushed anywhere.
+#
+#   build -> an OCI archive on the runner (with build provenance and an SBOM)
+#   scan  -> trivy on that archive; a CRITICAL finding with a fix fails the job
+#   keep  -> the archive and its digest are uploaded as a build artefact (`oci-<name>`)
+#
+# The jobs that call this action have no permission to write packages: they cannot publish even by mistake. The publish phase
+# (.github/actions/publish) starts only when EVERY image passed its scan, and pushes the very bytes that were scanned here, so a release is
+# either published whole or not at all. The architecture test (internal/archtest) fails if a workflow pushes with docker/build-push-action.
+name: build-scan
+description: Build once and scan that build; upload it for the publish phase. Never pushes.
+
+inputs:
+  name:
+    description: Short name of the image (gateway, evolution, ...); names the artefact oci-<name>
+    required: true
+  context:
+    description: Docker build context
+    required: true
+  cmd:
+    description: "Value of the CMD build argument (empty: the image has no CMD/VERSION arguments)"
+    required: false
+    default: ""
+  version:
+    description: Value of the VERSION build argument (used when cmd is set)
+    required: false
+    default: ""
+  report-high:
+    description: "true: also list HIGH findings (informational, never blocks)"
+    required: false
+    default: "false"
+
+outputs:
+  digest:
+    description: Digest (sha256:...) of the image index that was built and scanned
+    value: ${{ steps.built.outputs.digest }}
+
+runs:
+  using: composite
+  steps:
+    - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+    - name: build arguments
+      id: args
+      shell: bash
+      env:
+        CMD: ${{ inputs.cmd }}
+        VERSION: ${{ inputs.version }}
+      run: |
+        {
+          echo "args<<ARGS_END"
+          if [ -n "$CMD" ]; then echo "CMD=$CMD"; echo "VERSION=$VERSION"; fi
+          echo "ARGS_END"
+        } >> "$GITHUB_OUTPUT"
+    - name: build once (nothing is pushed)
+      uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+      with:
+        context: ${{ inputs.context }}
+        build-args: ${{ steps.args.outputs.args }}
+        outputs: type=oci,dest=${{ runner.temp }}/image.tar
+        # build provenance and an SBOM travel with the image
+        provenance: mode=max
+        sbom: true
+    - name: unpack what was built and note its digest
+      id: built
+      shell: bash
+      run: |
+        set -euo pipefail
+        mkdir -p "$RUNNER_TEMP/oci" "$RUNNER_TEMP/staged"
+        tar -xf "$RUNNER_TEMP/image.tar" -C "$RUNNER_TEMP/oci"
+        # the digest of the image index the registry will report for this exact content
+        digest=$(jq -r '.manifests[0].digest' "$RUNNER_TEMP/oci/index.json")
+        case "$digest" in sha256:????????????????????????????????????????????????????????????????) ;; *) echo "no digest in the archive: $digest" >&2; exit 1;; esac
+        mv "$RUNNER_TEMP/image.tar" "$RUNNER_TEMP/staged/image.tar"
+        echo "$digest" > "$RUNNER_TEMP/staged/digest.txt"
+        echo "digest=$digest" >> "$GITHUB_OUTPUT"
+        echo "built $digest"
+    - name: scan what was built
+      uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+      with:
+        input: ${{ runner.temp }}/oci
+        severity: CRITICAL
+        exit-code: "1"
+        ignore-unfixed: true
+    # visibility, not a gate: findings in the dependencies of third-party software that this repository cannot fix without a fork
+    - name: list HIGH findings
+      if: inputs.report-high == 'true'
+      uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+      with:
+        input: ${{ runner.temp }}/oci
+        severity: HIGH
+        exit-code: "0"
+        ignore-unfixed: true
+        format: table
+    - name: keep the scanned build for the publish phase
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      with:
+        name: oci-${{ inputs.name }}
+        path: ${{ runner.temp }}/staged
+        retention-days: 1
+        compression-level: 0 # the layers are already compressed
+        if-no-files-found: error
