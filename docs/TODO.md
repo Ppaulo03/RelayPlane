@@ -24,7 +24,6 @@ Privacidade (apagamento de contato):
 - [ ] 🧱 **`ERASURE_KEY` precisa ficar estável:** trocá-la faz as marcas antigas deixarem de casar. As marcas escritas pelos builds `rc` até o `rc3` (hash simples, sem chave) ficam inertes. Se virar requisito rotacionar a chave, é preciso um esquema de chaves múltiplas.
 
 Qualidade:
-- [ ] 🧱 **Teste instável sob `-race`:** `TestEventDeliveryLag_RetriesAreSeparatedFromTheHealthyPath` falha ~2 em 120 execuções na `main` (a amostra de latência do retry cai no balde de 25 ms, e o teste espera pelo menos 250 ms de backoff). Na falha, os dois pedidos do consumidor aparecem com `At` fora de ordem (o de tentativa 2 *antes* do de tentativa 1); ainda não achei a causa (suspeita: carimbo `At` do `Receiver` de teste, ou relógio). Reproduzir com `go test -race -count=250 -run <teste> ./internal/systemtest` num container Go.
 - [ ] 🧱 **Gate de latência intermitente no CI:** uma vez na `main` o p95 de entrega de status foi 29,7 s (limite 2 s) no job de carga; não reproduzi localmente (p95 < 1 s) e o mesmo código passou no PR. Se voltar, instrumentar a origem (outbox → fan-out → dispatcher) antes de relaxar o limite.
 - [ ] 🔑 **Atualização do Evolution/Baileys:** sempre com número descartável (roteiro em `runbooks/PROVIDER-UPGRADE.md`); não há teste automatizado possível contra o WhatsApp real. O patch da busca de foto de perfil precisa ser revisto a cada versão.
 
