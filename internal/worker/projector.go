@@ -29,6 +29,64 @@ type Projector struct {
 	// ReceiptGrace is how long an unknown provider message id is retried: the
 	// receipt may overtake the worker recording ACCEPTED.
 	ReceiptGrace time.Duration
+
+	Batch int           // events claimed per pass (default 100)
+	Lease time.Duration // how long a claimed event is exclusive; also how often one that failed is retried (default 2s)
+	Poll  time.Duration // pause when idle (default 100ms)
+}
+
+func (p *Projector) defaults() {
+	if p.Batch <= 0 {
+		p.Batch = 100
+	}
+	if p.Lease <= 0 {
+		p.Lease = 2 * time.Second
+	}
+	if p.Poll <= 0 {
+		p.Poll = 100 * time.Millisecond
+	}
+}
+
+// Run applies the events of the event outbox to the catalog until ctx is cancelled. It reads the DATABASE, not the broker: a receipt that the
+// broker lost would otherwise leave a message ACCEPTED for good, and the tenant would never be told it was delivered or read.
+func (p *Projector) Run(ctx context.Context) {
+	p.defaults()
+	for ctx.Err() == nil {
+		n, err := p.RunOnce(ctx)
+		if err != nil && ctx.Err() == nil {
+			p.Log.WarnContext(ctx, "projection pass failed", "error", err)
+		}
+		if n == 0 || err != nil {
+			select {
+			case <-ctx.Done():
+			case <-time.After(p.Poll):
+			}
+		}
+	}
+}
+
+// RunOnce claims and applies one batch. Events are independent (every update is guarded against late and duplicate ones), so one that fails,
+// for instance a receipt that overtook the recording of ACCEPTED, does not hold the others back: it is claimed again when its lease expires.
+func (p *Projector) RunOnce(ctx context.Context) (int, error) {
+	p.defaults()
+	evs, err := p.Repos.Events.ClaimForProjection(ctx, p.Batch, p.Lease)
+	if err != nil || len(evs) == 0 {
+		return 0, err
+	}
+	done := make([]string, 0, len(evs))
+	for _, ev := range evs {
+		if herr := p.Handle(ctx, ev); herr != nil {
+			if !errors.Is(herr, ctx.Err()) {
+				p.Log.DebugContext(ctx, "event not applied yet, will be retried", "event_id", ev.EventID, "error", herr)
+			}
+			continue
+		}
+		done = append(done, ev.EventID)
+	}
+	if err := p.Repos.Events.MarkProjected(context.WithoutCancel(ctx), done, p.Now().UTC()); err != nil {
+		return len(done), err
+	}
+	return len(done), nil
 }
 
 // NewProjector returns a projector with defaults.
@@ -49,7 +107,7 @@ func decode[T any](payload any) (T, error) {
 	return out, err
 }
 
-// Handle is the ports.EventHandler of the projector consumer group.
+// Handle applies one event to the catalog. It is idempotent and safe against late and duplicate events.
 func (p *Projector) Handle(ctx context.Context, ev events.Event) error {
 	ctx = observability.With(ctx, observability.KeyTenantID, ev.TenantID, observability.KeyInstanceID, ev.InstanceID, observability.KeyProvider, ev.Provider)
 	ctx, span := observability.Start(ctx, "projector.handle")

@@ -26,6 +26,11 @@ groups:
         for: 0m
         labels: {severity: page}
         annotations: {summary: "a tenant subscription reached its backlog limit and new events are being sent to its DLQ (WEBHOOK_MAX_PENDING_PER_SUBSCRIPTION): the consumer is down or too slow; redeliver from the DLQ when it is back"}
+      - alert: RelayPlaneProjectionStalled
+        expr: relayplane_event_projection_oldest_seconds > 60
+        for: 1m
+        labels: {severity: page}
+        annotations: {summary: "delivery receipts or session state changes have waited over 60 s to be applied: no worker is projecting the event outbox. Nothing is lost, but messages stay ACCEPTED (and tenants are not told DELIVERED/READ) until a worker is back"}
       - alert: RelayPlaneTenantFanOutStalled
         expr: relayplane_event_outbox_oldest_seconds > 30
         for: 1m

@@ -230,6 +230,10 @@ func RecordEventOutboxGauges(ctx context.Context, d Deps) {
 	}
 	d.Metrics.EventOutboxPending.Set(float64(n))
 	d.Metrics.EventOutboxOldest.Set(oldest.Seconds())
+	if pn, poldest, perr := d.Repos.Events.ProjectionStats(ctx); perr == nil {
+		d.Metrics.EventProjectionPending.Set(float64(pn))
+		d.Metrics.EventProjectionOldest.Set(poldest.Seconds())
+	}
 }
 
 func RecordDeliveryGauges(ctx context.Context, d Deps) {

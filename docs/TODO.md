@@ -15,8 +15,7 @@ Legenda: 🔑 precisa de número de WhatsApp real · 👤 decisão ou ação sua
 ## 2. Dívidas técnicas conhecidas
 
 Durabilidade e consistência:
-- [ ] 🧱 **O projetor ainda lê do Redis** (é o único consumidor que sobrou). Ele aplica os recibos `delivered`/`read` às mensagens enviadas e, ao fazer isso, é o que gera o `message.outbound_status` para o tenant. Se o Redis perder a entrada antes de o projetor lê-la, o recibo some e o tenant **nunca** recebe `DELIVERED`/`READ` daquela mensagem (a entrega de `message.received` e dos demais eventos não depende mais do Redis). Corrigir como o fan-out: o projetor ler do `event_outbox` com marco próprio (`projected_at`).
-- [ ] 🧱 **Reconcilers duplicados publicam as mesmas linhas do outbox** no Redis (correto sob at-least-once, só tráfego duplicado): claim com `FOR UPDATE SKIP LOCKED`.
+- [ ] 🧱 **Aposentar o barramento Redis dos eventos:** depois do fan-out e do projetor passarem a ler do banco, **nenhum consumidor** lê o `EventBus`; o reconciler ainda publica cada linha do outbox no Redis (e há métricas, alertas de retenção e docs em torno disso). Remover a publicação e o adaptador (ou mantê-lo só se um consumidor interno novo aparecer) simplifica e tira o Redis do caminho de eventos. Isso resolve também o item de reconcilers duplicados publicando as mesmas linhas.
 - [ ] 🧱 **Cota de backlog por assinatura só conta entregas** (`WEBHOOK_MAX_PENDING_PER_SUBSCRIPTION`); não limita bytes nem idade além da retenção de pendentes (30 dias). A DLQ também cresce até a retenção dela.
 - [ ] 🧱 **`UNKNOWN` resolvido pelo próprio RelayPlane:** consultar o node (o Evolution expõe consulta de mensagem?) para saber se a mensagem existe e resolver sozinho, em vez de parar a instância até alguém decidir. Só vale se a consulta for confiável; validar com número real.
 - [ ] 🧱 O barramento é Redis Stream com retenção por tamanho (não é log durável). Se for preciso replay histórico grande, trocar o adaptador (Kafka) sem mudar o core.

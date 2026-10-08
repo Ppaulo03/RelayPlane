@@ -194,10 +194,11 @@ sozinha; a mensagem segue `UNKNOWN` e a ordem relativa a ela deixa de ser garant
 
 ### Outbox de eventos (mensagens recebidas e status)
 Todo evento público para o tenant (mensagem recebida, recibo, mudança de sessão, status de envio, mídia resolvida, reconciliação) **nasce no `event_outbox`**, na mesma transação do fato que o produz (a chave de dedupe, a mudança de estado, o fechamento do job de mídia), e só então o provedor recebe 200. Nenhuma regra de domínio publica direto no Redis.
-Dois consumidores leem essa tabela, cada um com o seu marco:
+Três etapas leem essa tabela, cada uma com o seu marco:
 * **o worker** cria as entregas do tenant a partir do **banco** (`fanout_at`; não passa pelo Redis). Por isso **o worker precisa estar rodando** para o tenant ser avisado, e uma queda ou perda do Redis não atrasa nem perde nada para ele. Métricas: `relayplane_event_outbox_pending` e `relayplane_event_outbox_oldest_seconds` (eventos aceitos sem entrega criada); alerta `RelayPlaneTenantFanOutStalled` (> 30 s);
+* **o projetor** (também no worker) aplica ao catálogo o que ele precisa aprender: os **recibos** `delivered`/`read` (que movem a mensagem e geram o `message.outbound_status` do tenant) e as mudanças de estado da sessão (`projected_at`; eventos que o catálogo não usa já nascem projetados). Também lê do **banco**: um recibo que o Redis perdesse deixaria a mensagem `ACCEPTED` para sempre. Métrica `relayplane_event_projection_oldest_seconds`; alerta `RelayPlaneProjectionStalled` (> 60 s);
 * **o reconciler** publica no barramento a cada `OUTBOX_INTERVAL` (padrão 250 ms) para os consumidores **internos** (`published_at`); alerta `RelayPlaneEventOutboxStalled`.
-Uma linha só é purgada (depois de 24 h) quando os dois marcos existem: a entrega ao tenant não depende de nenhuma cópia que viva só no Redis.
+Hoje **nenhum consumidor lê o barramento** (a publicação no Redis ficou como transporte para consumidores internos futuros). Uma linha só é purgada (depois de 24 h) quando os três marcos existem (publicada, entregas criadas, projetada): a entrega ao tenant não depende de nenhuma cópia que viva só no Redis.
 
 ### Outbox
 `outbox` guarda cada comando aceito até a publicação (gateway publica de imediato; o reconciler varre a cada 1 s e republica comandos
