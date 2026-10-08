@@ -1,9 +1,14 @@
-# Release: builds gateway, worker, reconciler and the patched Evolution image, scans every one of them, publishes them to GHCR and
-# renders the deployable artefacts, every image pinned by digest (docs/RELEASE.md). Each image is built ONCE; the build that is scanned is
-# the build that is published (.github/actions/build-scan-push). Nothing is published unless the scan passes.
+# Release: builds gateway, worker, reconciler, simulator and the patched Evolution image, scans every one of them, and only when ALL of
+# them passed publishes them to GHCR and renders the deployable artefacts, every image pinned by digest (docs/RELEASE.md).
+#
+# Two phases, so a release is published whole or not at all:
+#   scan    one job per image: build ONCE, scan that build, keep it as an artefact. These jobs cannot write packages.
+#   publish one job per image, started only if EVERY scan job succeeded: push the very bytes that were scanned and check the digest.
+# (.github/actions/build-scan and .github/actions/publish; the architecture test fails if a workflow pushes any other way.)
 #
 # Run by pushing a tag `v<version>` (also creates the GitHub release with the artefacts) or manually (workflow_dispatch: the
-# artefacts are only uploaded to the run). Third-party actions are pinned by commit SHA (internal/archtest/supply_chain_test.go).
+# artefacts are only uploaded to the run; with `publish: false` it only builds and scans, which answers "can this commit be released?"
+# without publishing anything). Third-party actions are pinned by commit SHA (internal/archtest/supply_chain_test.go).
 name: release
 
 on:
@@ -14,6 +19,10 @@ on:
       version:
         description: Version label to build (no leading v), e.g. 0.3.0-rc1
         required: true
+      publish:
+        description: "Publish the images (false: only build and scan every one of them, nothing is published)"
+        type: boolean
+        default: true
 
 permissions:
   contents: read
@@ -37,14 +46,40 @@ jobs:
           echo "$v" | grep -Eq '^[0-9A-Za-z][0-9A-Za-z.+_-]{0,63}$' || { echo "bad version: $v" >&2; exit 1; }
           echo "version=$v" >> "$GITHUB_OUTPUT"
 
-  evolution:
-    uses: ./.github/workflows/evolution-image.yml
+  # phase 1: nothing is published here, and this job has no permission to publish
+  scan:
+    needs: version
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
     permissions:
       contents: read
-      packages: write
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - {component: gateway, context: ., cmd: gateway}
+          - {component: worker, context: ., cmd: worker}
+          - {component: reconciler, context: ., cmd: reconciler}
+          - {component: simulator, context: ., cmd: simulator}
+          - {component: evolution, context: deploy/docker/evolution, report_high: "true"}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # the patched Baileys is pinned in the Dockerfile, which also checks the FINAL dependency tree and fails the build otherwise
+      - name: the Dockerfile pins the patched Baileys
+        if: matrix.component == 'evolution'
+        run: grep -Fq 'ARG BAILEYS_VERSION=7.0.0-rc13' deploy/docker/evolution/Dockerfile
+      - uses: ./.github/actions/build-scan
+        with:
+          name: ${{ matrix.component }}
+          context: ${{ matrix.context }}
+          cmd: ${{ matrix.cmd }}
+          version: ${{ needs.version.outputs.version }}
+          report-high: ${{ matrix.report_high }}
 
-  images:
-    needs: version
+  # phase 2: only when EVERY image of the release passed its scan (needs: scan waits for the whole matrix)
+  publish:
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.publish }}
+    needs: [version, scan]
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
@@ -53,32 +88,28 @@ jobs:
     strategy:
       fail-fast: true
       matrix:
-        component: [gateway, worker, reconciler, simulator]
+        component: [gateway, worker, reconciler, simulator, evolution]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - id: name
         run: echo "image=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/relayplane-${{ matrix.component }}" >> "$GITHUB_OUTPUT"
-      # build once, scan that build, publish that same build (and check the registry holds the digest that was scanned)
-      - id: publish
-        uses: ./.github/actions/build-scan-push
+      - id: push
+        uses: ./.github/actions/publish
         with:
+          name: ${{ matrix.component }}
           image: ${{ steps.name.outputs.image }}
           tag: ${{ needs.version.outputs.version }}
-          context: .
-          build-args: |
-            CMD=${{ matrix.component }}
-            VERSION=${{ needs.version.outputs.version }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
       - name: remember the digest
-        run: echo "${{ steps.publish.outputs.image }}" > "image-${{ matrix.component }}.txt"
+        run: echo "${{ steps.push.outputs.image }}" > "image-${{ matrix.component }}.txt"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: image-${{ matrix.component }}
           path: image-${{ matrix.component }}.txt
 
   manifests:
-    needs: [version, evolution, images]
+    needs: [version, publish]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -96,10 +127,10 @@ jobs:
       - name: render the artefacts (a placeholder or an unpinned image stops the release)
         env:
           VERSION: ${{ needs.version.outputs.version }}
-          EVOLUTION: ${{ needs.evolution.outputs.image }}
         run: |
           mkdir -p dist
           gateway=$(cat refs/image-gateway.txt); worker=$(cat refs/image-worker.txt); reconciler=$(cat refs/image-reconciler.txt); simulator=$(cat refs/image-simulator.txt)
+          EVOLUTION=$(cat refs/image-evolution.txt)
           go run ./cmd/render-release -in deploy/kubernetes/relayplane.yaml -out "dist/relayplane-$VERSION.yaml" \
             -gateway "$gateway" -worker "$worker" -reconciler "$reconciler" -evolution "$EVOLUTION"
           # the same references for the compose-based staging (deploy/staging/staging.sh up dist/images.env)

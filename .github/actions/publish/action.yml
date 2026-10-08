@@ -1,0 +1,85 @@
+# Phase 2 of a release: publish exactly the build that phase 1 scanned (.github/actions/build-scan), and verify it.
+#
+#   fetch  -> the OCI archive kept by the scan job, and the digest that was scanned
+#   check  -> the archive still has that digest (what was scanned is what is about to be pushed)
+#   push   -> `crane push` of those bytes, then the digest the registry reports must be the scanned one
+#
+# Runs only after every image of the release passed its scan (the job that calls it `needs` the scan job).
+name: publish
+description: Push the scanned build of an image and verify the registry holds the scanned digest.
+
+inputs:
+  name:
+    description: Short name of the image; the artefact oci-<name> is the one to publish
+    required: true
+  image:
+    description: Repository to publish to, without a tag (ghcr.io/owner/name)
+    required: true
+  tag:
+    description: Tag to publish
+    required: true
+  username:
+    description: Registry user
+    required: true
+  password:
+    description: Registry token
+    required: true
+
+outputs:
+  digest:
+    description: Digest of the published image (sha256:...)
+    value: ${{ steps.push.outputs.digest }}
+  image:
+    description: Immutable reference of the published image (repository@sha256:...)
+    value: ${{ steps.push.outputs.image }}
+
+runs:
+  using: composite
+  steps:
+    - name: fetch the scanned build
+      uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      with:
+        name: oci-${{ inputs.name }}
+        path: ${{ runner.temp }}/staged
+    - name: check that it is what was scanned
+      id: check
+      shell: bash
+      run: |
+        set -euo pipefail
+        mkdir -p "$RUNNER_TEMP/oci"
+        tar -xf "$RUNNER_TEMP/staged/image.tar" -C "$RUNNER_TEMP/oci"
+        digest=$(jq -r '.manifests[0].digest' "$RUNNER_TEMP/oci/index.json")
+        scanned=$(cat "$RUNNER_TEMP/staged/digest.txt")
+        if [ "$digest" != "$scanned" ]; then
+          echo "the archive to publish is $digest, but $scanned was scanned" >&2
+          exit 1
+        fi
+        echo "digest=$digest" >> "$GITHUB_OUTPUT"
+    - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+      with:
+        go-version-file: go.mod
+        cache: false
+    - name: install crane (version pinned; go verifies the module checksums)
+      shell: bash
+      run: go install github.com/google/go-containerregistry/cmd/crane@v0.20.6
+    - name: publish what was scanned, and verify it
+      id: push
+      shell: bash
+      env:
+        IMAGE: ${{ inputs.image }}
+        TAG: ${{ inputs.tag }}
+        REGISTRY_USER: ${{ inputs.username }}
+        REGISTRY_TOKEN: ${{ inputs.password }}
+        SCANNED: ${{ steps.check.outputs.digest }}
+      run: |
+        set -euo pipefail
+        crane=$(go env GOPATH)/bin/crane
+        printf '%s' "$REGISTRY_TOKEN" | "$crane" auth login "${IMAGE%%/*}" --username "$REGISTRY_USER" --password-stdin
+        "$crane" push "$RUNNER_TEMP/oci" "$IMAGE:$TAG"
+        published=$("$crane" digest "$IMAGE:$TAG")
+        if [ "$published" != "$SCANNED" ]; then
+          echo "the registry holds $published, but $SCANNED was scanned" >&2
+          exit 1
+        fi
+        echo "digest=$published" >> "$GITHUB_OUTPUT"
+        echo "image=$IMAGE@$published" >> "$GITHUB_OUTPUT"
